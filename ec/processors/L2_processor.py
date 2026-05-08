@@ -43,20 +43,24 @@ class ECL2Processor:
         if not parquet_dir.exists():
             raise ValueError(f"L1 parquet directory not found: {parquet_dir}")
 
+        # 加载源谱多峰窗口配置（如果存在）：见 resources/ec_source_windows_<payload>.json
+        src_windows = self._load_source_windows()
+
         grouped_by_energy: Dict[str, Dict[int, Dict[str, Any]]] = {}
-        for parquet_file in sorted(parquet_dir.glob("*_corrected.parquet")):
-            if "bkg_corrected" in parquet_file.name:
+        for parquet_file in sorted(parquet_dir.glob("*_corr.l1.parquet")):
+            if "_bkg_corr" in parquet_file.name:
                 continue
             try:
                 df = read_parquet(parquet_file)
                 meta = read_parquet_metadata(parquet_file) or {}
                 data_type = meta.get("data_type", "xray")
-                
+
                 if data_type == "source":
                     source_name = meta.get("source_name", "unknown")
-                    energy = meta.get("energy_keV", "0")
-                    energy_key = f"src_{energy}keV_{source_name}"
-                    
+                    energy = meta.get("energy_keV", 0)
+                    peak_energies = meta.get("peak_energies_keV") or [energy]
+                    energy_key = f"src_{int(energy)}keV_{source_name}"
+
                     bkg_info = meta.get("background_info", {})
                     bkg_parquet_name = bkg_info.get("bkg_parquet") if isinstance(bkg_info, dict) else None
                     bkg_df = None
@@ -65,25 +69,28 @@ class ECL2Processor:
                         if bkg_path.exists():
                             from ...common.utils import read_parquet as _rq
                             bkg_df = _rq(bkg_path)
-                            
-                    for ch in df["ch"].unique():
-                        df_ch = df[df["ch"] == ch].copy()
+
+                    for ch in df["channel"].unique():
+                        df_ch = df[df["channel"] == ch].copy()
                         if len(df_ch) < 10:
                             continue
-                        
+
                         bkg_df_ch = None
                         if bkg_df is not None:
-                            bkg_df_ch = bkg_df[bkg_df["ch"] == ch].copy()
-                        
-                        grouped_by_energy.setdefault(energy_key, {})[ch] = {
+                            bkg_df_ch = bkg_df[bkg_df["channel"] == ch].copy()
+
+                        grouped_by_energy.setdefault(energy_key, {})[int(ch)] = {
                             "stem": f"{source_name}_ch{ch}",
                             "df": df_ch,
                             "bkg_df": bkg_df_ch,
                             "parquet": parquet_file.name,
-                            "data_type": "source"
+                            "data_type": "src",
+                            "source_name": source_name,
+                            "peak_energies_keV": list(peak_energies),
+                            "channels_meta": meta.get("channels", {}),
                         }
                 else:
-                    stem = parquet_file.stem.replace("_corrected", "")
+                    stem = parquet_file.stem.replace("_corr.l1", "")
                     parts = stem.rsplit("_ch", 1)
                     if len(parts) == 2:
                         energy_key = parts[0]
@@ -94,7 +101,10 @@ class ECL2Processor:
                                 "df": df,
                                 "bkg_df": None,
                                 "parquet": parquet_file.name,
-                                "data_type": "xray"
+                                "data_type": "xray",
+                                "source_name": None,
+                                "peak_energies_keV": [self._energy_sort_key(energy_key)],
+                                "channels_meta": meta.get("channels", {}),
                             }
             except Exception as exc:
                 results["errors"].append({"file": parquet_file.name, "error": str(exc)})
@@ -105,75 +115,141 @@ class ECL2Processor:
                 print(f"⚠ EC L2: {energy_key} - not all 4 channels present, skipping")
                 continue
 
-            fit_results: Dict[str, Dict[str, Any]] = {}
-            fit_rows: List[Dict[str, Any]] = []
-            plot_rows: List[Dict[str, np.ndarray]] = []
+            records: List[Dict[str, Any]] = []
+            plot_rows: List[Dict[str, Any]] = []
 
             try:
+                first = ch_map[0]
+                data_type = first["data_type"]
+                source_name = first.get("source_name")
+                peak_energies = first.get("peak_energies_keV") or [self._energy_sort_key(energy_key)]
+                manual_windows = (src_windows.get(source_name, {}) if data_type == "src" and source_name else {})
+
                 for ch in range(4):
                     signal = ch_map[ch]
-                    if signal.get("data_type") == "source" and signal.get("bkg_df") is not None:
+                    if data_type == "src" and signal.get("bkg_df") is not None:
                         bkg_df = signal["bkg_df"]
                         if len(bkg_df) == 0:
-                            bkg_df = signal["df"].iloc[0:0] # empty df with same shape
+                            bkg_df = signal["df"].iloc[0:0]
                         bkg = {"df": bkg_df}
                         bkg_ch = ch
                     else:
                         bkg_ch, bkg = self._choose_background_channel(ch, ch_map)
-                        
-                    fit, plot_data = self._fit_energy_spectrum(
-                        energy_key=energy_key,
-                        signal_df=signal["df"],
-                        background_df=bkg["df"],
-                        channel=ch,
-                        background_channel=bkg_ch,
-                        bin_width=bin_width,
-                    )
-                    fit_results[str(ch)] = fit
-                    fit_rows.append(fit)
-                    plot_rows.append(plot_data)
 
-                    ch_json = self.layout.get_ec_l2_json(f"{energy_key}_ch{ch}_l2_fit_results.json")
-                    write_json(
-                        ch_json,
-                        {
-                            "energy": energy_key,
-                            "channel": ch,
-                            "background_channel": bkg_ch,
-                            "bin_width": bin_width,
-                            "channels": {str(ch): fit},
-                        },
-                    )
+                    ch_meta = (signal.get("channels_meta") or {}).get(str(ch), {})
+                    temp_val = float(ch_meta.get("temp", float("nan"))) if isinstance(ch_meta.get("temp"), (int, float)) else float("nan")
+                    temp_err = float(ch_meta.get("temp_err", 0.0)) if isinstance(ch_meta.get("temp_err"), (int, float)) else 0.0
+                    bias_val = float(ch_meta.get("bias", float("nan"))) if isinstance(ch_meta.get("bias"), (int, float)) else float("nan")
+                    bias_err = float(ch_meta.get("bias_err", 0.0)) if isinstance(ch_meta.get("bias_err"), (int, float)) else 0.0
 
-                fig_path = self.layout.get_ec_l2_figure(f"{energy_key}_all_channels.png")
-                self._plot_4channels(energy_key, fit_rows, plot_rows, fig_path)
+                    # 多峰：data_type == "src" 且 peak_energies 多于一个
+                    peaks_to_fit = peak_energies if data_type == "src" else [self._energy_sort_key(energy_key)]
+                    for peak_E in peaks_to_fit:
+                        peak_window = None
+                        if data_type == "src":
+                            peak_window = manual_windows.get(str(ch), {}).get(str(peak_E))
+                        try:
+                            fit, plot_data = self._fit_energy_spectrum(
+                                energy_key=energy_key,
+                                signal_df=signal["df"],
+                                background_df=bkg["df"],
+                                channel=ch,
+                                background_channel=bkg_ch,
+                                bin_width=bin_width,
+                                forced_window=peak_window,
+                                forced_peak_energy=peak_E,
+                            )
+                        except Exception as exc:
+                            print(f"⚠ EC L2: {energy_key} ch{ch} peak={peak_E}keV failed: {exc}")
+                            continue
 
-                json_path = self.layout.get_ec_l2_json(f"{energy_key}_l2_fit_results.json")
-                write_json(
-                    json_path,
-                    {
-                        "energy": energy_key,
-                        "bin_width": bin_width,
-                        "channels": fit_results,
-                    },
-                )
+                        rec = {
+                            "channel": int(ch),
+                            "E": float(peak_E),
+                            "center": float(fit["center"]),
+                            "center_err": float(fit["center_err"]),
+                            "sigma": float(fit["sigma"]),
+                            "sigma_err": float(fit["sigma_err"]),
+                            "amplitude": float(fit["amplitude"]),
+                            "amplitude_err": float(fit["amplitude_err"]),
+                            "fwhm": float(fit["FWHM"]),
+                            "resolution": float(fit["resolution"]),
+                            "resolution_err": float(fit["resolution_err"]),
+                            "fit_mode": fit["fit_mode"],
+                            "source": data_type,
+                            "source_name": source_name,
+                            "temp": temp_val,
+                            "temp_err": temp_err,
+                            "bias": bias_val,
+                            "bias_err": bias_err,
+                            "lo": float(fit["lo"]),
+                            "hi": float(fit["hi"]),
+                            "rsquared": float(fit["rsquared"]),
+                            "n_events": int(fit["n_events"]),
+                            "background_channel": int(fit["background_channel"]),
+                        }
+                        records.append(rec)
+                        plot_rows.append({"record": rec, "plot": plot_data})
 
-                results["outputs"].append(
-                    {
-                        "energy": energy_key,
-                        "channels_fitted": 4,
-                        "json": json_path.name,
-                        "figure": fig_path.name,
-                    }
-                )
+                if not records:
+                    print(f"⚠ EC L2: {energy_key} - no successful fits")
+                    continue
+
+                # Output filename: align with wiki naming
+                if data_type == "src":
+                    json_name = f"{energy_key}_fit_results.l2.json"
+                    fig_name = f"{energy_key}_fit.l2.png"
+                else:
+                    json_name = f"{energy_key}_fit_results.l2.json"
+                    fig_name = f"{energy_key}_fit.l2.png"
+
+                json_path = self.layout.get_ec_l2_json(json_name)
+                write_json(json_path, records)
+
+                fig_path = self.layout.get_ec_l2_figure(fig_name)
+                self._plot_energy_file(energy_key, plot_rows, fig_path)
+
+                results["outputs"].append({
+                    "energy": energy_key,
+                    "data_type": data_type,
+                    "n_records": len(records),
+                    "json": json_path.name,
+                    "figure": fig_path.name,
+                })
                 results["n_processed"] += 1
-                print(f"✓ EC L2: {energy_key} (4 channels) -> {fig_path.name}")
+                print(f"✓ EC L2: {energy_key} ({len(records)} records) -> {fig_path.name}")
             except Exception as exc:
                 results["errors"].append({"energy": energy_key, "error": str(exc)})
                 print(f"✗ Error in EC L2 {energy_key}: {exc}")
 
         write_json(self.layout.get_ec_l2_json("L2_manifest.json"), results)
         return results
+
+    def _load_source_windows(self) -> Dict[str, Any]:
+        """读取源谱手选窗口配置（每源、每通道、每峰）。
+
+        文件路径：``calibration_lib/resources/ec_source_windows_<payload>.json``
+        结构：
+        ::
+            {
+              "Co60": {
+                "0": {"1173.2": [lo, hi], "1332.5": [lo, hi]},
+                "1": {...}, "2": {...}, "3": {...}
+              },
+              "Na22": {...}
+            }
+
+        缺省时 EC L2 会回退到自动峰检测。
+        """
+        from ...common.utils import read_json
+        path = Path(__file__).resolve().parents[2] / "resources" / f"ec_source_windows_{self.payload_name}.json"
+        if not path.exists():
+            return {}
+        try:
+            data = read_json(path)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
 
     def _energy_sort_key(self, energy_key: str) -> float:
         match = re.search(r"(\d+(?:\.\d+)?)keV", energy_key)
@@ -387,6 +463,8 @@ class ECL2Processor:
         channel: int,
         background_channel: int,
         bin_width: float,
+        forced_window: Optional[List[float]] = None,
+        forced_peak_energy: Optional[float] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, np.ndarray]]:
         signal_amp = signal_df["amp_corr"].to_numpy(dtype=float)
         signal_time = signal_df["utc"].to_numpy(dtype=float)
@@ -405,7 +483,15 @@ class ECL2Processor:
         net = spec - bkg_spec
         net_err = np.sqrt(spec_err**2 + bkg_err**2)
 
-        lo, hi, peak_x = self._auto_fit_window(mids, net, bin_width)
+        if forced_window is not None and len(forced_window) == 2:
+            lo = float(forced_window[0]); hi = float(forced_window[1])
+            mask_w = (mids >= lo) & (mids <= hi)
+            if not np.any(mask_w):
+                raise RuntimeError(f"forced window [{lo},{hi}] empty")
+            sub_smooth = self._smooth_hist(np.clip(net[mask_w], a_min=0.0, a_max=None))
+            peak_x = float(mids[mask_w][int(np.nanargmax(sub_smooth))])
+        else:
+            lo, hi, peak_x = self._auto_fit_window(mids, net, bin_width)
         mask = (mids >= lo) & (mids <= hi)
         x_fit = mids[mask]
         y_fit = net[mask]
@@ -440,7 +526,7 @@ class ECL2Processor:
         if "e_" in result.params:
             background_fit += comps.get("e_", 0)
 
-        nominal_energy = self._energy_sort_key(energy_key)
+        nominal_energy = float(forced_peak_energy) if forced_peak_energy is not None else self._energy_sort_key(energy_key)
         fit = {
             "E": nominal_energy,
             "center": center,
@@ -473,6 +559,69 @@ class ECL2Processor:
             "background_fit": background_fit,
         }
         return fit, plot_data
+
+    def _plot_energy_file(
+        self,
+        energy_key: str,
+        plot_rows: List[Dict[str, Any]],
+        fig_path: Path,
+    ) -> None:
+        """每文件绘图：x 射线 4 通道排成 2x2；源谱多峰时按 (channel, peak) 排成网格。"""
+        from ...common.plotting import plot_spectrum_fit, style_axes, style_legend, style_title
+
+        fig_path.parent.mkdir(parents=True, exist_ok=True)
+        if not plot_rows:
+            return
+
+        n = len(plot_rows)
+        ncols = 2 if n <= 4 else 2
+        nrows = max(1, (n + ncols - 1) // ncols)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(12.5, max(4.0, 4.0 * nrows)), sharex=False)
+        axes = np.atleast_1d(axes).ravel()
+
+        for ax, item in zip(axes, plot_rows):
+            row = item["record"]
+            pdata = item["plot"]
+            mids_view, spec_view = self._merge_bins_for_display(pdata["mids"], pdata["spec"])
+            _, bkg_view = self._merge_bins_for_display(pdata["mids"], pdata["bkg_spec"])
+            _, net_view = self._merge_bins_for_display(pdata["mids"], pdata["net"])
+
+            plot_spectrum_fit(
+                ax,
+                mids=mids_view,
+                raw=spec_view,
+                bkg_spec=bkg_view,
+                net_spec=net_view,
+                best_fit=pdata["best_fit"],
+                background_fit=pdata["background_fit"],
+                fit_x=pdata["x_fit"],
+                fit_lo=row["lo"],
+                fit_hi=row["hi"],
+                center=row["center"],
+                raw_label=f"raw ({DISPLAY_BIN_MERGE}x bin)",
+                bkg_label=f"bkg ch{row['background_channel']}",
+                net_label="net",
+            )
+            style_title(
+                ax,
+                f"Ch{row['channel']}  E={row['E']:.1f}keV  center={row['center']:.2f}±{row['center_err']:.2f}\n"
+                f"mode={row['fit_mode']}, R²={row['rsquared']:.4f}",
+            )
+            style_axes(ax, xlabel="Corrected ADC", ylabel="Count Rate")
+
+            fit_width = max(row["hi"] - row["lo"], 8.0 * max(row["sigma"], BIN_WIDTH), 60.0)
+            x_lo = 0.0
+            x_hi = min(float(pdata["mids"][-1]), max(row["hi"], row["center"] + 1.25 * fit_width) + 0.25 * fit_width)
+            ax.set_xlim(x_lo, x_hi)
+            style_legend(ax)
+
+        for ax in axes[len(plot_rows):]:
+            ax.set_visible(False)
+
+        fig.suptitle(f"{self.payload_name}  {energy_key}", fontsize=13)
+        fig.subplots_adjust(left=0.07, right=0.98, bottom=0.08, top=0.92, wspace=0.20, hspace=0.30)
+        fig.savefig(fig_path, dpi=180)
+        plt.close(fig)
 
     def _plot_4channels(
         self,

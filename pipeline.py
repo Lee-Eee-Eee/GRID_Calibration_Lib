@@ -40,7 +40,10 @@ class CalibrationPipeline:
             ec_cfg.update(config)
 
         if tb_l2_json_path is None:
-            candidates = sorted((self.layout.get_tb_l2_dir() / "json").glob("*_TB.json"))
+            candidates = sorted((self.layout.get_tb_l2_dir() / "json").glob("*_TB.l2.json"))
+            if not candidates:
+                # 兼容旧产物
+                candidates = sorted((self.layout.get_tb_l2_dir() / "json").glob("*_TB.json"))
             if not candidates:
                 raise FileNotFoundError("No TB L2 parameter file found")
             tb_l2_json_path = candidates[-1]

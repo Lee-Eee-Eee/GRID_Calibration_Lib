@@ -41,17 +41,17 @@ class ECL1Processor:
 
         # Find background parquets for source data
         bkg_parquets: Dict[str, Path] = {}
-        for pf in sorted(parquet_dir.glob("src_bkg_*.parquet")):
-            bkg_parquets[pf.stem] = pf
+        for pf in sorted(parquet_dir.glob("src_bkg_*.l0.parquet")):
+            bkg_parquets[pf.stem.replace(".l0", "")] = pf
 
-        for parquet_file in sorted(parquet_dir.glob("*.parquet")):
+        for parquet_file in sorted(parquet_dir.glob("*.l0.parquet")):
+            stem = parquet_file.stem.replace(".l0", "")
             # Skip background files (they're used as input, not processed independently)
-            if parquet_file.stem.startswith("src_bkg_"):
+            if stem.startswith("src_bkg_"):
                 continue
 
             try:
                 df_l0 = read_parquet(parquet_file)
-                stem = parquet_file.stem
                 meta = read_parquet_metadata(parquet_file)
                 data_type = meta.get("data_type", "xray") if isinstance(meta, dict) else "xray"
 
@@ -66,7 +66,7 @@ class ECL1Processor:
                     )
                     if bkg_df_corrected is not None and len(bkg_df_corrected) > 0:
                         # Save corrected background alongside the signal
-                        bkg_out_path = self.layout.get_ec_l1_parquet(f"{stem}_bkg_corrected.parquet")
+                        bkg_out_path = self.layout.get_ec_l1_parquet(f"{stem}_bkg_corr.l1.parquet")
                         write_parquet(bkg_out_path, bkg_df_corrected)
                         bkg_parquet_name = bkg_out_path.name
                         bkg_info = {
@@ -87,7 +87,7 @@ class ECL1Processor:
                     "columns": list(df_l1.columns),
                 }
 
-                parquet_out = self.layout.get_ec_l1_parquet(f"{stem}_corrected.parquet")
+                parquet_out = self.layout.get_ec_l1_parquet(f"{stem}_corr.l1.parquet")
                 write_parquet(parquet_out, df_l1, metadata=file_metadata)
 
                 results["outputs"].append({

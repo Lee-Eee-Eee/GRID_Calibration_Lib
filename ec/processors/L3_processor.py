@@ -111,12 +111,12 @@ class ECL3Processor:
                 results["calibration_params"][str(ch)] = ch_result
 
                 # --- EC fit plot ---
-                ec_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_ecfit_ch{ch}.png")
+                ec_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_ecfit_ch{ch}.l3.png")
                 self._plot_ec_fit(ch, ch_data, ec_low_result, ec_high_result, e_cut, ec_fig_path)
                 results["output_figures"].append(ec_fig_path.name)
 
                 # --- Resolution fit plot ---
-                res_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_resolution_fit_ch{ch}.png")
+                res_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_resolution_fit_ch{ch}.l3.png")
                 self._plot_resolution_fit(
                     ch, ch_data,
                     ch_result.get("resolution_low"), ch_result.get("resolution_high"),
@@ -125,11 +125,11 @@ class ECL3Processor:
                 results["output_figures"].append(res_fig_path.name)
 
                 # --- Per-channel JSON ---
-                ch_json_path = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_ec_coef_ch{ch}.json")
+                ch_json_path = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_ec_coef_ch{ch}.l3.json")
                 write_json(ch_json_path, ch_result)
 
             # --- Summary JSON ---
-            out_json = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_EC.json")
+            out_json = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_EC.l3.json")
             write_json(
                 out_json,
                 {
@@ -161,30 +161,56 @@ class ECL3Processor:
             raise ValueError(f"L2 json directory not found: {json_dir}")
 
         rows: List[Dict[str, Any]] = []
-        for fp in sorted(json_dir.glob("*_l2_fit_results.json")):
-            if re.search(r"_ch\d+_l2_fit_results\.json$", fp.name):
-                continue
+        # 优先扫新版 *_fit_results.l2.json；同时兼容旧版 *_l2_fit_results.json
+        candidate_files = list(json_dir.glob("*_fit_results.l2.json"))
+        if not candidate_files:
+            candidate_files = [
+                fp for fp in json_dir.glob("*_l2_fit_results.json")
+                if not re.search(r"_ch\d+_l2_fit_results\.json$", fp.name)
+            ]
+
+        for fp in sorted(candidate_files):
             data = read_json(fp)
-            energy_key = data.get("energy", fp.stem)
 
-            # determine source type from energy_key
-            is_source = str(energy_key).startswith("src_")
-
-            for ch_str, ch_dict in data.get("channels", {}).items():
-                rows.append(
-                    {
-                        "E": float(ch_dict.get("E", 0.0)),
-                        "center": float(ch_dict.get("center", 0.0)),
-                        "center_err": float(ch_dict.get("center_err", 0.0)),
-                        "sigma": float(ch_dict.get("sigma", 0.0)),
-                        "resolution": float(ch_dict.get("resolution", 0.0)),
-                        "resolution_err": float(ch_dict.get("resolution_err", 0.0)),
-                        "FWHM": float(ch_dict.get("FWHM", 0.0)),
-                        "channel": int(ch_str),
-                        "source": "src" if is_source else "x",
+            # 新版：顶层 list[record]
+            if isinstance(data, list):
+                for rec in data:
+                    if not isinstance(rec, dict):
+                        continue
+                    rows.append({
+                        "E": float(rec.get("E", 0.0)),
+                        "center": float(rec.get("center", 0.0)),
+                        "center_err": float(rec.get("center_err", 0.0)),
+                        "sigma": float(rec.get("sigma", 0.0)),
+                        "resolution": float(rec.get("resolution", 0.0)),
+                        "resolution_err": float(rec.get("resolution_err", 0.0)),
+                        "FWHM": float(rec.get("fwhm", rec.get("FWHM", 0.0))),
+                        "channel": int(rec.get("channel", 0)),
+                        "source": str(rec.get("source", "x")) if rec.get("source") in ("x", "xray", "src") else "x",
                         "file": fp.stem,
-                    }
-                )
+                    })
+                continue
+
+            # 旧版：dict 嵌套
+            energy_key = data.get("energy", fp.stem)
+            is_source = str(energy_key).startswith("src_")
+            for ch_str, ch_dict in data.get("channels", {}).items():
+                rows.append({
+                    "E": float(ch_dict.get("E", 0.0)),
+                    "center": float(ch_dict.get("center", 0.0)),
+                    "center_err": float(ch_dict.get("center_err", 0.0)),
+                    "sigma": float(ch_dict.get("sigma", 0.0)),
+                    "resolution": float(ch_dict.get("resolution", 0.0)),
+                    "resolution_err": float(ch_dict.get("resolution_err", 0.0)),
+                    "FWHM": float(ch_dict.get("FWHM", 0.0)),
+                    "channel": int(ch_str),
+                    "source": "src" if is_source else "x",
+                    "file": fp.stem,
+                })
+
+        # 归一化 source 标识：xray / x → "x"，src → "src"
+        for r in rows:
+            r["source"] = "src" if r["source"] in ("src",) else "x"
         return sorted(rows, key=lambda x: x["E"])
 
     # ------------------------------------------------------------------ #

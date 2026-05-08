@@ -15,13 +15,20 @@ class ChannelInfo:
 
 @dataclass
 class SourceSpec:
-    """标定源规格"""
+    """标定放射源规格。
+
+    `energy_keV` 是单文件唯一指定的能量（向后兼容字段，沿用 `calibration_process`
+    每文件一峰的写法）。`peak_energies_keV` 为可选多峰列表 —— 如 Co-60 同时含
+    1173.2 / 1332.5 keV，Na-22 含 511 / 1274.5 keV 等。当列表非空时，EC L2
+    会在源谱里独立拟合每个峰、每个峰输出一条 (E, center) 记录。
+    """
     name: str
     energy_keV: float
     event_file: str
     hk_file: str
     background_event_file: str
     background_hk_file: str
+    peak_energies_keV: List[float] = field(default_factory=list)
 
 
 @dataclass
@@ -53,11 +60,14 @@ GRID_14B = PayloadConfig(
     ec_source_dir=RAW_ROOT / "02" / "source",
     source_specs=[
         SourceSpec("Na22", 511.0, "Na22_5m_083.event.dat", "Na22_5m_ecu_126.hk",
-                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk"),
+                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk",
+                  peak_energies_keV=[511.0, 1274.5]),
         SourceSpec("Cs137", 661.7, "CS137_25m_082.event.dat", "CS137_25m_ecu_125.hk",
-                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk"),
+                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk",
+                  peak_energies_keV=[661.7]),
         SourceSpec("Co60", 1332.5, "Co60_40m_081.event.dat", "Co60_ 40m_ecu_124.hk",
-                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk"),
+                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk",
+                  peak_energies_keV=[1173.2, 1332.5]),
     ]
 )
 
@@ -71,11 +81,14 @@ GRID_15B = PayloadConfig(
     ec_source_dir=RAW_ROOT / "03" / "source",
     source_specs=[
         SourceSpec("Na22", 511.0, "na22_3m_179.event.dat", "na22_3m_ecu_021.hk",
-                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk"),
+                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk",
+                  peak_energies_keV=[511.0, 1274.5]),
         SourceSpec("Cs137", 661.7, "cs137_20m_c8_178.event.dat", "cs137_20m_c8_ecu_020.hk",
-                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk"),
+                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk",
+                  peak_energies_keV=[661.7]),
         SourceSpec("Co60", 1332.5, "co60_1h_177.event.dat", "co60_1h_ecu_019.hk",
-                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk"),
+                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk",
+                  peak_energies_keV=[1173.2, 1332.5]),
     ]
 )
 

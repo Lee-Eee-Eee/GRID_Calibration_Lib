@@ -11,6 +11,15 @@ from scipy.optimize import curve_fit
 from ...common.utils import DataLayout, get_timestamp, read_json, read_parquet_metadata, write_json
 
 
+def _empty_tb_l2_record() -> Dict[str, float]:
+    """对齐 cali_format/wiki 规范的空记录占位（11 字段全 0）。"""
+    return {
+        "G0": 0.0, "k": 0.0, "V0": 0.0, "b": 0.0, "c": 0.0,
+        "G0_err": 0.0, "k_err": 0.0, "V0_err": 0.0, "b_err": 0.0, "c_err": 0.0,
+        "chisquare": 0.0,
+    }
+
+
 class TBL2Processor:
     """TB L2层处理器 - 温偏曲面拟合。
 
@@ -73,6 +82,7 @@ class TBL2Processor:
                 ch_data = [d for d in fit_data if d["channel"] == ch]
                 if len(ch_data) < 8:
                     print(f"Channel {ch} has too few data points ({len(ch_data)}) for L2 fit.")
+                    params_list.append(None)
                     continue
 
                 params = self._fit_surface(ch_data)
@@ -80,18 +90,41 @@ class TBL2Processor:
                 params["payload"] = self.payload_name
                 params_list.append(params)
 
-                out_fig = self.layout.get_tb_l2_figure(f"{timestamp}_{self.payload_name}_ch{ch}_TB_fit.png")
+                out_fig = self.layout.get_tb_l2_figure(f"{timestamp}_{self.payload_name}_ch{ch}_TB_fit.l2.png")
                 self._plot_channel_fit(ch_data, params, out_fig, ch)
                 files_list.append(out_fig.name)
 
             results["fit_params"] = params_list
 
-            out_json = self.layout.get_tb_l2_json(f"{timestamp}_{self.payload_name}_TB.json")
-            write_json(out_json, params_list)
+            # cali_format wiki 规范：list[4]，每条 11 个字段 {G0,k,V0,b,c,*_err,chisquare}
+            wiki_records = []
+            for p in params_list:
+                if p is None:
+                    wiki_records.append(_empty_tb_l2_record())
+                else:
+                    wiki_records.append({
+                        "G0": float(p["G0"]),
+                        "k": float(p["k"]),
+                        "V0": float(p["V0"]),
+                        "b": float(p["b"]),
+                        "c": float(p["c"]),
+                        "G0_err": float(p["G0_err"]),
+                        "k_err": float(p["k_err"]),
+                        "V0_err": float(p["V0_err"]),
+                        "b_err": float(p["b_err"]),
+                        "c_err": float(p["c_err"]),
+                        "chisquare": float(p.get("chi2_reduced", 0.0) * max(p.get("n_points", 1) - 5, 1)),
+                    })
+            # 补齐到 4 条（如有通道未拟合）
+            while len(wiki_records) < 4:
+                wiki_records.append(_empty_tb_l2_record())
+
+            out_json = self.layout.get_tb_l2_json(f"{timestamp}_{self.payload_name}_TB.l2.json")
+            write_json(out_json, wiki_records)
             results["output_json"] = out_json.name
             results["output_figures"] = files_list
 
-            print(f"TB L2: fitted {len(fit_data)} total points across {len(params_list)} channels")
+            print(f"TB L2: fitted {len(fit_data)} total points across {sum(p is not None for p in params_list)} channels")
         except Exception as exc:
             results["errors"].append(str(exc))
             print(f"Error in L2: {exc}")
@@ -109,32 +142,55 @@ class TBL2Processor:
             raise ValueError(f"L0 parquet directory not found: {l0_parquet_dir}")
 
         rows: List[Dict[str, Any]] = []
-        for l1_file in sorted(json_dir.glob("*_fit_results.json")):
+        for l1_file in sorted(json_dir.glob("*_fit_results.l1.json")):
             data = read_json(l1_file)
-            stem = data.get("stem") or l1_file.stem.replace("_fit_results", "")
+            # 优先用 list-of-4 schema；若是旧版 dict 嵌套，兼容读取
+            if isinstance(data, list):
+                channel_records = data
+                stem = l1_file.stem.replace("_fit_results.l1", "")
+            else:
+                stem = data.get("stem") or l1_file.stem.replace("_fit_results.l1", "")
+                channel_records = []
+                for ch_str, ch_result in (data.get("channels") or {}).items():
+                    rec = dict(ch_result)
+                    rec["channel"] = int(ch_str)
+                    channel_records.append(rec)
 
+            # T/V 优先取记录里的 temp/bias（list-of-4 schema 已带），缺失再回退 L0 metadata
             per_ch_tv: Dict[int, Dict[str, float]] = {}
-            pq_path = l0_parquet_dir / f"{stem}.parquet"
-            if pq_path.exists():
-                meta = read_parquet_metadata(pq_path)
-                channels = meta.get("channels", {}) if isinstance(meta, dict) else {}
-                for ch in range(4):
-                    item = channels.get(str(ch), {}) if isinstance(channels, dict) else {}
-                    t = item.get("temp")
-                    v = item.get("bias")
-                    if isinstance(t, (int, float)) and np.isfinite(t) and isinstance(v, (int, float)) and np.isfinite(v):
-                        per_ch_tv[ch] = {"temp": float(t), "bias": float(v)}
+            for rec in channel_records:
+                ch = int(rec.get("channel", -1))
+                if ch < 0:
+                    continue
+                t = rec.get("temp")
+                v = rec.get("bias")
+                if isinstance(t, (int, float)) and np.isfinite(t) and isinstance(v, (int, float)) and np.isfinite(v):
+                    per_ch_tv[ch] = {"temp": float(t), "bias": float(v)}
+
+            if not per_ch_tv:
+                pq_path = l0_parquet_dir / f"{stem}.l0.parquet"
+                if not pq_path.exists():
+                    pq_path = l0_parquet_dir / f"{stem}.parquet"  # 向后兼容旧产物
+                if pq_path.exists():
+                    meta = read_parquet_metadata(pq_path)
+                    channels = meta.get("channels", {}) if isinstance(meta, dict) else {}
+                    for ch in range(4):
+                        item = channels.get(str(ch), {}) if isinstance(channels, dict) else {}
+                        t = item.get("temp")
+                        v = item.get("bias")
+                        if isinstance(t, (int, float)) and np.isfinite(t) and isinstance(v, (int, float)) and np.isfinite(v):
+                            per_ch_tv[ch] = {"temp": float(t), "bias": float(v)}
 
             if not per_ch_tv:
                 continue
 
-            for ch_str, ch_result in data.get("channels", {}).items():
-                ch = int(ch_str)
+            for rec in channel_records:
+                ch = int(rec.get("channel", -1))
                 if ch not in per_ch_tv:
                     continue
-                gain = ch_result.get("center", 0.0)
-                gain_err = ch_result.get("center_err", 0.0)
-                rsq = ch_result.get("rsquared", 0.0)
+                gain = rec.get("center", 0.0)
+                gain_err = rec.get("center_err", 0.0)
+                rsq = rec.get("rsquared", 0.0)
                 if not (np.isfinite(gain) and gain > 0):
                     continue
                 if np.isfinite(rsq) and rsq < self.MIN_RSQUARED:

@@ -62,7 +62,9 @@ def main():
             )
         elif args.layer == "EC_L1":
             # 自动寻找TB L2最近的配置文件
-            candidates = sorted((layout.get_tb_l2_dir() / "json").glob("*_TB.json"))
+            candidates = sorted((layout.get_tb_l2_dir() / "json").glob("*_TB.l2.json"))
+            if not candidates:
+                candidates = sorted((layout.get_tb_l2_dir() / "json").glob("*_TB.json"))
             if not candidates:
                 raise FileNotFoundError("未找到TB L2生成的参数文件，请先运行 TB_L2")
             tb_l2_json_path = candidates[-1]

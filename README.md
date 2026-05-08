@@ -4,7 +4,6 @@ GRID 伽马射线探测器载荷的**地面标定数据处理库**，按层流�
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Managed by uv](https://img.shields.io/badge/managed%20by-uv-purple.svg)](https://docs.astral.sh/uv/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 
 GRID（Gamma-Ray Integrated Detectors）是一组小型 SiPM 伽马射线探测器星座。每块载荷在出厂前需要做地面标定，给出两套参数：
 
@@ -22,7 +21,7 @@ GRID（Gamma-Ray Integrated Detectors）是一组小型 SiPM 伽马射线探测�
 - **TB L2 自由 k 曲面拟合。** 用 `1/center_err` 加权，参数边界对齐 `calibration_process.util_lib.temp_bias_lmfit`。
 - **手选拟合窗口编辑器。** 自动峰检测找错的极少数情况，交互修一次终生不再被覆盖。
 - **单文件部分重跑。** 改完一个手选窗，只重画那个文件的 L1，再重跑 L2；其他文件原样保留。
-- **每层独立校验脚本。** 与 `cali_format` 中规范的 schema 对齐。
+- **每层独立校验脚本。** 内置 `calibration_lib.checks.*` 做 schema / sanity 校验。
 
 ---
 
@@ -192,7 +191,7 @@ uv run python -m calibration_lib.checks.check_ec_l2 14B products
 uv run python -m calibration_lib.checks.check_ec_l3 14B products
 ```
 
-落盘 schema 在姐妹仓库 [`cali_format`](https://github.com/Lee-Eee-Eee/cali_format) 的 wiki 中规范。
+落盘 schema 见 `wiki/`（layer-by-layer 数据格式说明）。
 
 ---
 
@@ -232,7 +231,3 @@ uv run pytest
 本库刻意贴合上游 `calibration_process` 的数据流约定，新增拟合模式请保持"单峰 + 单背景"，不要叠多组分背景。
 
 ---
-
-## License
-
-MIT。详见 [LICENSE](LICENSE)（或 `pyproject.toml` 中的 MIT 标注）。

@@ -106,6 +106,26 @@ def parse_event_hk_to_dataframe(
     amp = amp[:n_evt]
     utc = _extract_time_axis(event_data, n_evt)
 
+    # crc_check: parser 默认会在事件包里写 crc_check（bool array）；如果没有就视为全部通过
+    crc_raw = event_data.get("crc_check")
+    if crc_raw is not None:
+        crc_check = np.asarray(crc_raw, dtype=bool)
+        if crc_check.size >= n_evt:
+            crc_check = crc_check[:n_evt]
+        else:
+            tmp = np.ones(n_evt, dtype=bool)
+            tmp[: crc_check.size] = crc_check
+            crc_check = tmp
+    else:
+        crc_check = np.ones(n_evt, dtype=bool)
+
+    # cal_ccm: 来自 data_ccm / 65535（与 cali_format/example.ipynb 约定一致），可选
+    data_ccm = np.asarray(event_data.get("data_ccm", []), dtype=float)
+    if data_ccm.size >= n_evt:
+        cal_ccm = data_ccm[:n_evt] / 65535.0
+    else:
+        cal_ccm = np.full(n_evt, np.nan, dtype=float)
+
     temp_by_ch: Dict[int, float] = {}
     bias_by_ch: Dict[int, float] = {}
     channel_meta: Dict[str, Dict[str, float]] = {}
@@ -167,10 +187,12 @@ def parse_event_hk_to_dataframe(
         df = pd.DataFrame(
             {
                 "amp": amp[valid],
-                "ch": ch[valid].astype(int),
+                "channel": ch[valid].astype(int),
                 "utc": utc[valid],
                 "temp": temp[valid],
                 "bias": bias[valid],
+                "crc_check": crc_check[valid],
+                "cal_ccm": cal_ccm[valid],
             }
         )
     else:
@@ -178,8 +200,10 @@ def parse_event_hk_to_dataframe(
         df = pd.DataFrame(
             {
                 "amp": amp[valid],
-                "ch": ch[valid].astype(int),
+                "channel": ch[valid].astype(int),
                 "utc": utc[valid],
+                "crc_check": crc_check[valid],
+                "cal_ccm": cal_ccm[valid],
             }
         )
 

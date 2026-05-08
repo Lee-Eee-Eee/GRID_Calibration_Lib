@@ -41,7 +41,9 @@ class FitResult:
     center: float
     center_err: float
     sigma: float
+    sigma_err: float
     amplitude: float
+    amplitude_err: float
     slope: Optional[float]
     intercept: Optional[float]
     exp_amplitude: Optional[float]
@@ -124,33 +126,56 @@ class TBL1Processor:
         for parquet_file in parquet_files:
             try:
                 df = read_parquet(parquet_file)
-                stem = parquet_file.stem
+                stem = parquet_file.stem.replace(".l0", "")
                 meta = read_parquet_metadata(parquet_file)
                 channels_meta = meta.get("channels", {}) if isinstance(meta, dict) else {}
 
-                fit_results: Dict[str, Dict[str, Any]] = {}
-                legacy_rows = []
+                channel_records: List[Dict[str, Any]] = []
                 used_windows.setdefault(stem, {})
 
                 fig, axes = plt.subplots(2, 2, figsize=(13, 9), constrained_layout=True)
                 axes_flat = axes.flatten()
 
                 for ch in range(4):
-                    amp_data = df[df["ch"] == ch]["amp"].to_numpy(dtype=float)
+                    amp_data = df[df["channel"] == ch]["amp"].to_numpy(dtype=float)
                     if len(amp_data) < 10:
                         continue
 
                     fit_res = self._fit_channel(stem, ch, amp_data, manual_windows, auto_window)
-
                     is_manual = bool(self._is_manual_entry(manual_windows.get(stem, {}).get(str(ch), {})))
 
-                    fit_results[str(ch)] = {
+                    ch_meta = channels_meta.get(str(ch), {}) if isinstance(channels_meta, dict) else {}
+                    ch_temp = float(ch_meta.get("temp", float("nan"))) if isinstance(ch_meta.get("temp"), (int, float)) else float("nan")
+                    ch_temp_err = float(ch_meta.get("temp_err", 0.0)) if isinstance(ch_meta.get("temp_err"), (int, float)) else 0.0
+                    ch_bias = float(ch_meta.get("bias", float("nan"))) if isinstance(ch_meta.get("bias"), (int, float)) else float("nan")
+                    ch_bias_err = float(ch_meta.get("bias_err", 0.0)) if isinstance(ch_meta.get("bias_err"), (int, float)) else 0.0
+
+                    # 分辨率 R = FWHM / center；误差用一阶传播
+                    if np.isfinite(fit_res.center) and fit_res.center > 0:
+                        resolution = float(fit_res.fwhm / fit_res.center)
+                        sigma_term = (fit_res.fwhm / fit_res.center) * (fit_res.sigma_err / max(fit_res.sigma, 1e-12)) if fit_res.sigma > 0 else 0.0
+                        center_term = (fit_res.fwhm / fit_res.center**2) * fit_res.center_err
+                        resolution_err = float(np.sqrt(sigma_term**2 + center_term**2))
+                    else:
+                        resolution = float("nan")
+                        resolution_err = 0.0
+
+                    record = {
+                        "channel": int(ch),
                         "center": float(fit_res.center),
-                        "center_err": float(fit_res.center_err) if np.isfinite(fit_res.center_err) else 0.0,
+                        "center_err": float(fit_res.center_err),
                         "sigma": float(fit_res.sigma),
+                        "sigma_err": float(fit_res.sigma_err),
                         "amplitude": float(fit_res.amplitude),
+                        "amplitude_err": float(fit_res.amplitude_err),
                         "fwhm": float(fit_res.fwhm),
                         "height": float(fit_res.height),
+                        "resolution": resolution,
+                        "resolution_err": resolution_err,
+                        "temp": ch_temp,
+                        "temp_err": ch_temp_err,
+                        "bias": ch_bias,
+                        "bias_err": ch_bias_err,
                         "window_lo": float(fit_res.lo),
                         "window_hi": float(fit_res.hi),
                         "window_manual": is_manual,
@@ -159,17 +184,18 @@ class TBL1Processor:
                         "n_events": int(len(amp_data)),
                     }
                     if fit_res.slope is not None:
-                        fit_results[str(ch)]["slope"] = float(fit_res.slope)
+                        record["slope"] = float(fit_res.slope)
                     if fit_res.intercept is not None:
-                        fit_results[str(ch)]["intercept"] = float(fit_res.intercept)
+                        record["intercept"] = float(fit_res.intercept)
                     if fit_res.exp_amplitude is not None:
-                        fit_results[str(ch)]["exp_amplitude"] = float(fit_res.exp_amplitude)
+                        record["exp_amplitude"] = float(fit_res.exp_amplitude)
                     if fit_res.exp_decay is not None:
-                        fit_results[str(ch)]["exp_decay"] = float(fit_res.exp_decay)
+                        record["exp_decay"] = float(fit_res.exp_decay)
                     if fit_res.quad_a is not None:
-                        fit_results[str(ch)]["quad_a"] = float(fit_res.quad_a)
-                        fit_results[str(ch)]["quad_b"] = float(fit_res.quad_b)
-                        fit_results[str(ch)]["quad_c"] = float(fit_res.quad_c)
+                        record["quad_a"] = float(fit_res.quad_a)
+                        record["quad_b"] = float(fit_res.quad_b)
+                        record["quad_c"] = float(fit_res.quad_c)
+                    channel_records.append(record)
 
                     used_windows[stem][str(ch)] = {
                         "lo": float(fit_res.lo),
@@ -177,70 +203,30 @@ class TBL1Processor:
                         "manual": is_manual,
                     }
 
-                    ch_meta = channels_meta.get(str(ch), {}) if isinstance(channels_meta, dict) else {}
-                    ch_temp = ch_meta.get("temp", float("nan"))
-                    ch_bias = ch_meta.get("bias", float("nan"))
-
-                    legacy_row = {
-                        "amplitude": float(fit_res.amplitude),
-                        "center": float(fit_res.center),
-                        "center_err": float(fit_res.center_err) if np.isfinite(fit_res.center_err) else 0.0,
-                        "sigma": float(fit_res.sigma),
-                        "slope": float(fit_res.slope) if fit_res.slope is not None else 0.0,
-                        "intercept": float(fit_res.intercept) if fit_res.intercept is not None else 0.0,
-                        "fwhm": float(fit_res.fwhm),
-                        "height": float(fit_res.height),
-                        "channel": ch,
-                        "average_temp": float(ch_temp) if isinstance(ch_temp, (int, float)) else float("nan"),
-                        "sipm_voltage": float(ch_bias) if isinstance(ch_bias, (int, float)) else float("nan"),
-                        "lo": float(fit_res.lo),
-                        "hi": float(fit_res.hi),
-                        "fit_mode": fit_res.fit_mode,
-                        "rsquared": float(fit_res.rsquared),
-                    }
-                    if fit_res.exp_amplitude is not None:
-                        legacy_row["exp_amplitude"] = float(fit_res.exp_amplitude)
-                    if fit_res.exp_decay is not None:
-                        legacy_row["exp_decay"] = float(fit_res.exp_decay)
-                    if fit_res.quad_a is not None:
-                        legacy_row["quad_a"] = float(fit_res.quad_a)
-                        legacy_row["quad_b"] = float(fit_res.quad_b)
-                        legacy_row["quad_c"] = float(fit_res.quad_c)
-                    legacy_rows.append(legacy_row)
-
                     ax = axes_flat[ch]
                     self._plot_channel(ax, ch, fit_res)
 
                 temp_mean, bias_mean = self._extract_tb_file_mean(meta)
 
                 fig.suptitle(f"{stem} | Fit mode: auto-select", fontsize=14)
-                fig_path = self.layout.get_tb_l1_figure(f"{stem}_fit.jpg")
+                fig_path = self.layout.get_tb_l1_figure(f"{stem}_fit.l1.jpg")
                 fig.savefig(fig_path, dpi=150, format="jpg")
                 plt.close(fig)
 
-                json_path = self.layout.get_tb_l1_json(f"{stem}_fit_results.json")
-                write_json(
-                    json_path,
-                    {
-                        "stem": stem,
-                        "temp_mean": temp_mean,
-                        "bias_mean": bias_mean,
-                        "channels": fit_results,
-                        "legacy_rows": legacy_rows,
-                        "figure": fig_path.name,
-                    },
-                )
+                json_path = self.layout.get_tb_l1_json(f"{stem}_fit_results.l1.json")
+                # 顶层为 list[4]，符合 cali_format wiki 规范；下游 L2 直接用 list/array
+                write_json(json_path, channel_records)
 
                 results["outputs"].append(
                     {
                         "stem": stem,
-                        "channels_fitted": len(fit_results),
+                        "channels_fitted": len(channel_records),
                         "json": json_path.name,
                         "figure": fig_path.name,
                     }
                 )
                 results["n_processed"] += 1
-                print(f"✓ L1: {stem} ({len(fit_results)} channels)")
+                print(f"✓ L1: {stem} ({len(channel_records)} channels)")
             except Exception as exc:
                 results["errors"].append({"file": parquet_file.name, "error": str(exc)})
                 print(f"✗ Error: {parquet_file.name} - {exc}")
@@ -387,7 +373,9 @@ class TBL1Processor:
         center = float(result.params["g_center"].value)
         center_err = float(result.params["g_center"].stderr or 0.0)
         sigma = float(result.params["g_sigma"].value)
+        sigma_err = float(result.params["g_sigma"].stderr or 0.0)
         amplitude = float(result.params["g_amplitude"].value)
+        amplitude_err = float(result.params["g_amplitude"].stderr or 0.0)
         slope = intercept = None
         exp_amplitude = exp_decay = None
         quad_a = quad_b = quad_c = None
@@ -425,7 +413,9 @@ class TBL1Processor:
             center=center,
             center_err=center_err,
             sigma=sigma,
+            sigma_err=sigma_err,
             amplitude=amplitude,
+            amplitude_err=amplitude_err,
             slope=slope,
             intercept=intercept,
             exp_amplitude=exp_amplitude,
@@ -567,32 +557,26 @@ class TBL1Processor:
         return best[0], best[1], best[2], best[3]
 
     def _plot_channel(self, ax_spec, ch: int, fit_res: FitResult) -> None:
-        ax_spec.step(fit_res.mids, fit_res.hist, where="mid", lw=1.0, color="0.5", label="all spectrum")
-        ax_spec.plot(fit_res.x_cut, fit_res.y_cut, color="C1", lw=1.6, label="cut_data")
-        ax_spec.plot(fit_res.x_cut, fit_res.best_fit, "k--", label="Fit")
-        ax_spec.plot(fit_res.x_cut, fit_res.gauss_fit, "--", label="gaussian")
-        ax_spec.plot(fit_res.x_cut, fit_res.background_fit, "--", label="background")
-
-        ax_spec.axvline(fit_res.center, color="r", ls="--", lw=1.0)
-        ax_spec.vlines([fit_res.lo, fit_res.hi], 0, max(fit_res.hist), colors="r", linestyles="dashed", label="Fit Range")
-
-        ax_spec.set_title(
-            f"ch{ch}: center={fit_res.center:.2f}, sigma={fit_res.sigma:.2f}, mode={fit_res.fit_mode}",
-            fontsize=10,
+        from ...common.plotting import (
+            plot_spectrum_fit, style_axes, style_legend, style_title, adaptive_xlim,
         )
-        ax_spec.set_xlabel("ADC unit")
-        ax_spec.set_ylabel("counts")
-
-        # 自适应 xlim：从 0 起，到能容纳整个拟合窗口、峰右尾以及最后一个非零计数 bin
-        # 的较大者，再留 ~10% 余量。窄峰也能撑满，宽谱也不被截断。
-        sigma_safe = max(float(fit_res.sigma), 1.0)
-        right_from_peak = float(fit_res.center) + 6.0 * sigma_safe
-        right_from_window = float(fit_res.hi) * 1.15
-        nonzero_idx = np.flatnonzero(fit_res.hist > 0)
-        right_from_data = float(fit_res.mids[nonzero_idx[-1]]) * 1.05 if nonzero_idx.size else right_from_window
-        x_max = max(right_from_peak, right_from_window, min(right_from_data, float(np.max(fit_res.mids))))
-        # 至少 60 ADC 宽度，避免极窄峰下视图过窄
-        x_max = max(x_max, float(fit_res.center) + 30.0)
-        ax_spec.set_xlim(0, x_max)
-        ax_spec.grid(ls="--", alpha=0.25)
-        ax_spec.legend(fontsize=7)
+        plot_spectrum_fit(
+            ax_spec,
+            mids=fit_res.mids,
+            raw=fit_res.hist,
+            cut_x=fit_res.x_cut,
+            cut_y=fit_res.y_cut,
+            best_fit=fit_res.best_fit,
+            gauss_fit=fit_res.gauss_fit,
+            background_fit=fit_res.background_fit,
+            fit_lo=fit_res.lo,
+            fit_hi=fit_res.hi,
+            center=fit_res.center,
+        )
+        style_title(
+            ax_spec,
+            f"ch{ch}: center={fit_res.center:.2f}, sigma={fit_res.sigma:.2f}, mode={fit_res.fit_mode}",
+        )
+        style_axes(ax_spec, xlabel="ADC unit", ylabel="counts")
+        adaptive_xlim(ax_spec, fit_res.mids, fit_res.hist, fit_res.center, fit_res.sigma, fit_res.hi)
+        style_legend(ax_spec)

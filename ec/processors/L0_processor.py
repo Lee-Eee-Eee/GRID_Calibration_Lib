@@ -71,7 +71,7 @@ class ECL0Processor:
                 )
 
                 stem = f"{energy_name}_{event_path.name.split('-')[1]}"
-                parquet_path = self.layout.get_ec_l0_parquet(f"{stem}.parquet")
+                parquet_path = self.layout.get_ec_l0_parquet(f"{stem}.l0.parquet")
                 metadata["energy_keV"] = int(energy_name.replace("keV", ""))
                 metadata["data_type"] = "xray"
                 metadata["columns"] = list(df.columns)
@@ -130,10 +130,11 @@ class ECL0Processor:
                     include_per_point_tv=True,
                 )
                 signal_stem = f"{energy_tag}_{spec.name}"
-                signal_parquet = self.layout.get_ec_l0_parquet(f"{signal_stem}.parquet")
+                signal_parquet = self.layout.get_ec_l0_parquet(f"{signal_stem}.l0.parquet")
                 meta_signal["energy_keV"] = spec.energy_keV
                 meta_signal["data_type"] = "source"
                 meta_signal["source_name"] = spec.name
+                meta_signal["peak_energies_keV"] = list(spec.peak_energies_keV) if spec.peak_energies_keV else [spec.energy_keV]
                 meta_signal["columns"] = list(df_signal.columns)
                 write_parquet(signal_parquet, df_signal, metadata=meta_signal)
 
@@ -142,6 +143,7 @@ class ECL0Processor:
                     "energy": f"{spec.energy_keV}keV",
                     "data_type": "source",
                     "source_name": spec.name,
+                    "peak_energies_keV": meta_signal["peak_energies_keV"],
                     "n_pulses": int(len(df_signal)),
                     "parquet": signal_parquet.name,
                 })
@@ -165,7 +167,7 @@ class ECL0Processor:
                         include_per_point_tv=True,
                     )
                     bkg_stem = f"src_bkg_{bkg_event_path.stem}"
-                    bkg_parquet = self.layout.get_ec_l0_parquet(f"{bkg_stem}.parquet")
+                    bkg_parquet = self.layout.get_ec_l0_parquet(f"{bkg_stem}.l0.parquet")
                     meta_bkg["data_type"] = "source_bkg"
                     meta_bkg["columns"] = list(df_bkg.columns)
                     write_parquet(bkg_parquet, df_bkg, metadata=meta_bkg)

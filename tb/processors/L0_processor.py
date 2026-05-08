@@ -73,7 +73,7 @@ class TBL0Processor:
 
                 stem = event_path.stem.replace(".event", "")
 
-                parquet_path = self.layout.get_tb_l0_parquet(f"{stem}.parquet")
+                parquet_path = self.layout.get_tb_l0_parquet(f"{stem}.l0.parquet")
                 write_parquet(parquet_path, df_data, metadata=metadata)
 
                 results["outputs"].append({

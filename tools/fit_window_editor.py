@@ -168,7 +168,7 @@ class FitWindowEditor:
             df = pd.read_parquet(pq_file)
             channel_data: List[np.ndarray] = []
             for ch in range(4):
-                energy = df[df["ch"] == ch]["amp"].to_numpy(dtype=float)
+                energy = df[df["channel"] == ch]["amp"].to_numpy(dtype=float)
                 channel_data.append(energy)
             
             self.file_cache[self.current_idx] = channel_data
@@ -208,7 +208,7 @@ class FitWindowEditor:
             df = pd.read_parquet(self.pq_files[idx])
             channel_data = []
             for idx_ch in range(4):
-                channel_data.append(df[df["ch"] == idx_ch]["amp"].to_numpy(dtype=float))
+                channel_data.append(df[df["channel"] == idx_ch]["amp"].to_numpy(dtype=float))
             self.file_cache[idx] = channel_data
         
         channel_data = self.file_cache[idx]
