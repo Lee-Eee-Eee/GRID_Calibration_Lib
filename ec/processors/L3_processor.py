@@ -1,0 +1,319 @@
+"""能量标定(EC)处理 - L3层处理器。"""
+
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import lmfit
+import matplotlib.pyplot as plt
+import numpy as np
+from lmfit.models import QuadraticModel
+
+from ...common.utils import DataLayout, get_timestamp, read_json, write_json
+
+
+def res_fit(E, a, b, c):
+    """Resolution model: R(E) = sqrt(a*E + b*E^2 + c) / E"""
+    return np.sqrt(np.abs(a * E + b * E**2 + c)) / E
+
+
+class ECL3Processor:
+    """EC L3层处理器 - 能量标定与分辨率拟合。每个通道独立。"""
+
+    def __init__(self, payload_name: str, product_root: Path):
+        self.payload_name = payload_name
+        self.layout = DataLayout(product_root, payload_name)
+
+    def process(self, ec_l2_dir: Path, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        cfg = config or {}
+        e_cut = float(cfg.get("energy_split_low", 50.2))
+
+        results: Dict[str, Any] = {
+            "payload": self.payload_name,
+            "layer": "EC_L3",
+            "timestamp": get_timestamp(),
+            "energy_split": e_cut,
+            "calibration_params": {},
+            "output_json": None,
+            "output_figures": [],
+            "errors": [],
+        }
+
+        try:
+            fit_data_all = self._collect_l2_results(ec_l2_dir)
+            if not fit_data_all:
+                raise ValueError("No L2 fit data collected")
+
+            ts = get_timestamp()
+
+            for ch in range(4):
+                ch_data = [d for d in fit_data_all if d["channel"] == ch]
+                if not ch_data:
+                    results["calibration_params"][str(ch)] = None
+                    continue
+
+                ch_result = {"channel": ch}
+
+                # --- EC quadratic fit (Energy vs ADC) ---
+                energies = np.array([d["E"] for d in ch_data], dtype=float)
+                centers = np.array([d["center"] for d in ch_data], dtype=float)
+                center_errs = np.array([d.get("center_err", 0) for d in ch_data], dtype=float)
+                sources = [d.get("source", "x") for d in ch_data]
+
+                data_low = [(e, c, ce, s) for e, c, ce, s in zip(energies, centers, center_errs, sources) if e <= e_cut]
+                data_high = [(e, c, ce, s) for e, c, ce, s in zip(energies, centers, center_errs, sources) if e > e_cut]
+
+                if len(data_low) >= 3:
+                    ec_low_result = self._fit_quadratic([d[0] for d in data_low], [d[1] for d in data_low])
+                    ch_result["EC_low"] = [ec_low_result.params["a"].value, ec_low_result.params["b"].value, ec_low_result.params["c"].value]
+                    ch_result["EC_low_err"] = [ec_low_result.params["a"].stderr, ec_low_result.params["b"].stderr, ec_low_result.params["c"].stderr]
+                elif len(data_low) >= 2:
+                    ec_low_result = self._fit_quadratic([d[0] for d in data_low], [d[1] for d in data_low])
+                    ch_result["EC_low"] = [ec_low_result.params["a"].value, ec_low_result.params["b"].value, ec_low_result.params["c"].value]
+                    ch_result["EC_low_err"] = [ec_low_result.params["a"].stderr, ec_low_result.params["b"].stderr, ec_low_result.params["c"].stderr]
+                else:
+                    ec_low_result = None
+                    ch_result["EC_low"] = None
+
+                if len(data_high) >= 3:
+                    ec_high_result = self._fit_quadratic([d[0] for d in data_high], [d[1] for d in data_high])
+                    ch_result["EC_high"] = [ec_high_result.params["a"].value, ec_high_result.params["b"].value, ec_high_result.params["c"].value]
+                    ch_result["EC_high_err"] = [ec_high_result.params["a"].stderr, ec_high_result.params["b"].stderr, ec_high_result.params["c"].stderr]
+                elif len(data_high) >= 2:
+                    ec_high_result = self._fit_quadratic([d[0] for d in data_high], [d[1] for d in data_high])
+                    ch_result["EC_high"] = [ec_high_result.params["a"].value, ec_high_result.params["b"].value, ec_high_result.params["c"].value]
+                    ch_result["EC_high_err"] = [ec_high_result.params["a"].stderr, ec_high_result.params["b"].stderr, ec_high_result.params["c"].stderr]
+                else:
+                    ec_high_result = None
+                    ch_result["EC_high"] = None
+
+                # --- Resolution fit ---
+                resolutions = np.array([d["resolution"] for d in ch_data], dtype=float)
+                resolution_errs = np.array([d.get("resolution_err", 0) for d in ch_data], dtype=float)
+
+                res_low_data = [(e, r, re_) for e, r, re_, s in zip(energies, resolutions, resolution_errs, sources) if e <= e_cut]
+                res_high_data = [(e, r, re_, s) for e, r, re_, s in zip(energies, resolutions, resolution_errs, sources) if e > e_cut]
+
+                if len(res_low_data) >= 3:
+                    res_low_result = self._fit_resolution([d[0] for d in res_low_data], [d[1] for d in res_low_data])
+                    ch_result["resolution_low"] = [res_low_result.params["a"].value, res_low_result.params["b"].value, res_low_result.params["c"].value]
+                    ch_result["resolution_low_err"] = [res_low_result.params["a"].stderr, res_low_result.params["b"].stderr, res_low_result.params["c"].stderr]
+                else:
+                    ch_result["resolution_low"] = None
+
+                if len(res_high_data) >= 3:
+                    res_high_result = self._fit_resolution([d[0] for d in res_high_data], [d[1] for d in res_high_data])
+                    ch_result["resolution_high"] = [res_high_result.params["a"].value, res_high_result.params["b"].value, res_high_result.params["c"].value]
+                    ch_result["resolution_high_err"] = [res_high_result.params["a"].stderr, res_high_result.params["b"].stderr, res_high_result.params["c"].stderr]
+                else:
+                    ch_result["resolution_high"] = None
+
+                results["calibration_params"][str(ch)] = ch_result
+
+                # --- EC fit plot ---
+                ec_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_ecfit_ch{ch}.png")
+                self._plot_ec_fit(ch, ch_data, ec_low_result, ec_high_result, e_cut, ec_fig_path)
+                results["output_figures"].append(ec_fig_path.name)
+
+                # --- Resolution fit plot ---
+                res_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_resolution_fit_ch{ch}.png")
+                self._plot_resolution_fit(
+                    ch, ch_data,
+                    ch_result.get("resolution_low"), ch_result.get("resolution_high"),
+                    e_cut, res_fig_path,
+                )
+                results["output_figures"].append(res_fig_path.name)
+
+                # --- Per-channel JSON ---
+                ch_json_path = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_ec_coef_ch{ch}.json")
+                write_json(ch_json_path, ch_result)
+
+            # --- Summary JSON ---
+            out_json = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_EC.json")
+            write_json(
+                out_json,
+                {
+                    "timestamp": ts,
+                    "payload": self.payload_name,
+                    "energy_split": e_cut,
+                    "calibration_params": results["calibration_params"],
+                },
+            )
+            results["output_json"] = out_json.name
+            print(f"✓ EC L3: calibration generated ({out_json.name})")
+
+        except Exception as exc:
+            results["errors"].append(str(exc))
+            print(f"✗ Error in L3: {exc}")
+            import traceback
+            traceback.print_exc()
+
+        write_json(self.layout.get_ec_l3_json("L3_manifest.json"), results)
+        return results
+
+    # ------------------------------------------------------------------ #
+    # Data collection
+    # ------------------------------------------------------------------ #
+
+    def _collect_l2_results(self, ec_l2_dir: Path) -> List[Dict[str, Any]]:
+        json_dir = ec_l2_dir / "json"
+        if not json_dir.exists():
+            raise ValueError(f"L2 json directory not found: {json_dir}")
+
+        rows: List[Dict[str, Any]] = []
+        for fp in sorted(json_dir.glob("*_l2_fit_results.json")):
+            if re.search(r"_ch\d+_l2_fit_results\.json$", fp.name):
+                continue
+            data = read_json(fp)
+            energy_key = data.get("energy", fp.stem)
+
+            # determine source type from energy_key
+            is_source = str(energy_key).startswith("src_")
+
+            for ch_str, ch_dict in data.get("channels", {}).items():
+                rows.append(
+                    {
+                        "E": float(ch_dict.get("E", 0.0)),
+                        "center": float(ch_dict.get("center", 0.0)),
+                        "center_err": float(ch_dict.get("center_err", 0.0)),
+                        "sigma": float(ch_dict.get("sigma", 0.0)),
+                        "resolution": float(ch_dict.get("resolution", 0.0)),
+                        "resolution_err": float(ch_dict.get("resolution_err", 0.0)),
+                        "FWHM": float(ch_dict.get("FWHM", 0.0)),
+                        "channel": int(ch_str),
+                        "source": "src" if is_source else "x",
+                        "file": fp.stem,
+                    }
+                )
+        return sorted(rows, key=lambda x: x["E"])
+
+    # ------------------------------------------------------------------ #
+    # Fitting
+    # ------------------------------------------------------------------ #
+
+    def _fit_quadratic(self, energies: list, adcs: list) -> lmfit.model.ModelResult:
+        """Quadratic fit: ADC = a*E^2 + b*E + c"""
+        mod = QuadraticModel()
+        E = np.array(energies, dtype=float)
+        adc = np.array(adcs, dtype=float)
+        params = mod.guess(adc, x=E)
+        return mod.fit(adc, params, x=E)
+
+    def _fit_resolution(self, energies: list, resolutions: list) -> lmfit.model.ModelResult:
+        """Resolution fit: R(E) = sqrt(a*E + b*E^2 + c) / E"""
+        mod = lmfit.Model(res_fit)
+        E = np.array(energies, dtype=float)
+        R = np.array(resolutions, dtype=float)
+        params = mod.make_params(a=1.0, b=0.0, c=0.0)
+        return mod.fit(R, params, E=E)
+
+    # ------------------------------------------------------------------ #
+    # Plotting
+    # ------------------------------------------------------------------ #
+
+    def _plot_ec_fit(
+        self,
+        ch: int,
+        ch_data: List[Dict[str, Any]],
+        ec_low_result: Optional[lmfit.model.ModelResult],
+        ec_high_result: Optional[lmfit.model.ModelResult],
+        e_cut: float,
+        fig_path: Path,
+    ) -> None:
+        fig_path.parent.mkdir(parents=True, exist_ok=True)
+        fig = plt.figure(figsize=(12, 8))
+
+        x_pts = [d for d in ch_data if d["source"] == "x"]
+        src_pts = [d for d in ch_data if d["source"] == "src"]
+
+        if x_pts:
+            plt.errorbar(
+                [d["E"] for d in x_pts],
+                [d["center"] for d in x_pts],
+                yerr=[d.get("center_err", 0) for d in x_pts],
+                fmt="s", mfc="white", ms=6, elinewidth=1, capsize=3,
+                barsabove=True, zorder=1, label=f"x CH{ch}",
+            )
+        if src_pts:
+            plt.errorbar(
+                [d["E"] for d in src_pts],
+                [d["center"] for d in src_pts],
+                yerr=[d.get("center_err", 0) for d in src_pts],
+                fmt="^", mfc="white", ms=6, elinewidth=1, capsize=3,
+                barsabove=True, zorder=0, label=f"source CH{ch}",
+            )
+
+        all_E = np.array([d["E"] for d in ch_data])
+        if ec_low_result is not None:
+            E_fit = np.linspace(all_E.min(), e_cut, 100)
+            adc_fit = ec_low_result.eval(x=E_fit)
+            plt.plot(E_fit, adc_fit, "r--", label=f"quadratic fit < {e_cut}keV")
+
+        if ec_high_result is not None:
+            E_fit = np.linspace(e_cut, all_E.max(), 100)
+            adc_fit = ec_high_result.eval(x=E_fit)
+            plt.plot(E_fit, adc_fit, "g--", label=f"quadratic fit > {e_cut}keV")
+
+        plt.xscale("log")
+        plt.xlabel("Energy (keV)")
+        plt.ylabel("ADC")
+        plt.title(f"{self.payload_name} CH{ch} Energy Calibration")
+        plt.legend()
+        plt.grid(True, which="both", ls="--", lw=0.5)
+        plt.tight_layout()
+        plt.savefig(fig_path, dpi=150)
+        plt.close(fig)
+
+    def _plot_resolution_fit(
+        self,
+        ch: int,
+        ch_data: List[Dict[str, Any]],
+        res_low_params: Optional[list],
+        res_high_params: Optional[list],
+        e_cut: float,
+        fig_path: Path,
+    ) -> None:
+        fig_path.parent.mkdir(parents=True, exist_ok=True)
+        fig = plt.figure(figsize=(12, 8))
+
+        x_pts = [d for d in ch_data if d["source"] == "x"]
+        src_pts = [d for d in ch_data if d["source"] == "src"]
+
+        if x_pts:
+            plt.errorbar(
+                [d["E"] for d in x_pts],
+                [d["resolution"] for d in x_pts],
+                yerr=[d.get("resolution_err", 0) for d in x_pts],
+                fmt="s", mfc="white", ms=6, elinewidth=1, capsize=3,
+                barsabove=True, zorder=1, label=f"x CH{ch}",
+            )
+        if src_pts:
+            plt.errorbar(
+                [d["E"] for d in src_pts],
+                [d["resolution"] for d in src_pts],
+                yerr=[d.get("resolution_err", 0) for d in src_pts],
+                fmt="^", mfc="white", ms=6, elinewidth=1, capsize=3,
+                barsabove=True, zorder=0, label=f"source CH{ch}",
+            )
+
+        all_E = np.array([d["E"] for d in ch_data])
+
+        if res_low_params is not None:
+            E_fit = np.linspace(all_E.min(), e_cut, 100)
+            R_fit = res_fit(E_fit, *res_low_params)
+            plt.plot(E_fit, R_fit, "r--", label=f"resolution fit < {e_cut}keV")
+
+        if res_high_params is not None:
+            E_fit = np.linspace(e_cut, all_E.max(), 100)
+            R_fit = res_fit(E_fit, *res_high_params)
+            plt.plot(E_fit, R_fit, "g--", label=f"resolution fit > {e_cut}keV")
+
+        plt.xscale("log")
+        plt.xlabel("Energy (keV)")
+        plt.ylabel("Resolution (%)")
+        plt.title(f"{self.payload_name} CH{ch} Resolution")
+        plt.legend()
+        plt.grid(True, which="both", ls="--", lw=0.5)
+        plt.tight_layout()
+        plt.savefig(fig_path, dpi=150)
+        plt.close(fig)

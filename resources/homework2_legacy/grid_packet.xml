@@ -1,0 +1,1234 @@
+<?xml version="1.0"?>
+<grid>
+    <iv_packet packet_len="412" head="0x29;0x41;0x6c;0x8e">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <iv endian="MSB">
+            <start>4</start>
+            <size>2</size>
+            <len>200</len>
+        </iv>
+    </iv_packet>
+    <vbr_packet packet_len="412" head="0x18;0x30;0x5b;0x7d">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <vbr endian="MSB">
+            <start>4</start>
+            <size>2</size>
+            <len>200</len>
+        </vbr>
+    </vbr_packet>
+
+    <grid1x_ft_packet packet_len="528" head="0x1c;0x1c;0x22;0x88" tail="0xcc;0x11;0x88;0x22">
+        <header endian="MSB" multi="1">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc endian="MSB" multi="1">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc>
+        <pps_for_utc endian="MSB" multi="1">
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </pps_for_utc>
+        <timestamp_for_pps endian="MSB" multi="1">
+            <start>12</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp_for_pps>
+        <channel_n endian="MSB" multi="1">
+            <start>20</start>
+            <size>2</size>
+            <len>1</len>
+        </channel_n>
+        <event_number endian="MSB" multi="1" incre="1">
+            <start>22</start>
+            <size>4</size>
+            <len>1</len>
+        </event_number>
+        <pkg_event_num endian="MSB" multi="1">
+            <start>26</start>
+            <size>2</size>
+            <len>1</len>
+        </pkg_event_num>
+        <timestamp endian="MSB" repeat="1">
+            <start>28</start>
+            <size>4</size>
+            <len>1</len>
+        </timestamp>
+        <data_max endian="MSB" repeat="1">
+            <start>32</start>
+            <size>2</size>
+            <len>1</len>
+        </data_max>
+        <data_base endian="MSB" repeat="1">
+            <start>34</start>
+            <size>2</size>
+            <len>1</len>
+        </data_base>
+        <data_sum endian="MSB" repeat="1">
+            <start>36</start>
+            <size>4</size>
+            <len>1</len>
+        </data_sum>
+        <CRC endian="MSB" multi="1" skip0="0" skip1="0">
+            <start vary_repeat="1" base_start="28">2</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+        <tail endian="MSB" multi="1">
+            <start vary_repeat="1" base_start="28">4</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </grid1x_ft_packet>
+
+    <grid1x_wf_packet packet_len="560" head="0x2e;0x2e;0x33;0xff" tail="0x22;0xee;0xff;0x33">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc endian="MSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc>
+        <pps_for_utc endian="MSB">
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </pps_for_utc>
+        <timestamp_for_pps endian="MSB">
+            <start>12</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp_for_pps>
+        <channel_n endian="MSB">
+            <start>20</start>
+            <size>2</size>
+            <len>1</len>
+        </channel_n>
+        <event_number endian="MSB" incre="1">
+            <start>22</start>
+            <size>4</size>
+            <len>1</len>
+        </event_number>
+        <sample_length endian="MSB">
+            <start>26</start>
+            <size>2</size>
+            <len>1</len>
+        </sample_length>
+        <waveform_data endian="MSB">
+            <start>28</start>
+            <size>2</size>
+            <len>256</len>
+        </waveform_data>
+        <timestamp endian="MSB">
+            <start vary_wf="1">0</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp>
+        <data_max endian="MSB">
+            <start vary_wf="1">8</start>
+            <size>2</size>
+            <len>1</len>
+        </data_max>
+        <data_base endian="MSB">
+            <start vary_wf="1">10</start>
+            <size>2</size>
+            <len>1</len>
+        </data_base>
+        <CRC endian="MSB" skip0="0" skip1="0">
+            <start vary_wf="1">14</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+        <tail endian="MSB">
+            <start vary_wf="1">16</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </grid1x_wf_packet>
+    
+    <grid1x_es_packet packet_len="528" head="0x3f;0x3f;0x44;0xcc" tail="0x33;0xff;0xcc;0x44">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc endian="MSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc>
+        <pps_for_utc endian="MSB">
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </pps_for_utc>
+        <timestamp_for_pps endian="MSB">
+            <start>12</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp_for_pps>
+        <channel_n endian="MSB">
+            <start>20</start>
+            <size>2</size>
+            <len>1</len>
+        </channel_n>
+        <event_number endian="MSB" incre="1">
+            <start>22</start>
+            <size>4</size>
+            <len>1</len>
+        </event_number>
+        <l_ranges_num endian="MSB">
+            <start>26</start>
+            <size>2</size>
+            <len>1</len>
+        </l_ranges_num>
+        <s_sample_num endian="MSB">
+            <start>28</start>
+            <size>2</size>
+            <len>1</len>
+        </s_sample_num>grid1x_wf_packet
+        <timestamp endian="MSB">
+            <start>30</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp>
+        <l_energy_data endian="MSB">
+            <start>38</start>
+            <size>2</size>
+            <len>82</len>
+        </l_energy_data>
+        <s_energy_data endian="MSB">
+            <start>202</start>
+            <size>2</size>
+            <len>160</len>
+        </s_energy_data>
+        <CRC endian="MSB" skip0="0" skip1="0">
+            <start>522</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+        <tail endian="MSB">
+             <start>524</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </grid1x_es_packet>
+
+    <grid1x_hk_packet packet_len="187" head="0x1a;0x2b;0x3c;0x4d">
+        <header>
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc_time endian="MSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc_time>
+        <cpu_temperature>
+            <start>8</start>
+            <size>2</size>
+            <len>1</len>
+        </cpu_temperature>
+        <daq_temperature_i2c1_0x49 endian="MSB">
+            <start>10</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_temperature_i2c1_0x49>
+        <storage_valid>
+            <start>12</start>
+            <size>2</size>
+            <len>1</len>
+        </storage_valid>
+        <fee_z5v_v_0x40_1>
+            <start>14</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v_v_0x40_1>
+        <fee_z5v_i_0x40_1>
+            <start>16</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v_i_0x40_1>
+        <fee_z2v1_v_0x41_1>
+            <start>18</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z2v1_v_0x41_1>
+        <fee_z2v1_i_0x41_1>
+            <start>20</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z2v1_i_0x41_1>
+        <fee_z5v4_v_0x42_1>
+            <start>22</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v4_v_0x42_1>
+        <fee_z5v4_i_0x42_1>
+            <start>24</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v4_i_0x42_1>
+        <fee_z5vA_v_0x4d_1>
+            <start>26</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5vA_v_0x4d_1>
+        <fee_z5vA_i_0x4d_1>
+            <start>28</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5vA_i_0x4d_1>
+        <fee_5vA_v_0x40>
+            <start>30</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_5vA_v_0x40>
+        <fee_5vA_i_0x40>
+            <start>32</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_5vA_i_0x40>
+        <fee_1v8a_v_0x41>
+            <start>34</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8a_v_0x41>
+        <fee_1v8a_i_0x41>
+            <start>36</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8a_i_0x41>
+        <fee_3v3_v_0x42>
+            <start>38</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_3v3_v_0x42>
+        <fee_3v3_i_0x42>
+            <start>40</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_3v3_i_0x42>
+        <fee_1v8d_v_0x43>
+            <start>42</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8d_v_0x43>
+        <fee_1v8d_i_0x43>
+            <start>44</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8d_i_0x43>
+        <fee_p5va1_v_0x44>
+            <start>46</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va1_v_0x44>
+        <fee_p5va1_i_0x44>
+            <start>48</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va1_i_0x44>
+        <fee_p5va2_v_0x45>
+            <start>50</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va2_v_0x45>
+        <fee_p5va2_i_0x45>
+            <start>52</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va2_i_0x45>
+        <fee_p5va3_v_0x46>
+            <start>54</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va3_v_0x46>
+        <fee_p5va3_i_0x46>
+            <start>56</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va3_i_0x46>
+        <fee_p5va4_v_0x47>
+            <start>58</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va4_v_0x47>
+        <fee_p5va4_i_0x47>
+            <start>60</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va4_i_0x47>
+        <daq_1v0_v_0x43_1>
+            <start>62</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v0_v_0x43_1>
+        <daq_1v0_i_0x43_1>
+            <start>64</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v0_i_0x43_1>
+        <daq_1v8_v_0x44_1>
+            <start>66</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v8_v_0x44_1>
+        <daq_1v8_i_0x44_1>
+            <start>68</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v8_i_0x44_1>
+         <daq_2v5_v_0x45_1>
+            <start>70</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_2v5_v_0x45_1>
+        <daq_2v5_i_0x45_1>
+            <start>72</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_2v5_i_0x45_1>
+        <daq_3v3_v_0x47_1>
+            <start>74</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_3v3_v_0x47_1>
+        <daq_3v3_i_0x47_1>
+            <start>76</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_3v3_i_0x47_1>
+        <daq_1v5_v_0x48_1>
+            <start>78</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v5_v_0x48_1>
+        <daq_1v5_i_0x48_1>
+            <start>80</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v5_i_0x48_1>
+        <sipm_voltage0 endian="MSB">
+            <start>82</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage0>
+        <sipm_current0 endian="MSB">
+            <start>84</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current0>
+        <sipm_temp0 endian="MSB">
+            <start>86</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp0>
+        <sipm_voltage1 endian="MSB">
+            <start>88</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage1>
+        <sipm_current1 endian="MSB">
+            <start>90</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current1>
+        <sipm_temp1 endian="MSB">
+            <start>92</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp1>
+
+        <sipm_voltage2 endian="MSB">
+            <start>94</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage2>
+        <sipm_current2 endian="MSB">
+            <start>96</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current2>
+        <sipm_temp2 endian="MSB">
+            <start>98</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp2>
+        <sipm_voltage3 endian="MSB">
+            <start>100</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage3>
+        <sipm_current3 endian="MSB">
+            <start>102</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current3>
+        <sipm_temp3 endian="MSB">
+            <start>104</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp3>
+        <saa_judge_method endian="MSB">
+            <start>106</start>
+            <size>1</size>
+            <len>1</len>
+        </saa_judge_method>        
+        <atti_utc_s endian="MSB">
+            <start>107</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_utc_s>
+        <atti_utc_us endian="MSB">
+            <start>111</start>
+            <size>2</size>
+            <len>1</len>
+        </atti_utc_us>
+        <atti_valid endian="MSB">
+            <start>113</start>
+            <size>1</size>
+            <len>1</len>
+        </atti_valid>
+        <atti_q0 endian="MSB">
+            <start>114</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_q0>
+        <atti_q1 endian="MSB">
+            <start>118</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_q1>
+        <atti_q2 endian="MSB">
+            <start>122</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_q2>
+        <atti_q3 endian="MSB">
+            <start>126</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_q3>
+        <atti_wx endian="MSB">
+            <start>130</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_wx>
+        <atti_wy endian="MSB">
+            <start>134</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_wy>
+        <atti_wz endian="MSB">
+            <start>138</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_wz>
+        <atti_svx endian="MSB">
+            <start>142</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_svx>
+        <atti_svy endian="MSB">
+            <start>146</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_svy>
+        <atti_svz endian="MSB">
+            <start>150</start>
+            <size>4</size>
+            <len>1</len>
+        </atti_svz>
+        <orbit_utc_s endian="MSB">
+            <start>154</start>
+            <size>4</size>
+            <len>1</len>
+        </orbit_utc_s>
+        <orbit_utc_us endian="MSB">
+            <start>158</start>
+            <size>2</size>
+            <len>1</len>
+        </orbit_utc_us>
+        <orbit_valid endian="MSB">
+            <start>160</start>
+            <size>1</size>
+            <len>1</len>
+        </orbit_valid>
+        <orbit_posx endian="MSB">
+            <start>161</start>
+            <size>4</size>
+            <len>1</len>
+        </orbit_posx>
+        <orbit_posy endian="MSB">
+            <start>165</start>
+            <size>4</size>
+            <len>1</len>
+        </orbit_posy>
+        <orbit_posz endian="MSB">
+            <start>169</start>
+            <size>4</size>
+            <len>1</len>
+        </orbit_posz>
+        <orbit_velx endian="MSB">
+            <start>173</start>
+            <size>4</size>
+            <len>1</len>
+        </orbit_velx>
+        <orbit_vely endian="MSB">
+            <start>177</start>
+            <size>4</size>
+            <len>1</len>
+            </orbit_vely>
+        <orbit_velz endian="MSB">
+            <start>181</start>
+            <size>4</size>
+            <len>1</len>
+        </orbit_velz>
+        <CRC endian="MSB" skip0="0" skip1="0">
+            <start>185</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+    </grid1x_hk_packet>
+
+
+    <lvds_packet packet_len="884" head="0x33;0xfd" tail="0x10;0xbd" endian="MSB">
+        <header endian="MSB">
+            <start>0</start>
+            <size>2</size>
+            <len>1</len>
+        </header>
+        <data_type endian="MSB">
+            <start>2</start>
+            <size>1</size>
+            <len>1</len>
+        </data_type>
+        <file_id endian="MSB">
+            <start>3</start>
+            <size>1</size>
+            <len>1</len>
+        </file_id>
+        <frame_id endian="MSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </frame_id>
+        <frame_total endian="MSB">
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </frame_total>
+        <data_len endian="MSB">
+            <start>12</start>
+            <size>2</size>
+            <len>1</len>
+        </data_len>
+        <data endian="MSB">
+            <start>14</start>
+            <size>1</size>
+            <len>866</len>
+        </data>
+        <check_sum endian="MSB" skip0="2" skip1="0" byte="2">
+            <start>880</start>
+            <size>2</size>
+            <len>1</len>
+        </check_sum>
+        <tail endian="MSB">
+            <start>882</start>
+            <size>2</size>
+            <len>1</len>
+        </tail>
+    </lvds_packet>
+    <xingxi_app_packet packet_len="10" head="0x53;0x54;0x41;0x52" endian="MSB">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <frame_id>
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </frame_id>
+        <total_frame>
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </total_frame>
+        <frame_type>
+            <start>12</start>
+            <size>1</size>
+            <len>1</len>
+        </frame_type>
+        <file_num>
+            <start>13</start>
+            <size>1</size>
+            <len>1</len>
+        </file_num>
+        <data_len>
+            <start>14</start>
+            <size>4</size>
+            <len>1</len>
+        </data_len>
+        <data>
+            <start>18</start>
+            <size>1</size>
+            <len tag="data_len">8192</len>
+        </data>
+        <check_sum endian="MSB" skip0="4" skip1="0" byte="2">
+            <start vary_tag="data">0</start>
+            <size>2</size>
+            <len>1</len>
+        </check_sum>
+        <tail endian="MSB">
+            <start vary_tag="data">2</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </xingxi_app_packet>
+    <grid_app_packet packet_len="10" head="0x47;0x52;0x49;0x44" endian="MSB">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <frame_id>
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </frame_id>
+        <total_frame>
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </total_frame>
+        <frame_type>
+            <start>12</start>
+            <size>1</size>
+            <len>1</len>
+        </frame_type>
+        <file_num>
+            <start>13</start>
+            <size>1</size>
+            <len>1</len>
+        </file_num>
+        <data_len>
+            <start>14</start>
+            <size>4</size>
+            <len>1</len>
+        </data_len>
+        <data>
+            <start>18</start>
+            <size>1</size>
+            <len tag="data_len">8192</len>
+        </data>
+        <check_sum endian="MSB" skip0="4" skip1="0" byte="2">
+            <start vary_tag="data">0</start>
+            <size>2</size>
+            <len>1</len>
+        </check_sum>
+        <tail endian="MSB">
+            <start vary_tag="data">2</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </grid_app_packet>
+    <grid11b_telemetry_packet packet_len="96" head="0x48;0x45;0x41;0x44" tail="0x54;0x41;0x49;0x4C" endian="MSB">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <current_can_bus endian="MSB">
+            <start>4</start>
+            <size>1</size>
+            <len>1</len>
+        </current_can_bus>
+        <telemetry_count endian="MSB">
+            <start>5</start>
+            <size>1</size>
+            <len>1</len>
+        </telemetry_count>
+        <cmd_count endian="MSB">
+            <start>6</start>
+            <size>1</size>
+            <len>1</len>
+        </cmd_count>
+        <latest_received_cmd endian="MSB">
+            <start>7</start>
+            <size>1</size>
+            <len>1</len>
+        </latest_received_cmd>
+        <latest_received_cmd_progress endian="MSB">
+            <start>8</start>
+            <size>1</size>
+            <len>1</len>
+        </latest_received_cmd_progress>
+        <latest_complete_cmd endian="MSB">
+            <start>9</start>
+            <size>1</size>
+            <len>1</len>
+        </latest_complete_cmd>
+        <latest_complete_cmd_arg endian="MSB">
+            <start>10</start>
+            <size>1</size>
+            <len>4</len>
+        </latest_complete_cmd_arg>
+        <latest_complete_cmd_exit endian="MSB">
+            <start>14</start>
+            <size>1</size>
+            <len>1</len>
+        </latest_complete_cmd_exit>
+        <utc_time endian="MSB">
+            <start>15</start>
+            <size>4</size>
+            <len>1</len>
+        </utc_time>
+        <cpu_temperature endian="MSB">
+            <start>19</start>
+            <size>1</size>
+            <len>1</len>
+        </cpu_temperature>
+        <daq_temperature_i2c1_0x49 endian="MSB">
+            <start>20</start>
+            <size>1</size>
+            <len>1</len>
+        </daq_temperature_i2c1_0x49>
+        <system_power endian="MSB">
+            <start>21</start>
+            <size>2</size>
+            <len>1</len>
+        </system_power>
+        <system_input_voltage endian="MSB">
+            <start>23</start>
+            <size>2</size>
+            <len>1</len>
+        </system_input_voltage>
+        <file_upload_progress endian="MSB">
+            <start>25</start>
+            <size>1</size>
+            <len>1</len>
+        </file_upload_progress>
+        <file_upload_check endian="MSB">
+            <start>26</start>
+            <size>1</size>
+            <len>1</len>
+        </file_upload_check>
+        <normal_or_backup endian="MSB">
+            <start>27</start>
+            <size>1</size>
+            <len>1</len>
+        </normal_or_backup>
+        <storage_avaliable endian="MSB">
+            <start>28</start>
+            <size>2</size>
+            <len>1</len>
+        </storage_avaliable>
+        <pl_version endian="MSB">
+            <start>30</start>
+            <size>1</size>
+            <len>1</len>
+        </pl_version>
+        <app_version endian="MSB">
+            <start>31</start>
+            <size>1</size>
+            <len>1</len>
+        </app_version>
+        <log_index endian="MSB">
+            <start>32</start>
+            <size>1</size>
+            <len>1</len>
+        </log_index>
+        <sci_data_index endian="MSB">
+            <start>33</start>
+            <size>1</size>
+            <len>1</len>
+        </sci_data_index>        
+        <sample_mode endian="MSB">
+            <start>34</start>
+            <size>1</size>
+            <len>1</len>
+        </sample_mode>
+        <data_transfer_package_count endian="MSB">
+            <start>35</start>
+            <size>1</size>
+            <len>1</len>
+        </data_transfer_package_count>
+        <saa_status endian="MSB">
+            <start>36</start>
+            <size>1</size>
+            <len>1</len>
+        </saa_status>
+        <entered_saa_count endian="MSB">
+            <start>37</start>
+            <size>1</size>
+            <len>1</len>
+        </entered_saa_count>
+        <sipm_voltage_ch0 endian="MSB">
+            <start>38</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage_ch0>
+        <sipm_current_ch0 endian="MSB">
+            <start>40</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current_ch0>
+        <sipm_temprature_ch0 endian="MSB">
+            <start>42</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temprature_ch0>
+        <sipm_voltage_ch1 endian="MSB">
+            <start>44</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage_ch1>
+        <sipm_current_ch1 endian="MSB">
+            <start>46</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current_ch1>
+        <sipm_temprature_ch1 endian="MSB">
+            <start>48</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temprature_ch1>
+        <sipm_voltage_ch2 endian="MSB">
+            <start>50</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage_ch2>
+        <sipm_current_ch2 endian="MSB">
+            <start>52</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current_ch2>
+        <sipm_temprature_ch2 endian="MSB">
+            <start>54</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temprature_ch2>
+        <sipm_voltage_ch3 endian="MSB">
+            <start>56</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage_ch3>
+        <sipm_current_ch3 endian="MSB">
+            <start>58</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current_ch3>
+        <sipm_temprature_ch3 endian="MSB">
+            <start>60</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temprature_ch3>
+        <count_rate0 endian="MSB">
+            <start>62</start>
+            <size>2</size>
+            <len>1</len>
+        </count_rate0>
+        <count_rate1 endian="MSB">
+            <start>64</start>
+            <size>2</size>
+            <len>1</len>
+        </count_rate1>
+        <count_rate2 endian="MSB">
+            <start>66</start>
+            <size>2</size>
+            <len>1</len>
+        </count_rate2>
+        <count_rate3 endian="MSB">
+            <start>68</start>
+            <size>2</size>
+            <len>1</len>
+        </count_rate3>
+        <reserve endian="MSB">
+            <start>70</start>
+            <size>1</size>
+            <len>22</len>
+        </reserve>
+        <tail endian="MSB">
+            <start>92</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </grid11b_telemetry_packet>
+    <xx_ecu packet_len="59" head="0x5a;0x6b;0x7c;0x8d" endian="MSB">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc endian="MSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc>
+        <cpu_temp endian="MSB">
+            <start>8</start>
+            <size>2</size>
+            <len>1</len>
+        </cpu_temp>
+        <log_index endian="MSB">
+            <start>10</start>
+            <size>1</size>
+            <len>1</len>
+        </log_index>
+        <storage endian="MSB">
+            <start>11</start>
+            <size>2</size>
+            <len>1</len>
+        </storage>
+        <vol_0x40_scc_12v endian="MSB">
+            <start>13</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x40_scc_12v>
+        <cur_0x40_scc_12v endian="MSB">
+            <start>15</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x40_scc_12v>
+        <vol_0x41_ssd_3v3 endian="MSB">
+            <start>17</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x41_ssd_3v3>
+        <cur_0x41_ssd_3v3 endian="MSB">
+            <start>19</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x41_ssd_3v3>
+        <vol_0x42_exc_3v3 endian="MSB">
+            <start>21</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x42_exc_3v3>
+        <cur_0x42_exc_3v3 endian="MSB">
+            <start>23</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x42_exc_3v3>
+        <vol_0x43_1v endian="MSB">
+            <start>25</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x43_1v>
+        <cur_0x43_1v endian="MSB">
+            <start>27</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x43_1v>
+        <vol_0x44_1v8 endian="MSB">
+            <start>29</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x44_1v8>
+        <cur_0x44_1v8 endian="MSB">
+            <start>31</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x44_1v8>
+        <vol_0x45_2v5 endian="MSB">
+            <start>33</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x45_2v5>
+        <cur_0x45_2v5 endian="MSB">
+            <start>35</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x45_2v5>
+        <vol_0x47_3v3 endian="MSB">
+            <start>37</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x47_3v3>
+        <cur_0x47_3v3 endian="MSB">
+            <start>39</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x47_3v3>
+        <vol_0x48_1v5 endian="MSB">
+            <start>41</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x48_1v5>
+        <cur_0x48_1v5 endian="MSB">
+            <start>43</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x48_1v5>
+        <vol_0x4a_sys_12v endian="MSB">
+            <start>45</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x4a_sys_12v>
+        <cur_0x4a_sys_12v endian="MSB">
+            <start>47</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x4a_sys_12v>
+        <vol_0x4b_scc_5v endian="MSB">
+            <start>49</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x4b_scc_5v>
+        <cur_0x4b_scc_5v endian="MSB">
+            <start>51</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x4b_scc_5v>
+        <vol_0x4d_ssd_12v endian="MSB">
+            <start>53</start>
+            <size>2</size>
+            <len>1</len>
+        </vol_0x4d_ssd_12v>
+        <cur_0x4d_ssd_12v endian="MSB">
+            <start>55</start>
+            <size>2</size>
+            <len>1</len>
+        </cur_0x4d_ssd_12v>
+        <CRC endian="MSB" skip0="0" skip1="0">
+            <start>57</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+    </xx_ecu>
+    <xx_scc packet_len="79" head="0x9a;0xab;0xbc;0xcd" endian="MSB">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc endian="MSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc>
+        <log_idnex endian="MSB">
+            <start>8</start>
+            <size>1</size>
+            <len>1</len>
+        </log_idnex>
+        <software_ver endian="MSB">
+            <start>9</start>
+            <size>1</size>
+            <len>1</len>
+        </software_ver>
+        <free_memory endian="MSB">
+            <start>10</start>
+            <size>2</size>
+            <len>1</len>
+        </free_memory>
+        <cpu_temp endian="MSB">
+            <start>12</start>
+            <size>4</size>
+            <len>1</len>
+        </cpu_temp>
+        <gpu_temp endian="MSB">
+            <start>16</start>
+            <size>4</size>
+            <len>1</len>
+        </gpu_temp>
+        <total_power endian="MSB">
+            <start>20</start>
+            <size>4</size>
+            <len>1</len>
+        </total_power>
+        <gpu_vol endian="MSB">
+            <start>24</start>
+            <size>4</size>
+            <len>1</len>
+        </gpu_vol>
+        <cpu_vol endian="MSB">
+            <start>28</start>
+            <size>4</size>
+            <len>1</len>
+        </cpu_vol>
+        <soc_vol endian="MSB">
+            <start>32</start>
+            <size>4</size>
+            <len>1</len>
+        </soc_vol>
+        <cv_vol endian="MSB">
+            <start>36</start>
+            <size>4</size>
+            <len>1</len>
+        </cv_vol>
+        <ddr_vol endian="MSB">
+            <start>40</start>
+            <size>4</size>
+            <len>1</len>
+        </ddr_vol>
+        <sys_5v_vol endian="MSB">
+            <start>44</start>
+            <size>4</size>
+            <len>1</len>
+        </sys_5v_vol>
+        <gpu_cur endian="MSB">
+            <start>48</start>
+            <size>4</size>
+            <len>1</len>
+        </gpu_cur>
+        <cpu_cur endian="MSB">
+            <start>52</start>
+            <size>4</size>
+            <len>1</len>
+        </cpu_cur>
+        <soc_cur endian="MSB">
+            <start>56</start>
+            <size>4</size>
+            <len>1</len>
+        </soc_cur>
+        <cv_cur endian="MSB">
+            <start>60</start>
+            <size>4</size>
+            <len>1</len>
+        </cv_cur>
+        <ddr_cur endian="MSB">
+            <start>64</start>
+            <size>4</size>
+            <len>1</len>
+        </ddr_cur>
+        <sys_5v_cur endian="MSB">
+            <start>68</start>
+            <size>4</size>
+            <len>1</len>
+        </sys_5v_cur>
+        <free_storage endian="MSB">
+            <start>72</start>
+            <size>4</size>
+            <len>1</len>
+        </free_storage>
+        <cpu_usage endian="MSB">
+            <start>76</start>
+            <size>1</size>
+            <len>1</len>
+        </cpu_usage>
+        <CRC endian="MSB" skip0="0" skip1="0">
+            <start>77</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+    </xx_scc>
+</grid>
