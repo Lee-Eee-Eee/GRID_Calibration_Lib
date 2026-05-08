@@ -1,4 +1,5 @@
-"""对接原始 parse_grid_data 代码的适配层。"""
+"""Adapter that wraps the legacy GRID packet parser bundled under
+``calibration_lib/resources/legacy``."""
 
 from __future__ import annotations
 
@@ -13,22 +14,25 @@ import pandas as pd
 
 
 def _find_parser_resource_dir(root_dir: Path) -> Path:
-    internal = root_dir / "calibration_lib" / "resources" / "homework2_legacy"
+    """Locate the bundled GRID-packet parser resources.
+
+    Order of preference:
+      1) ``calibration_lib/resources/legacy`` shipped with this library.
+      2) ``1415B_json/homework2`` from the original GRID monorepo (kept as a
+         fallback for users who run this code inside that monorepo).
+    """
+    internal = root_dir / "calibration_lib" / "resources" / "legacy"
     if (internal / "hnu_packet.xml").exists() and (internal / "parse_grid_data.py").exists():
         return internal
 
-    base = root_dir / "1415B_json" / "homework2"
-    if (base / "hnu_packet.xml").exists() and (base / "parse_grid_data.py").exists():
-        return base
+    monorepo_fallback = root_dir / "1415B_json" / "homework2"
+    if (monorepo_fallback / "hnu_packet.xml").exists() and (monorepo_fallback / "parse_grid_data.py").exists():
+        return monorepo_fallback
 
-    # 向后兼容：扫描旧目录结构
-    scan_base = root_dir / "1415B_json"
-    candidates = list(scan_base.rglob("hnu_packet.xml"))
-    if not candidates:
-        raise FileNotFoundError(
-            "hnu_packet.xml not found in calibration_lib/resources/homework2_legacy or 1415B_json/homework2"
-        )
-    return candidates[0].parent
+    raise FileNotFoundError(
+        "GRID packet parser not found. Expected at "
+        "calibration_lib/resources/legacy/{hnu_packet.xml,parse_grid_data.py}."
+    )
 
 
 def _ensure_parser_path(root_dir: Path) -> Path:

@@ -26,7 +26,7 @@
 
 1. **原始解析代码已接入**
     - 新增 `calibration_lib/common/legacy_parser.py`。
-    - `TBL0Processor` / `ECL0Processor` 直接调用 `1415B_json/homework2/parse_grid_data.py` 的 `parse_grid_data_new()`。
+    - `TBL0Processor` / `ECL0Processor` 直接调用 `calibration_lib/resources/legacy/parse_grid_data.py` 中的 `parse_grid_data_new()`。
 
 2. **TB-L0 元数据改为 Parquet 内嵌**
     - 每个 TB L0 parquet 文件包含 `calib.meta.json` schema metadata。
@@ -112,7 +112,7 @@ EC_PROCESS_PARAMS = {
 
 | 功能 | 现有位置 | 新位置 | 状态 |
 |------|---------|--------|------|
-| 原始数据解析 | `homework2/parse_grid_data.py` | `TB-L0` | 需集成 |
+| 原始数据解析 | `homework2/parse_grid_data.py` | `calibration_lib/resources/legacy/` (TB-L0 / EC-L0 调用) | ✓ |
 | TB拟合窗口 | `14_15_tempbiias/fit_window_editor.py` | 待实现 | 部分 |
 | TB高斯拟合 | `14_15_tempbiias/process_temp_vbias.py` | `TB-L1` | 部分 |
 | TB曲面拟合 | `temp_bias_surface_calibration.py` | `TB-L2` | 框架完 ✓ |

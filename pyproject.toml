@@ -1,0 +1,78 @@
+[project]
+name = "grid-calibration-lib"
+version = "0.1.0"
+description = "Layered ground-calibration data processing for GRID gamma-ray detectors (TB & EC pipelines)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "GRID Calibration Team" },
+]
+keywords = ["grid", "calibration", "gamma-ray", "sipm", "astrophysics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+    "lmfit>=1.2",
+    "h5py>=3.9",
+    "crcmod>=1.7",
+    "numba>=0.58",
+    "addict>=2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+grid-calib = "calibration_lib.run_layer:main"
+
+[project.urls]
+Homepage = "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib"
+Issues = "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib/issues"
+
+# ── Build backend ────────────────────────────────────────────────────────
+# Treat the repository root as the package root: the package "calibration_lib"
+# IS this directory's content, so packaging discovers modules under .
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Map the on-disk layout (this repo IS the package) to module name calibration_lib
+packages = ["calibration_lib"]
+
+[tool.hatch.build.targets.wheel.sources]
+"." = "calibration_lib"
+
+# ── Ruff (lint + format) ────────────────────────────────────────────────
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+# ── Pytest ──────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
