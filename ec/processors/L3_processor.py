@@ -247,46 +247,53 @@ class ECL3Processor:
         fig_path: Path,
     ) -> None:
         fig_path.parent.mkdir(parents=True, exist_ok=True)
+        from matplotlib import gridspec
+        gs = gridspec.GridSpec(2, 1, wspace=0.5, hspace=0.2, height_ratios=[4, 1])
         fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(gs[0])
 
         x_pts = [d for d in ch_data if d["source"] == "x"]
         src_pts = [d for d in ch_data if d["source"] == "src"]
 
         if x_pts:
-            plt.errorbar(
-                [d["E"] for d in x_pts],
-                [d["center"] for d in x_pts],
-                yerr=[d.get("center_err", 0) for d in x_pts],
+            ax.errorbar(
+                [d["center"] for d in x_pts], [d["E"] for d in x_pts],
+                xerr=[d.get("center_err", 0) for d in x_pts],
                 fmt="s", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=1, label=f"x CH{ch}",
             )
         if src_pts:
-            plt.errorbar(
-                [d["E"] for d in src_pts],
-                [d["center"] for d in src_pts],
-                yerr=[d.get("center_err", 0) for d in src_pts],
+            ax.errorbar(
+                [d["center"] for d in src_pts], [d["E"] for d in src_pts],
+                xerr=[d.get("center_err", 0) for d in src_pts],
                 fmt="^", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=0, label=f"source CH{ch}",
             )
 
-        all_E = np.array([d["E"] for d in ch_data])
+        all_centers = np.asarray([d["center"] for d in ch_data])
+        all_E = np.asarray([d["E"] for d in ch_data])
         if ec_low_result is not None:
-            E_fit = np.linspace(all_E.min(), e_cut, 100)
-            adc_fit = ec_low_result.eval(x=E_fit)
-            plt.plot(E_fit, adc_fit, "r--", label=f"quadratic fit < {e_cut}keV")
-
+            adc_low = np.linspace(np.min(all_centers), np.max(all_centers[all_E <= e_cut]), 100)
+            e_low = ec_low_result.eval(x=adc_low)
+            ax.plot(adc_low, e_low, "r--", label=f"quadratic fit < {e_cut}keV")
         if ec_high_result is not None:
-            E_fit = np.linspace(e_cut, all_E.max(), 100)
-            adc_fit = ec_high_result.eval(x=E_fit)
-            plt.plot(E_fit, adc_fit, "g--", label=f"quadratic fit > {e_cut}keV")
+            adc_high = np.linspace(np.min(all_centers[all_E >= e_cut]), np.max(all_centers), 100)
+            e_high = ec_high_result.eval(x=adc_high)
+            ax.plot(adc_high, e_high, "g--", label=f"quadratic fit > {e_cut}keV")
 
-        plt.xscale("log")
-        plt.xlabel("Energy (keV)")
-        plt.ylabel("ADC")
-        plt.title(f"{self.payload_name} CH{ch} Energy Calibration")
-        plt.legend()
-        plt.grid(True, which="both", ls="--", lw=0.5)
-        plt.tight_layout()
+        ax.axhline(e_cut, color="gray", ls="--", lw=0.5)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("ADC")
+        ax.set_ylabel("Energy (keV)")
+        ax.set_ylim(10.0, 1500.0)
+        ax.set_title(f"{self.payload_name} CH{ch} Energy Calibration")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, which="both", ls="--", lw=0.5)
+
+        ax_res = fig.add_subplot(gs[1])
+        ax_res.axis("off")
+        fig.subplots_adjust(left=0.12, right=0.97, bottom=0.06, top=0.93)
         plt.savefig(fig_path, dpi=150)
         plt.close(fig)
 
@@ -300,46 +307,51 @@ class ECL3Processor:
         fig_path: Path,
     ) -> None:
         fig_path.parent.mkdir(parents=True, exist_ok=True)
+        from matplotlib import gridspec
+        gs = gridspec.GridSpec(2, 1, wspace=0.5, hspace=0.2, height_ratios=[4, 1])
         fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(gs[0])
 
         x_pts = [d for d in ch_data if d["source"] == "x"]
         src_pts = [d for d in ch_data if d["source"] == "src"]
 
         if x_pts:
-            plt.errorbar(
-                [d["E"] for d in x_pts],
-                [d["resolution"] for d in x_pts],
+            ax.errorbar(
+                [d["E"] for d in x_pts], [d["resolution"] for d in x_pts],
                 yerr=[d.get("resolution_err", 0) for d in x_pts],
                 fmt="s", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=1, label=f"x CH{ch}",
             )
         if src_pts:
-            plt.errorbar(
-                [d["E"] for d in src_pts],
-                [d["resolution"] for d in src_pts],
+            ax.errorbar(
+                [d["E"] for d in src_pts], [d["resolution"] for d in src_pts],
                 yerr=[d.get("resolution_err", 0) for d in src_pts],
                 fmt="^", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=0, label=f"source CH{ch}",
             )
 
         all_E = np.array([d["E"] for d in ch_data])
-
         if res_low_params is not None:
-            E_fit = np.linspace(all_E.min(), e_cut, 100)
-            R_fit = res_fit(E_fit, *res_low_params)
-            plt.plot(E_fit, R_fit, "r--", label=f"resolution fit < {e_cut}keV")
-
+            e_low = np.linspace(all_E.min(), e_cut, 100)
+            r_low = res_fit(e_low, *res_low_params)
+            ax.plot(e_low, r_low, "r--", label=f"resolution fit < {e_cut}keV")
         if res_high_params is not None:
-            E_fit = np.linspace(e_cut, all_E.max(), 100)
-            R_fit = res_fit(E_fit, *res_high_params)
-            plt.plot(E_fit, R_fit, "g--", label=f"resolution fit > {e_cut}keV")
+            e_high = np.linspace(e_cut, all_E.max(), 100)
+            r_high = res_fit(e_high, *res_high_params)
+            ax.plot(e_high, r_high, "g--", label=f"resolution fit > {e_cut}keV")
 
-        plt.xscale("log")
-        plt.xlabel("Energy (keV)")
-        plt.ylabel("Resolution (%)")
-        plt.title(f"{self.payload_name} CH{ch} Resolution")
-        plt.legend()
-        plt.grid(True, which="both", ls="--", lw=0.5)
-        plt.tight_layout()
+        ax.axvline(e_cut, color="gray", ls="--", lw=0.5)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("Energy (keV)")
+        ax.set_ylabel("Resolution (%)")
+        ax.set_ylim(0.5, 150.0)
+        ax.set_title(f"{self.payload_name} CH{ch} Resolution")
+        ax.legend(fontsize=8, loc="upper left")
+        ax.grid(True, which="both", ls="--", lw=0.5)
+
+        ax_res = fig.add_subplot(gs[1])
+        ax_res.axis("off")
+        fig.subplots_adjust(left=0.12, right=0.97, bottom=0.06, top=0.93)
         plt.savefig(fig_path, dpi=150)
         plt.close(fig)
