@@ -48,12 +48,13 @@ def check_parquet_basic(path: Path, required_columns: Sequence[str]) -> Tuple[bo
 
 
 def check_tb_l0_metadata(path: Path) -> Tuple[bool, str]:
-    meta = read_parquet_metadata(path)
+    meta = read_parquet_metadata(path, meta_key="hk_data")
     if not meta:
-        return False, _err(f"{path.name} missing parquet metadata JSON")
-    if "channels" not in meta:
-        return False, _err(f"{path.name} metadata missing channels")
-    return True, _ok(f"{path.name} metadata present")
+        return False, _err(f"{path.name} missing hk_data metadata")
+    for key in ("temp", "bias", "temp_err", "bias_err"):
+        if key not in meta:
+            return False, _err(f"{path.name} metadata missing {key}")
+    return True, _ok(f"{path.name} hk_data present")
 
 
 def summarize(layer: str, all_ok: bool, logs: List[str]) -> int:

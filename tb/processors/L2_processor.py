@@ -113,7 +113,7 @@ class TBL2Processor:
                         "V0_err": float(p["V0_err"]),
                         "b_err": float(p["b_err"]),
                         "c_err": float(p["c_err"]),
-                        "chisquare": float(p.get("chi2_reduced", 0.0) * max(p.get("n_points", 1) - 5, 1)),
+                        "chisquare": float(p.get("chi2", 0.0)),
                     })
             # 补齐到 4 条（如有通道未拟合）
             while len(wiki_records) < 4:
@@ -172,14 +172,14 @@ class TBL2Processor:
                 if not pq_path.exists():
                     pq_path = l0_parquet_dir / f"{stem}.parquet"  # 向后兼容旧产物
                 if pq_path.exists():
-                    meta = read_parquet_metadata(pq_path)
-                    channels = meta.get("channels", {}) if isinstance(meta, dict) else {}
+                    meta = read_parquet_metadata(pq_path, meta_key="hk_data")
+                    temps = meta.get("temp", []) if isinstance(meta, dict) else []
+                    biases = meta.get("bias", []) if isinstance(meta, dict) else []
                     for ch in range(4):
-                        item = channels.get(str(ch), {}) if isinstance(channels, dict) else {}
-                        t = item.get("temp")
-                        v = item.get("bias")
-                        if isinstance(t, (int, float)) and np.isfinite(t) and isinstance(v, (int, float)) and np.isfinite(v):
-                            per_ch_tv[ch] = {"temp": float(t), "bias": float(v)}
+                        t = temps[ch] if ch < len(temps) else float("nan")
+                        b = biases[ch] if ch < len(biases) else float("nan")
+                        if isinstance(t, (int, float)) and np.isfinite(t) and isinstance(b, (int, float)) and np.isfinite(b):
+                            per_ch_tv[ch] = {"temp": float(t), "bias": float(b)}
 
             if not per_ch_tv:
                 continue
@@ -276,6 +276,7 @@ class TBL2Processor:
             "b_err": float(perr[2]),
             "c_err": float(perr[3]),
             "k_err": float(perr[4]),
+            "chi2": float(best_chi2),
             "rmse": rmse,
             "mape_percent": mape,
             "chi2_reduced": chi2_red,

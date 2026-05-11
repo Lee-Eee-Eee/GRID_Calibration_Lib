@@ -8,9 +8,6 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 
-PARQUET_META_JSON_KEY = "calib.meta.json"
-
-
 def ensure_dir(path: Path) -> Path:
     """确保目录存在"""
     path.mkdir(parents=True, exist_ok=True)
@@ -36,8 +33,13 @@ def write_parquet(
     df: pd.DataFrame,
     ensure_parent: bool = True,
     metadata: Optional[Dict[str, Any]] = None,
+    meta_key: Optional[str] = None,
 ) -> None:
-    """写入 Parquet 文件，可选写入 JSON metadata 到 schema metadata。"""
+    """写入 Parquet 文件，可选写入 JSON metadata 到 schema metadata。
+
+    当 ``metadata`` 与 ``meta_key`` 均非 None 时，metadata 会以 ``meta_key``
+    为键写入 parquet 的 schema metadata。
+    """
     if ensure_parent:
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -53,10 +55,10 @@ def write_parquet(
         return
 
     table = pa.Table.from_pandas(df, preserve_index=False)
-    if metadata is not None:
+    if metadata is not None and meta_key is not None:
         encoded = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
         current = dict(table.schema.metadata or {})
-        current[PARQUET_META_JSON_KEY.encode("utf-8")] = encoded
+        current[meta_key.encode("utf-8")] = encoded
         table = table.replace_schema_metadata(current)
 
     pq.write_table(table, path, compression="snappy")
@@ -67,16 +69,22 @@ def read_parquet(path: Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def read_parquet_metadata(path: Path) -> Dict[str, Any]:
-    """读取 Parquet schema metadata 中保存的 JSON metadata。"""
+def read_parquet_metadata(path: Path, meta_key: Optional[str] = None) -> Dict[str, Any]:
+    """读取 Parquet schema metadata 中以 ``meta_key`` 保存的 JSON metadata。
+
+    若 ``meta_key`` 为 None 或未找到，返回空 dict。
+    """
     try:
         import pyarrow.parquet as pq
     except ImportError:
         return {}
 
+    if meta_key is None:
+        return {}
+
     schema = pq.read_schema(path)
     meta = schema.metadata or {}
-    raw = meta.get(PARQUET_META_JSON_KEY.encode("utf-8"))
+    raw = meta.get(meta_key.encode("utf-8"))
     if not raw:
         return {}
     try:

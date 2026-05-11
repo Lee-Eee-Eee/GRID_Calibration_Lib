@@ -127,8 +127,7 @@ class TBL1Processor:
             try:
                 df = read_parquet(parquet_file)
                 stem = parquet_file.stem.replace(".l0", "")
-                meta = read_parquet_metadata(parquet_file)
-                channels_meta = meta.get("channels", {}) if isinstance(meta, dict) else {}
+                meta = read_parquet_metadata(parquet_file, meta_key="hk_data")
 
                 channel_records: List[Dict[str, Any]] = []
                 used_windows.setdefault(stem, {})
@@ -144,11 +143,14 @@ class TBL1Processor:
                     fit_res = self._fit_channel(stem, ch, amp_data, manual_windows, auto_window)
                     is_manual = bool(self._is_manual_entry(manual_windows.get(stem, {}).get(str(ch), {})))
 
-                    ch_meta = channels_meta.get(str(ch), {}) if isinstance(channels_meta, dict) else {}
-                    ch_temp = float(ch_meta.get("temp", float("nan"))) if isinstance(ch_meta.get("temp"), (int, float)) else float("nan")
-                    ch_temp_err = float(ch_meta.get("temp_err", 0.0)) if isinstance(ch_meta.get("temp_err"), (int, float)) else 0.0
-                    ch_bias = float(ch_meta.get("bias", float("nan"))) if isinstance(ch_meta.get("bias"), (int, float)) else float("nan")
-                    ch_bias_err = float(ch_meta.get("bias_err", 0.0)) if isinstance(ch_meta.get("bias_err"), (int, float)) else 0.0
+                    temps = meta.get("temp", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
+                    temp_errs = meta.get("temp_err", [0.0] * 4) if isinstance(meta, dict) else [0.0] * 4
+                    biases = meta.get("bias", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
+                    bias_errs = meta.get("bias_err", [0.0] * 4) if isinstance(meta, dict) else [0.0] * 4
+                    ch_temp = float(temps[ch]) if ch < len(temps) else float("nan")
+                    ch_temp_err = float(temp_errs[ch]) if ch < len(temp_errs) else 0.0
+                    ch_bias = float(biases[ch]) if ch < len(biases) else float("nan")
+                    ch_bias_err = float(bias_errs[ch]) if ch < len(bias_errs) else 0.0
 
                     # 分辨率 R = FWHM / center；误差用一阶传播
                     if np.isfinite(fit_res.center) and fit_res.center > 0:
@@ -281,19 +283,12 @@ class TBL1Processor:
             return {}
 
     def _extract_tb_file_mean(self, metadata: Dict[str, Any]) -> Tuple[float, float]:
-        channels = metadata.get("channels", {}) if isinstance(metadata, dict) else {}
-        temp_vals = []
-        bias_vals = []
-        for ch in range(4):
-            item = channels.get(str(ch), {}) if isinstance(channels, dict) else {}
-            t = item.get("temp")
-            v = item.get("bias")
-            if isinstance(t, (int, float)) and np.isfinite(t):
-                temp_vals.append(float(t))
-            if isinstance(v, (int, float)) and np.isfinite(v):
-                bias_vals.append(float(v))
-        temp_mean = float(np.mean(temp_vals)) if temp_vals else float("nan")
-        bias_mean = float(np.mean(bias_vals)) if bias_vals else float("nan")
+        temps = metadata.get("temp", []) if isinstance(metadata, dict) else []
+        biases = metadata.get("bias", []) if isinstance(metadata, dict) else []
+        valid_t = [float(t) for t in temps if isinstance(t, (int, float)) and np.isfinite(t)]
+        valid_b = [float(b) for b in biases if isinstance(b, (int, float)) and np.isfinite(b)]
+        temp_mean = float(np.mean(valid_t)) if valid_t else float("nan")
+        bias_mean = float(np.mean(valid_b)) if valid_b else float("nan")
         return temp_mean, bias_mean
 
     def _fit_channel(

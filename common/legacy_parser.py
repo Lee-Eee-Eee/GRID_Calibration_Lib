@@ -218,3 +218,17 @@ def parse_event_hk_to_dataframe(
         "channels": channel_meta,
     }
     return df, metadata
+
+
+def to_hk_data(channel_meta: Dict[str, Any]) -> Dict[str, Any]:
+    """将 nested channel_meta 转换为 cali_format wiki 规范的 flat hk_data。
+
+    规范要求四个长度为 4 的平铺数值列表：
+    ``{"temp": [...], "bias": [...], "temp_err": [...], "bias_err": [...]}``
+    """
+    return {
+        "temp":     [float(channel_meta[str(c)].get("temp", float("nan")))     for c in range(4)],
+        "bias":     [float(channel_meta[str(c)].get("bias", float("nan")))     for c in range(4)],
+        "temp_err": [float(channel_meta[str(c)].get("temp_err", 0.0))          for c in range(4)],
+        "bias_err": [float(channel_meta[str(c)].get("bias_err", 0.0))          for c in range(4)],
+    }

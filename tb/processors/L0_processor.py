@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from ...common.legacy_parser import parse_event_hk_to_dataframe
+from ...common.legacy_parser import parse_event_hk_to_dataframe, to_hk_data
 from ...common.utils import DataLayout, get_timestamp, write_json, write_parquet
 
 
@@ -73,8 +73,9 @@ class TBL0Processor:
 
                 stem = event_path.stem.replace(".event", "")
 
+                hk_data = to_hk_data(metadata["channels"])
                 parquet_path = self.layout.get_tb_l0_parquet(f"{stem}.l0.parquet")
-                write_parquet(parquet_path, df_data, metadata=metadata)
+                write_parquet(parquet_path, df_data, metadata=hk_data, meta_key="hk_data")
 
                 results["outputs"].append({
                     "stem": stem,
