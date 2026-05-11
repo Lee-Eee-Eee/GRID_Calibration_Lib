@@ -44,6 +44,7 @@ class ECL2Processor:
             raise ValueError(f"L1 parquet directory not found: {parquet_dir}")
 
         src_windows = self._load_source_windows()
+        xray_windows = self._load_xray_windows()
 
         src_re = re.compile(r"^src_(?P<name>[A-Za-z]+\d*)_(?P<min>\d+)m_corr\.l1\.parquet$")
 
@@ -162,6 +163,10 @@ class ECL2Processor:
                         peak_window = None
                         if data_type == "src":
                             peak_window = manual_windows.get(str(ch), {}).get(str(peak_E))
+                        elif data_type == "x":
+                            xw = xray_windows.get(energy_key, {}).get(str(ch))
+                            if xw is not None:
+                                peak_window = [xw["lo"], xw["hi"]]
                         if peak_window is None and prev_center is not None and prev_energy is not None:
                             center_guess = prev_center * (peak_E / prev_energy)
                             half_span = max(80.0, center_guess * 0.06)
@@ -310,6 +315,22 @@ class ECL2Processor:
         """
         from ...common.utils import read_json
         path = Path(__file__).resolve().parents[2] / "resources" / f"ec_source_windows_{self.payload_name}.json"
+        if not path.exists():
+            return {}
+        try:
+            data = read_json(path)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _load_xray_windows(self) -> Dict[str, Any]:
+        """读取 X-ray 手选窗口配置。
+
+        文件路径：``calibration_lib/resources/ec_xray_windows_<payload>.json``
+        结构：``{energy_key: {channel: {lo, hi}}}``
+        """
+        from ...common.utils import read_json
+        path = Path(__file__).resolve().parents[2] / "resources" / f"ec_xray_windows_{self.payload_name}.json"
         if not path.exists():
             return {}
         try:
