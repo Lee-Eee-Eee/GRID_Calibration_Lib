@@ -48,8 +48,8 @@ class CalibrationPipeline:
                 raise FileNotFoundError("No TB L2 parameter file found")
             tb_l2_json_path = candidates[-1]
 
-        l0 = ECL0Processor(self.payload_name, self.product_root).process(self.config.ec_xray_dir)
-        l1 = ECL1Processor(self.payload_name, self.product_root).process(self.layout.get_ec_l0_dir(), tb_l2_json_path)
+        l0 = ECL0Processor(self.payload_name, self.product_root).process(self.config)
+        l1 = ECL1Processor(self.payload_name, self.product_root).process(self.config, tb_l2_json_path)
         l2 = ECL2Processor(self.payload_name, self.product_root).process(self.layout.get_ec_l1_dir(), config=ec_cfg)
         l3 = ECL3Processor(self.payload_name, self.product_root).process(self.layout.get_ec_l2_dir(), config=ec_cfg)
         return {"L0": l0, "L1": l1, "L2": l2, "L3": l3}

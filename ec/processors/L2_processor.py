@@ -11,7 +11,7 @@ import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel
 from scipy.signal import find_peaks, savgol_filter
 
-from ...common.utils import DataLayout, get_timestamp, read_parquet, read_parquet_metadata, write_json
+from ...common.utils import DataLayout, get_timestamp, read_json, read_parquet, read_parquet_metadata, write_json
 
 
 BIN_WIDTH = 4.0
@@ -43,51 +43,59 @@ class ECL2Processor:
         if not parquet_dir.exists():
             raise ValueError(f"L1 parquet directory not found: {parquet_dir}")
 
-        # 加载源谱多峰窗口配置（如果存在）：见 resources/ec_source_windows_<payload>.json
         src_windows = self._load_source_windows()
+
+        src_re = re.compile(r"^src_(?P<name>[A-Za-z]+\d*)_(?P<min>\d+)m_corr\.l1\.parquet$")
+
+        bkg_df_global: Optional[Any] = None
+        bkg_exposure: Optional[int] = None
+        for pf in sorted(parquet_dir.glob("src_bkg_*_corr.l1.parquet")):
+            try:
+                bkg_df_global = read_parquet(pf)
+                bkg_min_match = re.search(r"src_bkg_(\d+)m_corr", pf.name)
+                if bkg_min_match:
+                    bkg_exposure = int(bkg_min_match.group(1))
+            except Exception:
+                pass
 
         grouped_by_energy: Dict[str, Dict[int, Dict[str, Any]]] = {}
         for parquet_file in sorted(parquet_dir.glob("*_corr.l1.parquet")):
-            if "_bkg_corr" in parquet_file.name:
+            if "src_bkg_" in parquet_file.name:
                 continue
             try:
                 df = read_parquet(parquet_file)
-                meta = read_parquet_metadata(parquet_file) or {}
-                data_type = meta.get("data_type", "xray")
+                meta = read_parquet_metadata(parquet_file, meta_key="tb_correction") or {}
 
-                if data_type == "source":
-                    source_name = meta.get("source_name", "unknown")
-                    energy = meta.get("energy_keV", 0)
-                    peak_energies = meta.get("peak_energies_keV") or [energy]
-                    energy_key = f"src_{int(energy)}keV_{source_name}"
+                src_match = src_re.match(parquet_file.name)
+                if src_match:
+                    source_name = src_match.group("name")
+                    exposure_str = src_match.group("min")
+                    peak_energies = meta.get("peak_energies_keV") or []
+                    energy_key = f"src_{source_name}"
 
-                    bkg_info = meta.get("background_info", {})
-                    bkg_parquet_name = bkg_info.get("bkg_parquet") if isinstance(bkg_info, dict) else None
-                    bkg_df = None
-                    if bkg_parquet_name:
-                        bkg_path = ec_l1_dir / "parquet" / bkg_parquet_name
-                        if bkg_path.exists():
-                            from ...common.utils import read_parquet as _rq
-                            bkg_df = _rq(bkg_path)
-
-                    for ch in df["channel"].unique():
+                    for ch in sorted(df["channel"].unique()):
+                        if int(ch) < 0 or int(ch) >= 4:
+                            continue
                         df_ch = df[df["channel"] == ch].copy()
                         if len(df_ch) < 10:
                             continue
 
-                        bkg_df_ch = None
-                        if bkg_df is not None:
-                            bkg_df_ch = bkg_df[bkg_df["channel"] == ch].copy()
+                        temp_val = float(df_ch["temp"].mean()) if "temp" in df_ch.columns else float("nan")
+                        temp_err = float(df_ch["temp"].std()) if "temp" in df_ch.columns else 0.0
+                        bias_val = float(df_ch["bias"].mean()) if "bias" in df_ch.columns else float("nan")
+                        bias_err = float(df_ch["bias"].std()) if "bias" in df_ch.columns else 0.0
 
                         grouped_by_energy.setdefault(energy_key, {})[int(ch)] = {
                             "stem": f"{source_name}_ch{ch}",
                             "df": df_ch,
-                            "bkg_df": bkg_df_ch,
                             "parquet": parquet_file.name,
                             "data_type": "src",
                             "source_name": source_name,
                             "peak_energies_keV": list(peak_energies),
-                            "channels_meta": meta.get("channels", {}),
+                            "temp": temp_val,
+                            "temp_err": temp_err,
+                            "bias": bias_val,
+                            "bias_err": bias_err,
                         }
                 else:
                     stem = parquet_file.stem.replace("_corr.l1", "")
@@ -96,15 +104,22 @@ class ECL2Processor:
                         energy_key = parts[0]
                         ch = int(parts[1])
                         if len(df) >= 10:
+                            temp_val = float(df["temp"].mean()) if "temp" in df.columns else float("nan")
+                            temp_err = float(df["temp"].std()) if "temp" in df.columns else 0.0
+                            bias_val = float(df["bias"].mean()) if "bias" in df.columns else float("nan")
+                            bias_err = float(df["bias"].std()) if "bias" in df.columns else 0.0
+
                             grouped_by_energy.setdefault(energy_key, {})[ch] = {
                                 "stem": stem,
                                 "df": df,
-                                "bkg_df": None,
                                 "parquet": parquet_file.name,
-                                "data_type": "xray",
+                                "data_type": "x",
                                 "source_name": None,
                                 "peak_energies_keV": [self._energy_sort_key(energy_key)],
-                                "channels_meta": meta.get("channels", {}),
+                                "temp": temp_val,
+                                "temp_err": temp_err,
+                                "bias": bias_val,
+                                "bias_err": bias_err,
                             }
             except Exception as exc:
                 results["errors"].append({"file": parquet_file.name, "error": str(exc)})
@@ -127,22 +142,19 @@ class ECL2Processor:
 
                 for ch in range(4):
                     signal = ch_map[ch]
-                    if data_type == "src" and signal.get("bkg_df") is not None:
-                        bkg_df = signal["bkg_df"]
-                        if len(bkg_df) == 0:
-                            bkg_df = signal["df"].iloc[0:0]
-                        bkg = {"df": bkg_df}
+                    temp_val = signal.get("temp", float("nan"))
+                    temp_err = signal.get("temp_err", 0.0)
+                    bias_val = signal.get("bias", float("nan"))
+                    bias_err = signal.get("bias_err", 0.0)
+
+                    if data_type == "src" and bkg_df_global is not None:
+                        bkg_df_ch = bkg_df_global[bkg_df_global["channel"] == ch].copy()
                         bkg_ch = ch
                     else:
+                        bkg_df_ch = None
                         bkg_ch, bkg = self._choose_background_channel(ch, ch_map)
+                        bkg_df_ch = bkg["df"]
 
-                    ch_meta = (signal.get("channels_meta") or {}).get(str(ch), {})
-                    temp_val = float(ch_meta.get("temp", float("nan"))) if isinstance(ch_meta.get("temp"), (int, float)) else float("nan")
-                    temp_err = float(ch_meta.get("temp_err", 0.0)) if isinstance(ch_meta.get("temp_err"), (int, float)) else 0.0
-                    bias_val = float(ch_meta.get("bias", float("nan"))) if isinstance(ch_meta.get("bias"), (int, float)) else float("nan")
-                    bias_err = float(ch_meta.get("bias_err", 0.0)) if isinstance(ch_meta.get("bias_err"), (int, float)) else 0.0
-
-                    # 多峰：data_type == "src" 且 peak_energies 多于一个
                     peaks_to_fit = peak_energies if data_type == "src" else [self._energy_sort_key(energy_key)]
                     for peak_E in peaks_to_fit:
                         peak_window = None
@@ -152,7 +164,7 @@ class ECL2Processor:
                             fit, plot_data = self._fit_energy_spectrum(
                                 energy_key=energy_key,
                                 signal_df=signal["df"],
-                                background_df=bkg["df"],
+                                background_df=bkg_df_ch if bkg_df_ch is not None else signal["df"].iloc[0:0],
                                 channel=ch,
                                 background_channel=bkg_ch,
                                 bin_width=bin_width,
@@ -195,13 +207,8 @@ class ECL2Processor:
                     print(f"⚠ EC L2: {energy_key} - no successful fits")
                     continue
 
-                # Output filename: align with wiki naming
-                if data_type == "src":
-                    json_name = f"{energy_key}_fit_results.l2.json"
-                    fig_name = f"{energy_key}_fit.l2.png"
-                else:
-                    json_name = f"{energy_key}_fit_results.l2.json"
-                    fig_name = f"{energy_key}_fit.l2.png"
+                json_name = f"{energy_key}_fit_results.l2.json"
+                fig_name = f"{energy_key}_fit.l2.png"
 
                 json_path = self.layout.get_ec_l2_json(json_name)
                 write_json(json_path, records)

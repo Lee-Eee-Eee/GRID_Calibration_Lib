@@ -17,17 +17,13 @@ class ChannelInfo:
 class SourceSpec:
     """标定放射源规格。
 
-    `energy_keV` 是单文件唯一指定的能量（向后兼容字段，沿用 `calibration_process`
-    每文件一峰的写法）。`peak_energies_keV` 为可选多峰列表 —— 如 Co-60 同时含
-    1173.2 / 1332.5 keV，Na-22 含 511 / 1274.5 keV 等。当列表非空时，EC L2
-    会在源谱里独立拟合每个峰、每个峰输出一条 (E, center) 记录。
+    每个源一份 event/hk 文件，含所有能峰（``peak_energies_keV``）。
+    ``exposure_minutes`` 来自原始文件名，EC L2 扣本底时按计数率归一化。
     """
     name: str
-    energy_keV: float
     event_file: str
     hk_file: str
-    background_event_file: str
-    background_hk_file: str
+    exposure_minutes: int
     peak_energies_keV: List[float] = field(default_factory=list)
 
 
@@ -43,6 +39,9 @@ class PayloadConfig:
     n_channels: int = 4
     channels: List[ChannelInfo] = field(default_factory=lambda: [ChannelInfo(i) for i in range(4)])
     source_specs: List[SourceSpec] = field(default_factory=list)
+    bkg_event_file: str = ""
+    bkg_hk_file: str = ""
+    bkg_exposure_minutes: int = 0
     
 
 # 定义项目根目录
@@ -58,16 +57,16 @@ GRID_14B = PayloadConfig(
     tb_raw_dir=RAW_ROOT / "02" / "Temp_Vbias",
     ec_xray_dir=RAW_ROOT / "02" / "X_new",
     ec_source_dir=RAW_ROOT / "02" / "source",
+    bkg_event_file="Bkg_30m_084.event.dat",
+    bkg_hk_file="Bkg_30m_ecu_127.hk",
+    bkg_exposure_minutes=30,
     source_specs=[
-        SourceSpec("Na22", 511.0, "Na22_5m_083.event.dat", "Na22_5m_ecu_126.hk",
-                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk",
-                  peak_energies_keV=[511.0, 1274.5]),
-        SourceSpec("Cs137", 661.7, "CS137_25m_082.event.dat", "CS137_25m_ecu_125.hk",
-                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk",
-                  peak_energies_keV=[661.7]),
-        SourceSpec("Co60", 1332.5, "Co60_40m_081.event.dat", "Co60_ 40m_ecu_124.hk",
-                  "Bkg_30m_084.event.dat", "Bkg_30m_ecu_127.hk",
-                  peak_energies_keV=[1173.2, 1332.5]),
+        SourceSpec("Na22", "Na22_5m_083.event.dat", "Na22_5m_ecu_126.hk",
+                  exposure_minutes=5, peak_energies_keV=[511.0, 1274.5]),
+        SourceSpec("Cs137", "CS137_25m_082.event.dat", "CS137_25m_ecu_125.hk",
+                  exposure_minutes=25, peak_energies_keV=[661.7]),
+        SourceSpec("Co60", "Co60_40m_081.event.dat", "Co60_ 40m_ecu_124.hk",
+                  exposure_minutes=40, peak_energies_keV=[1173.2, 1332.5]),
     ]
 )
 
@@ -79,16 +78,16 @@ GRID_15B = PayloadConfig(
     tb_raw_dir=RAW_ROOT / "03" / "Temp_Vbias",
     ec_xray_dir=RAW_ROOT / "03" / "X",
     ec_source_dir=RAW_ROOT / "03" / "source",
+    bkg_event_file="bkg_30m_180.event.dat",
+    bkg_hk_file="bkg_30m_ecu_022.hk",
+    bkg_exposure_minutes=30,
     source_specs=[
-        SourceSpec("Na22", 511.0, "na22_3m_179.event.dat", "na22_3m_ecu_021.hk",
-                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk",
-                  peak_energies_keV=[511.0, 1274.5]),
-        SourceSpec("Cs137", 661.7, "cs137_20m_c8_178.event.dat", "cs137_20m_c8_ecu_020.hk",
-                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk",
-                  peak_energies_keV=[661.7]),
-        SourceSpec("Co60", 1332.5, "co60_1h_177.event.dat", "co60_1h_ecu_019.hk",
-                  "bkg_30m_180.event.dat", "bkg_30m_ecu_022.hk",
-                  peak_energies_keV=[1173.2, 1332.5]),
+        SourceSpec("Na22", "na22_3m_179.event.dat", "na22_3m_ecu_021.hk",
+                  exposure_minutes=3, peak_energies_keV=[511.0, 1274.5]),
+        SourceSpec("Cs137", "cs137_20m_c8_178.event.dat", "cs137_20m_c8_ecu_020.hk",
+                  exposure_minutes=20, peak_energies_keV=[661.7]),
+        SourceSpec("Co60", "co60_1h_177.event.dat", "co60_1h_ecu_019.hk",
+                  exposure_minutes=60, peak_energies_keV=[1173.2, 1332.5]),
     ]
 )
 

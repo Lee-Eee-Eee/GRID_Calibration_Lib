@@ -54,21 +54,15 @@ def main():
         elif args.layer == "TB_L2":
             TBL2Processor(args.payload, product_root).process(layout.get_tb_l1_dir(), layout.get_tb_l0_dir())
         elif args.layer == "EC_L0":
-            # 兼容带有Source测试的文件
-            ECL0Processor(args.payload, product_root).process(
-                config.ec_xray_dir, 
-                source_dir=config.ec_source_dir, 
-                source_specs=config.source_specs
-            )
+            ECL0Processor(args.payload, product_root).process(config)
         elif args.layer == "EC_L1":
-            # 自动寻找TB L2最近的配置文件
             candidates = sorted((layout.get_tb_l2_dir() / "json").glob("*_TB.l2.json"))
             if not candidates:
                 candidates = sorted((layout.get_tb_l2_dir() / "json").glob("*_TB.json"))
             if not candidates:
                 raise FileNotFoundError("未找到TB L2生成的参数文件，请先运行 TB_L2")
             tb_l2_json_path = candidates[-1]
-            ECL1Processor(args.payload, product_root).process(layout.get_ec_l0_dir(), tb_l2_json_path)
+            ECL1Processor(args.payload, product_root).process(config, tb_l2_json_path)
         elif args.layer == "EC_L2":
             ECL2Processor(args.payload, product_root).process(layout.get_ec_l1_dir(), EC_PROCESS_PARAMS)
         elif args.layer == "EC_L3":
