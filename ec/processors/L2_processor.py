@@ -155,11 +155,17 @@ class ECL2Processor:
                         bkg_ch, bkg = self._choose_background_channel(ch, ch_map)
                         bkg_df_ch = bkg["df"]
 
-                    peaks_to_fit = peak_energies if data_type == "src" else [self._energy_sort_key(energy_key)]
+                    peaks_to_fit = sorted(peak_energies) if data_type == "src" else [self._energy_sort_key(energy_key)]
+                    prev_center: Optional[float] = None
+                    prev_energy: Optional[float] = None
                     for peak_E in peaks_to_fit:
                         peak_window = None
                         if data_type == "src":
                             peak_window = manual_windows.get(str(ch), {}).get(str(peak_E))
+                        if peak_window is None and prev_center is not None and prev_energy is not None:
+                            center_guess = prev_center * (peak_E / prev_energy)
+                            half_span = max(80.0, center_guess * 0.06)
+                            peak_window = [center_guess - half_span, center_guess + half_span]
                         try:
                             fit, plot_data = self._fit_energy_spectrum(
                                 energy_key=energy_key,
@@ -171,6 +177,8 @@ class ECL2Processor:
                                 forced_window=peak_window,
                                 forced_peak_energy=peak_E,
                             )
+                            prev_center = float(fit["center"])
+                            prev_energy = float(peak_E)
                         except Exception as exc:
                             print(f"⚠ EC L2: {energy_key} ch{ch} peak={peak_E}keV failed: {exc}")
                             continue
@@ -202,6 +210,58 @@ class ECL2Processor:
                         }
                         records.append(rec)
                         plot_rows.append({"record": rec, "plot": plot_data})
+
+                if data_type == "x" and len(records) >= 2:
+                    ch_fits: Dict[int, Dict[str, Any]] = {}
+                    for rec in records:
+                        ch_fits[rec["channel"]] = rec
+                    consensus = self._xray_consensus_center(ch_fits)
+                    if consensus is not None:
+                        for rec in list(records):
+                            ch = rec["channel"]
+                            r2 = rec["rsquared"]
+                            center = rec["center"]
+                            if r2 >= 0.7 and abs(center - consensus) / max(consensus, 1.0) < 0.18:
+                                continue
+                            signal = ch_map[ch]
+                            if bkg_df_global is None:
+                                refit_bkg_ch, refit_bkg = self._choose_background_channel(ch, ch_map)
+                                refit_bkg_df = refit_bkg["df"]
+                            else:
+                                refit_bkg_df = signal["df"].iloc[0:0]
+                                refit_bkg_ch = ch
+                            cw = [consensus * 0.80, consensus * 1.22]
+                            try:
+                                fit2, plot2 = self._fit_energy_spectrum(
+                                    energy_key=energy_key,
+                                    signal_df=signal["df"],
+                                    background_df=refit_bkg_df,
+                                    channel=ch,
+                                    background_channel=refit_bkg_ch,
+                                    bin_width=bin_width,
+                                    forced_window=cw,
+                                    forced_peak_energy=self._energy_sort_key(energy_key),
+                                )
+                                records.remove(rec)
+                                new_rec = {
+                                    "channel": ch, "E": rec["E"],
+                                    "center": float(fit2["center"]), "center_err": float(fit2["center_err"]),
+                                    "sigma": float(fit2["sigma"]), "sigma_err": float(fit2["sigma_err"]),
+                                    "amplitude": float(fit2["amplitude"]), "amplitude_err": float(fit2["amplitude_err"]),
+                                    "fwhm": float(fit2["FWHM"]), "resolution": float(fit2["resolution"]),
+                                    "resolution_err": float(fit2["resolution_err"]), "fit_mode": fit2["fit_mode"],
+                                    "source": data_type, "source_name": source_name,
+                                    "temp": rec["temp"], "temp_err": rec["temp_err"],
+                                    "bias": rec["bias"], "bias_err": rec["bias_err"],
+                                    "lo": float(fit2["lo"]), "hi": float(fit2["hi"]),
+                                    "rsquared": float(fit2["rsquared"]), "n_events": int(fit2["n_events"]),
+                                    "background_channel": int(fit2["background_channel"]),
+                                }
+                                records.append(new_rec)
+                                plot_rows[:] = [pr for pr in plot_rows if pr.get("record", {}).get("channel") != ch]
+                                plot_rows.append({"record": new_rec, "plot": plot2})
+                            except Exception:
+                                pass
 
                 if not records:
                     print(f"⚠ EC L2: {energy_key} - no successful fits")
@@ -257,6 +317,20 @@ class ECL2Processor:
             return data if isinstance(data, dict) else {}
         except Exception:
             return {}
+
+    def _xray_consensus_center(self, channel_fits: Dict[int, Dict[str, Any]]) -> Optional[float]:
+        centers = []
+        for _, fit in channel_fits.items():
+            r2 = float(fit.get("rsquared", 0.0))
+            center = float(fit.get("center", 0.0))
+            center_err = float(abs(fit.get("center_err", float("nan"))))
+            if r2 >= 0.6 and center > 150 and np.isfinite(center_err) and center_err < center * 0.5:
+                centers.append(center)
+        if len(centers) >= 2:
+            return float(np.median(centers))
+        if len(centers) == 1:
+            return float(centers[0])
+        return None
 
     def _energy_sort_key(self, energy_key: str) -> float:
         match = re.search(r"(\d+(?:\.\d+)?)keV", energy_key)
@@ -366,6 +440,7 @@ class ECL2Processor:
         x: np.ndarray,
         y: np.ndarray,
         bin_width: float,
+        min_adc: float = 150.0,
     ) -> Tuple[float, float, float]:
         smooth = self._smooth_hist(np.clip(y, a_min=0.0, a_max=None))
         if not np.any(np.isfinite(smooth)) or np.nanmax(smooth) <= 0:
@@ -376,7 +451,13 @@ class ECL2Processor:
             prominence=max(float(np.nanmax(smooth)) * 0.06, np.nanmax(smooth) * 0.02 + 1e-9),
             distance=max(4, int(18 / max(bin_width, 1e-6))),
         )
-        peak_idx = int(peaks[np.argmax(props["prominences"])]) if len(peaks) else int(np.nanargmax(smooth))
+        valid = [p for p in peaks if x[p] >= min_adc]
+        if valid:
+            peak_idx = int(max(valid, key=lambda p: props["prominences"][list(peaks).index(p)]))
+        elif len(peaks):
+            peak_idx = int(peaks[np.argmax(props["prominences"])])
+        else:
+            peak_idx = int(np.nanargmax(smooth))
 
         threshold = smooth[peak_idx] * 0.18
         left = peak_idx
