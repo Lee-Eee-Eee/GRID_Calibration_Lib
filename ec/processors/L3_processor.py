@@ -54,38 +54,23 @@ class ECL3Processor:
 
                 ch_result = {"channel": ch}
 
-                # --- EC quadratic fit (Energy vs ADC) ---
+                # --- EC quadratic fit (Energy vs ADC) --- single fit, no split ---
                 energies = np.array([d["E"] for d in ch_data], dtype=float)
                 centers = np.array([d["center"] for d in ch_data], dtype=float)
                 center_errs = np.array([d.get("center_err", 0) for d in ch_data], dtype=float)
                 sources = [d.get("source", "x") for d in ch_data]
 
-                data_low = [(e, c, ce, s) for e, c, ce, s in zip(energies, centers, center_errs, sources) if e <= e_cut]
-                data_high = [(e, c, ce, s) for e, c, ce, s in zip(energies, centers, center_errs, sources) if e > e_cut]
-
-                if len(data_low) >= 3:
-                    ec_low_result = self._fit_quadratic([d[0] for d in data_low], [d[1] for d in data_low])
-                    ch_result["EC_low"] = [ec_low_result.params["a"].value, ec_low_result.params["b"].value, ec_low_result.params["c"].value]
-                    ch_result["EC_low_err"] = [ec_low_result.params["a"].stderr, ec_low_result.params["b"].stderr, ec_low_result.params["c"].stderr]
-                elif len(data_low) >= 2:
-                    ec_low_result = self._fit_quadratic([d[0] for d in data_low], [d[1] for d in data_low])
-                    ch_result["EC_low"] = [ec_low_result.params["a"].value, ec_low_result.params["b"].value, ec_low_result.params["c"].value]
-                    ch_result["EC_low_err"] = [ec_low_result.params["a"].stderr, ec_low_result.params["b"].stderr, ec_low_result.params["c"].stderr]
+                if len(ch_data) >= 5:
+                    ec_result = self._fit_quadratic_weighted(centers, energies, center_errs)
+                    ch_result["EC_low"] = [ec_result.params["a"].value, ec_result.params["b"].value, ec_result.params["c"].value]
+                    ch_result["EC_low_err"] = [ec_result.params["a"].stderr, ec_result.params["b"].stderr, ec_result.params["c"].stderr]
+                    ch_result["EC_high"] = ch_result["EC_low"]
+                    ch_result["EC_high_err"] = ch_result["EC_low_err"]
+                    all_ec_result = ec_result
                 else:
-                    ec_low_result = None
                     ch_result["EC_low"] = None
-
-                if len(data_high) >= 3:
-                    ec_high_result = self._fit_quadratic([d[0] for d in data_high], [d[1] for d in data_high])
-                    ch_result["EC_high"] = [ec_high_result.params["a"].value, ec_high_result.params["b"].value, ec_high_result.params["c"].value]
-                    ch_result["EC_high_err"] = [ec_high_result.params["a"].stderr, ec_high_result.params["b"].stderr, ec_high_result.params["c"].stderr]
-                elif len(data_high) >= 2:
-                    ec_high_result = self._fit_quadratic([d[0] for d in data_high], [d[1] for d in data_high])
-                    ch_result["EC_high"] = [ec_high_result.params["a"].value, ec_high_result.params["b"].value, ec_high_result.params["c"].value]
-                    ch_result["EC_high_err"] = [ec_high_result.params["a"].stderr, ec_high_result.params["b"].stderr, ec_high_result.params["c"].stderr]
-                else:
-                    ec_high_result = None
                     ch_result["EC_high"] = None
+                    all_ec_result = None
 
                 # --- Resolution fit ---
                 resolutions = np.array([d["resolution"] for d in ch_data], dtype=float)
@@ -112,7 +97,7 @@ class ECL3Processor:
 
                 # --- EC fit plot ---
                 ec_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_ecfit_ch{ch}.l3.png")
-                self._plot_ec_fit(ch, ch_data, ec_low_result, ec_high_result, e_cut, ec_fig_path)
+                self._plot_ec_fit(ch, ch_data, all_ec_result, e_cut, ec_fig_path)
                 results["output_figures"].append(ec_fig_path.name)
 
                 # --- Resolution fit plot ---
@@ -217,13 +202,26 @@ class ECL3Processor:
     # Fitting
     # ------------------------------------------------------------------ #
 
-    def _fit_quadratic(self, energies: list, adcs: list) -> lmfit.model.ModelResult:
-        """Quadratic fit: ADC = a*E^2 + b*E + c"""
+    def _fit_quadratic_weighted(self, x: list, y: list, yerr: list) -> lmfit.model.ModelResult:
+        """Weighted quadratic fit: y = a*x^2 + b*x + c, weighted by 1/yerr."""
         mod = QuadraticModel()
-        E = np.array(energies, dtype=float)
-        adc = np.array(adcs, dtype=float)
-        params = mod.guess(adc, x=E)
-        return mod.fit(adc, params, x=E)
+        x_arr = np.array(x, dtype=float)
+        y_arr = np.array(y, dtype=float)
+        w_arr = np.array(yerr, dtype=float)
+        w_arr = np.where(np.isfinite(w_arr) & (w_arr > 0), w_arr, 1.0)
+        params = mod.guess(y_arr, x=x_arr)
+        return mod.fit(y_arr, params, x=x_arr, weights=1.0 / w_arr)
+
+    def _fit_quadratic(self, x: list, y: list) -> lmfit.model.ModelResult:
+        """Quadratic fit: y = a*x^2 + b*x + c
+
+        For EC calibration: x=ADC, y=Energy(keV).
+        """
+        mod = QuadraticModel()
+        x_arr = np.array(x, dtype=float)
+        y_arr = np.array(y, dtype=float)
+        params = mod.guess(y_arr, x=x_arr)
+        return mod.fit(y_arr, params, x=x_arr)
 
     def _fit_resolution(self, energies: list, resolutions: list) -> lmfit.model.ModelResult:
         """Resolution fit: R(E) = sqrt(a*E + b*E^2 + c) / E"""
@@ -241,8 +239,7 @@ class ECL3Processor:
         self,
         ch: int,
         ch_data: List[Dict[str, Any]],
-        ec_low_result: Optional[lmfit.model.ModelResult],
-        ec_high_result: Optional[lmfit.model.ModelResult],
+        ec_result: Optional[lmfit.model.ModelResult],
         e_cut: float,
         fig_path: Path,
     ) -> None:
@@ -272,14 +269,18 @@ class ECL3Processor:
 
         all_centers = np.asarray([d["center"] for d in ch_data])
         all_E = np.asarray([d["E"] for d in ch_data])
-        if ec_low_result is not None:
-            adc_low = np.linspace(np.min(all_centers), np.max(all_centers[all_E <= e_cut]), 100)
-            e_low = ec_low_result.eval(x=adc_low)
-            ax.plot(adc_low, e_low, "r--", label=f"quadratic fit < {e_cut}keV")
-        if ec_high_result is not None:
-            adc_high = np.linspace(np.min(all_centers[all_E >= e_cut]), np.max(all_centers), 100)
-            e_high = ec_high_result.eval(x=adc_high)
-            ax.plot(adc_high, e_high, "g--", label=f"quadratic fit > {e_cut}keV")
+        low_centers = np.asarray([d["center"] for d in ch_data if d["E"] <= e_cut])
+        high_centers = np.asarray([d["center"] for d in ch_data if d["E"] > e_cut])
+
+        if ec_result is not None:
+            if len(low_centers) > 0:
+                adc_low = np.arange(np.min(low_centers), np.max(low_centers) + 1, 1)
+                e_low = ec_result.eval(x=adc_low)
+                ax.plot(adc_low, e_low, "r-", lw=1.5, label=f"quadratic < {e_cut}keV")
+            if len(high_centers) > 0:
+                adc_high = np.arange(np.min(high_centers), np.max(high_centers) + 1, 1)
+                e_high = ec_result.eval(x=adc_high)
+                ax.plot(adc_high, e_high, "g-", lw=1.5, label=f"quadratic > {e_cut}keV")
 
         ax.axhline(e_cut, color="gray", ls="--", lw=0.5)
         ax.set_xscale("log")
