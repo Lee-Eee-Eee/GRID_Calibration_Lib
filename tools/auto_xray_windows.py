@@ -1,17 +1,17 @@
-"""EC xray 自动选窗工具。
+"""EC xray 自动选窗工具（背景扣除版）。
 
-物理事实：
-- SiPM 噪声 pedestal 固定在 ADC ~70-80
-- 宇宙线/高能背景在 ADC ~900+ 和 ~32000
-- 信号峰 ADC 与能量成正比（TB 矫正后）
-- 四通道测同个物理信号 → center 应 ≤15% 离散
+物理：
+  - 暗噪声 pedestal 固定在低 ADC（~70-80）
+  - 电子学 artifact 固定在 ADC ~13500 和 ~31500
+  - 信号峰 ADC 随能量线性增加
+  - 必须做背景扣除才能分离信号与噪声
 
 算法：
-1. 按能量段预设信号峰 ADC 搜索区间（排除噪声和宇宙线）
-2. area_score = counts × prominence：选计数多且突出的峰
-3. position_bonus = 1 - |center-expected|/expected×2：就近原则
-4. 四通道 median center 共识，异常通道用共识窗口强制约束
-5. 窗口宽度 = center ± max(60, 5σ)，σ 由半高宽估算
+  1. 读取 EC L1 parquet，对每能量每通道做背景扣除（signal_rate - bkg_rate）
+  2. 在净谱上寻峰，排除噪声 pedestal 区（ADC < 100）和 artifact 区（ADC > 10000）
+  3. 选净谱中 prominence 最高的峰作为信号峰
+  4. 四通道共识：median center，异常通道用共识窗口替代
+  5. 窗口 = center ± max(30, 5σ)
 
 用法：
     .venv/Scripts/python.exe -m calibration_lib.tools.auto_xray_windows <14B|15B> [--products products]
@@ -33,73 +33,93 @@ from scipy.signal import find_peaks, savgol_filter
 BIN_WIDTH = 4.0
 PRODUCTS = "products"
 
-# 各载荷每能量段的信号峰 ADC 预期区间
-# (energy_low, energy_high, adc_lo, adc_hi, expected_center)
-ADC_ZONES: Dict[str, list] = {
-    "14B": [
-        (40, 60, 250, 550, 415),
-        (60, 100, 250, 550, 430),
-    ],
-    "15B": [
-        (12, 25, 50, 250, 140),
-        (25, 40, 80, 300, 180),
-        (40, 55, 150, 450, 320),
-        (55, 95, 200, 600, 400),
-    ],
-}
+NOISE_ADC_MAX = 150.0
+ARTIFACT_ADC_MIN = 10000.0
 
 
-def find_signal_peak(amp_corr: np.ndarray, adc_lo: float, adc_hi: float,
-                     expected_center: float) -> Optional[dict]:
-    amp = amp_corr[np.isfinite(amp_corr) & (amp_corr > 0)]
-    if len(amp) < 20:
+def find_signal_peak_net(
+    sig_amp: np.ndarray, bkg_amp: np.ndarray,
+) -> Optional[dict]:
+    sig = sig_amp[np.isfinite(sig_amp) & (sig_amp > 0)]
+    bkg = bkg_amp[np.isfinite(bkg_amp) & (bkg_amp > 0)]
+    if len(sig) < 30 or len(bkg) < 30:
         return None
 
-    hi_edge = int(max(adc_hi + 50, np.percentile(amp, 95) + 50))
-    bins = np.arange(0, hi_edge + BIN_WIDTH, BIN_WIDTH)
-    hist, edges = np.histogram(amp, bins=bins)
+    hi = min(np.percentile(sig, 99.9), np.percentile(bkg, 99.9)) + 50
+    bins = np.arange(0, hi + BIN_WIDTH, BIN_WIDTH)
+    s_hist, edges = np.histogram(sig, bins=bins)
+    b_hist, _ = np.histogram(bkg, bins=bins)
     mids = (edges[:-1] + edges[1:]) / 2.0
 
-    w = min(11, len(hist) // 2 * 2 + 1) if len(hist) >= 11 else max(3, len(hist) // 2 * 2 + 1)
-    smooth = savgol_filter(hist.astype(float), window_length=w, polyorder=2)
+    s_rate = s_hist / max(len(sig), 1)
+    b_rate = b_hist / max(len(bkg), 1)
+    net = s_rate - b_rate
 
-    peaks, props = find_peaks(smooth, prominence=max(5, float(np.max(smooth)) * 0.015), distance=3)
+    w = min(15, len(net) // 2 * 2 + 1) if len(net) >= 15 else max(5, len(net) // 2 * 2 + 1)
+    smooth = savgol_filter(np.clip(net, 0, None), w, 2)
 
-    best_score, best_p = -1.0, None
-    for i, p in enumerate(peaks):
-        center = mids[p]
-        if center < adc_lo or center > adc_hi:
-            continue
-        score = float(hist[p]) * float(props["prominences"][i])
-        if expected_center > 0:
-            score *= 1.0 - min(1.0, abs(center - expected_center) / expected_center * 2.0) * 0.4
-        if score > best_score:
-            best_score, best_p = score, p
-
-    if best_p is None:
+    max_val = float(np.max(smooth))
+    if max_val <= 0:
         return None
 
-    center = float(mids[best_p])
-    half_max = smooth[best_p] / 2.0
-    left = best_p
+    peaks, props = find_peaks(
+        smooth,
+        prominence=max(1e-7, max_val * 0.02),
+        distance=max(5, int(20 / max(BIN_WIDTH, 1))),
+    )
+    if len(peaks) == 0:
+        return None
+
+    best_score, best_idx = -1.0, -1
+    for i, p in enumerate(peaks):
+        c = mids[p]
+        if c < NOISE_ADC_MAX or c > ARTIFACT_ADC_MIN:
+            continue
+        score = float(props["prominences"][i])
+        if score > best_score:
+            best_score, best_idx = score, i
+
+    if best_idx < 0:
+        return None
+
+    p = peaks[best_idx]
+    center = float(mids[p])
+    half_max = smooth[p] / 2.0
+    left = p
     while left > 0 and smooth[left] > half_max:
         left -= 1
-    right = best_p
+    right = p
     while right < len(smooth) - 1 and smooth[right] > half_max:
         right += 1
-    sigma_est = max(8.0, (right - left) * BIN_WIDTH / 2.355) if right - left > 1 else 20.0
+    fwhm = (right - left) * BIN_WIDTH
+    sigma_est = max(6.0, fwhm / 2.355) if fwhm > BIN_WIDTH else 15.0
 
-    half_win = max(60.0, sigma_est * 5.0)
-    lo = max(adc_lo, center - half_win)
-    hi = min(adc_hi, center + half_win)
-    return {"center": center, "sigma": sigma_est, "lo": lo, "hi": hi}
+    half_win = max(30.0, sigma_est * 5.0)
+    return {"center": center, "sigma": sigma_est, "lo": max(0, center - half_win), "hi": center + half_win}
 
 
-def get_zone(payload: str, energy_keV: int) -> tuple:
-    for z in ADC_ZONES[payload]:
-        if z[0] <= energy_keV <= z[1]:
-            return z[2], z[3], z[4]
-    return 150, 600, 350
+def consensus_windows(ch_peaks: Dict[int, dict]) -> Dict[str, dict]:
+    if not ch_peaks:
+        return {}
+
+    centers = {c: p["center"] for c, p in ch_peaks.items()}
+    median_c = float(np.median(list(centers.values())))
+    good = {c: p for c, p in ch_peaks.items() if abs(p["center"] - median_c) / max(median_c, 1.0) <= 0.25}
+
+    if not good:
+        good = ch_peaks
+
+    ref_sigma = float(np.median([p["sigma"] for p in good.values()]))
+    half_win = max(30.0, ref_sigma * 5.0)
+
+    result = {}
+    for ch in range(4):
+        if ch in good:
+            p = good[ch]
+            result[str(ch)] = {"lo": round(p["lo"], 1), "hi": round(p["hi"], 1)}
+        elif ch in ch_peaks:
+            result[str(ch)] = {"lo": round(median_c - half_win, 1), "hi": round(median_c + half_win, 1)}
+    return result
 
 
 def build_windows(payload: str) -> dict:
@@ -107,7 +127,18 @@ def build_windows(payload: str) -> dict:
     if not l1_dir.exists():
         raise FileNotFoundError(f"Missing L1 data: {l1_dir}")
 
-    by_energy = defaultdict(dict)
+    bkg_by_ch: Dict[int, np.ndarray] = {}
+    for fp in sorted(l1_dir.glob("src_bkg_*_corr.l1.parquet")):
+        df = pd.read_parquet(fp)
+        for ch in range(4):
+            ch_df = df[df["channel"] == ch]
+            if len(ch_df) > 0:
+                bkg_by_ch[ch] = ch_df["amp_corr"].to_numpy(dtype=float)
+
+    if not bkg_by_ch:
+        raise FileNotFoundError("No background file found (src_bkg_*_corr.l1.parquet)")
+
+    by_energy: Dict[int, Dict[int, np.ndarray]] = defaultdict(dict)
     for fp in sorted(l1_dir.glob("*keV_ch*_corr.l1.parquet")):
         if fp.name.startswith("src_"):
             continue
@@ -115,7 +146,6 @@ def build_windows(payload: str) -> dict:
         if not m:
             continue
         energy_keV, ch = int(m.group(1)), int(m.group(2))
-
         df = pd.read_parquet(fp)
         ch_df = df[df["channel"] == ch]
         by_energy[energy_keV][ch] = ch_df["amp_corr"].to_numpy(dtype=float)
@@ -123,36 +153,17 @@ def build_windows(payload: str) -> dict:
     output = {}
     for energy_keV in sorted(by_energy):
         ch_map = by_energy[energy_keV]
-        adc_lo, adc_hi, exp_center = get_zone(payload, energy_keV)
-
-        ch_peaks = {}
+        ch_peaks: Dict[int, dict] = {}
         for ch in range(4):
-            if ch not in ch_map:
+            if ch not in ch_map or ch not in bkg_by_ch:
                 continue
-            p = find_signal_peak(ch_map[ch], adc_lo, adc_hi, exp_center)
+            p = find_signal_peak_net(ch_map[ch], bkg_by_ch[ch])
             if p:
                 ch_peaks[ch] = p
 
-        if len(ch_peaks) < 2:
-            half = 80.0
-            centers = [ch_peaks[c]["center"] for c in ch_peaks]
-            consensus = np.median(centers) if centers else exp_center
-        else:
-            centers = [ch_peaks[c]["center"] for c in ch_peaks]
-            consensus = float(np.median(centers))
-            half = max(60.0, np.std(centers) * 5.0) if len(centers) >= 3 else 80.0
-
-        ekey = f"{energy_keV}keV"
-        for ch in range(4):
-            if ch not in ch_map:
-                continue
-            if ch in ch_peaks and abs(ch_peaks[ch]["center"] - consensus) / max(consensus, 1.0) <= 0.20:
-                w = ch_peaks[ch]
-                lo, hi = w["lo"], w["hi"]
-            else:
-                lo = max(adc_lo, consensus - half)
-                hi = min(adc_hi, consensus + half)
-            output.setdefault(ekey, {})[str(ch)] = {"lo": round(lo, 1), "hi": round(hi, 1)}
+        windows = consensus_windows(ch_peaks)
+        if windows:
+            output[f"{energy_keV}keV"] = windows
 
     return dict(sorted(output.items()))
 
@@ -163,10 +174,6 @@ def main():
         sys.exit(1)
 
     payload = sys.argv[1]
-    if payload not in ADC_ZONES:
-        print(f"Unknown payload: {payload}, expected 14B or 15B")
-        sys.exit(1)
-
     windows = build_windows(payload)
     out_path = Path(__file__).resolve().parents[1] / "resources" / f"ec_xray_windows_{payload}.json"
 
@@ -175,18 +182,19 @@ def main():
 
     spread_list = []
     for ekey in sorted(windows):
-        any_ch = next(iter(windows[ekey]))
-        w0 = windows[ekey][any_ch]
-        centers = [w["lo"] + (w["hi"]-w["lo"]) / 2 for w in windows[ekey].values()]
+        chs = windows[ekey]
+        centers = [(v["lo"] + v["hi"]) / 2 for v in chs.values()]
         if len(centers) >= 2:
-            s = (max(centers) - min(centers)) / np.median(centers) * 100
+            s = (max(centers) - min(centers)) / max(np.median(centers), 1.0) * 100
             spread_list.append(s)
-            flag = "⚠" if s > 20 else "✓"
+            flag = "✓" if s < 20 else "⚠"
         else:
             s = 0
             flag = "?"
             spread_list.append(s)
-        print(f"  {flag} {ekey}: lo={w0['lo']:.0f} hi={w0['hi']:.0f}  spread={s:.0f}%")
+        lo = min(v["lo"] for v in chs.values())
+        hi = max(v["hi"] for v in chs.values())
+        print(f"  {flag} {ekey}: lo={lo:.0f} hi={hi:.0f}  spread={s:.0f}%  ({len(chs)} ch)")
 
     print(f"\n{payload}: {len(windows)} energies → {out_path}")
     if spread_list:

@@ -175,9 +175,20 @@ def parse_event_hk_to_dataframe(
             elif v_c.size == 1:
                 bias[ch_idx] = float(v_c[0])
             else:
-                src = np.linspace(0.0, 1.0, v_c.size)
-                dst = np.linspace(0.0, 1.0, ch_idx.size)
-                bias[ch_idx] = np.interp(dst, src, v_c)
+                stable_mask = v_c > 20.0
+                if np.any(stable_mask):
+                    first_stable = int(np.argmax(stable_mask))
+                    v_stable = v_c[first_stable:]
+                    if v_stable.size >= 2:
+                        src = np.linspace(0.0, 1.0, v_stable.size)
+                        dst = np.linspace(0.0, 1.0, ch_idx.size)
+                        bias[ch_idx] = np.interp(dst, src, v_stable)
+                    else:
+                        bias[ch_idx] = float(v_stable[0])
+                else:
+                    src = np.linspace(0.0, 1.0, v_c.size)
+                    dst = np.linspace(0.0, 1.0, ch_idx.size)
+                    bias[ch_idx] = np.interp(dst, src, v_c)
         else:
             temp[ch_idx] = temp_mean
             bias[ch_idx] = bias_mean

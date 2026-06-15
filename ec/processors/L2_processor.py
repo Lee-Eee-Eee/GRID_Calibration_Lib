@@ -167,6 +167,8 @@ class ECL2Processor:
                             xw = xray_windows.get(energy_key, {}).get(str(ch))
                             if xw is not None:
                                 peak_window = [xw["lo"], xw["hi"]]
+                            else:
+                                continue
                         if peak_window is None and prev_center is not None and prev_energy is not None:
                             center_guess = prev_center * (peak_E / prev_energy)
                             half_span = max(80.0, center_guess * 0.06)
@@ -432,7 +434,7 @@ class ECL2Processor:
                 if ch != target_channel
             ),
         ) + 50.0
-        upper = min(max(upper, 160.0), 5000.0)
+        upper = max(upper, 160.0)
         edges = np.arange(0.0, upper + BIN_WIDTH, BIN_WIDTH)
         signal_spec, _, _ = self._build_rate_spectrum(signal_amp, signal_time, edges)
 
@@ -584,7 +586,7 @@ class ECL2Processor:
             float(np.percentile(signal_amp, 99.9)) if signal_amp.size else 160.0,
             float(np.percentile(bkg_amp, 99.5)) if bkg_amp.size else 160.0,
         ) + 50.0
-        upper = min(max(upper, 160.0), 5000.0)
+        upper = max(upper, 160.0)
         edges = np.arange(0.0, upper + bin_width, bin_width)
 
         spec, spec_err, mids = self._build_rate_spectrum(signal_amp, signal_time, edges)

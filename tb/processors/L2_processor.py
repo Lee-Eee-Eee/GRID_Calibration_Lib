@@ -23,7 +23,7 @@ def _empty_tb_l2_record() -> Dict[str, float]:
 class TBL2Processor:
     """TB L2层处理器 - 温偏曲面拟合。
 
-    模型 (与原古项目 calibration_process 完全一致):
+    模型:
         G(T,V) = G0 * (V - k*T - V0)^2 * (-T^2 + b*T + c)
 
     k 作为自由拟合参数，初始 0.0184，约束 [0.001, 0.05]；其余参数初值/边界亦
