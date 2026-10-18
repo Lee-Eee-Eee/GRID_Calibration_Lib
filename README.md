@@ -108,6 +108,17 @@ uv run python calibration_lib/tools/fit_window_editor.py
 
 手选窗存放在 [`resources/legacy_fit_windows_config_{14B,15B}.json`](resources/)，对 L1 来说是只读输入；只有上面这个编辑器会去写它。
 
+### 流程总览（只读产物浏览）
+
+扫描 `products/` 下 TB / EC 各层产物，生成一份自包含 HTML 总览页（14B/15B 切换、流程图卡片、点击查看每层用途与文件链接）：
+
+```bash
+python calibration_lib/tools/flow_overview.py                 # 生成 course_outputs/calibration_flow.html
+python calibration_lib/tools/flow_overview.py --check         # 顺便校验所有内嵌链接
+```
+
+纯标准库实现，无需安装依赖、无需联网，浏览器双击 HTML 即可查看。只读扫描，不修改任何产物。
+
 ---
 
 ## 架构
@@ -135,6 +146,7 @@ calibration_lib/
 │
 ├── checks/                        # 各层 schema / sanity 校验脚本
 ├── tools/fit_window_editor.py     # 交互式 Tk 拟合窗口编辑器
+├── tools/flow_overview.py         # 只读扫描 products/，生成自包含 HTML 全流程总览
 ├── integration/legacy_import.py   # 将历史结果导入新目录树
 └── resources/
     ├── legacy/                    # 内置 GRID 包解析器（parse_grid_data.py + XML）
