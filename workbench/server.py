@@ -65,7 +65,7 @@ def make_handler(workbench):
 
         def _body(self):
             n = int(self.headers.get("Content-Length", "0"))
-            if n < 0 or n > 1024 * 1024:
+            if n < 0 or n > 4 * 1024 * 1024:
                 raise ValueError("请求过大")
             data = json.loads(self.rfile.read(n) or b"{}")
             if not isinstance(data, dict):
@@ -91,6 +91,8 @@ def make_handler(workbench):
                     return self._json(200, workbench.bootstrap())
                 if path == "/api/health":
                     return self._json(200, {"status": "ok"})
+                if path == "/api/acquisition/defaults":
+                    return self._json(200, workbench.acquisition_defaults(query.get("profile", [None])[0]))
                 if path == "/api/directories":
                     return self._json(200, workbench.directories(query.get("path", [None])[0]))
                 if path.startswith("/api/history/"):
@@ -99,6 +101,8 @@ def make_handler(workbench):
                     run_id = parts[2]
                     if len(parts) == 3:
                         return self._json(200, workbench.view(run_id))
+                    if len(parts) == 4 and parts[3] == "acquisition":
+                        return self._json(200, workbench.acquisition(run_id))
                     if len(parts) == 4 and parts[3] == "tb-versions":
                         return self._json(200, workbench.tb_versions(run_id))
                     if len(parts) >= 6 and parts[3] == "history":
@@ -147,6 +151,18 @@ def make_handler(workbench):
                         return self._file(workbench.root(run_id), "/".join(parts[4:]))
             if self.command == "POST":
                 body = self._body()
+                if path == "/api/xml/read":
+                    from .acquisition_store import read_xml
+
+                    return self._json(
+                        200, read_xml(workbench.workspace, path=body.get("path"), preset=body.get("preset"))
+                    )
+                if (
+                    len(parts) == 5
+                    and parts[:2] == ["api", "runs"]
+                    and parts[3:] == ["acquisition", "preview"]
+                ):
+                    return self._json(200, workbench.preview_acquisition(parts[2], body["profile"]))
                 if path == "/api/runs":
                     return self._json(
                         201, workbench.create(body.get("payload"), body.get("name"), body.get("dataset_id"))
@@ -160,6 +176,16 @@ def make_handler(workbench):
                     )
                 if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "jobs":
                     return self._json(202, workbench.submit(parts[2], body))
+            if (
+                self.command == "PATCH"
+                and len(parts) == 4
+                and parts[:2] == ["api", "runs"]
+                and parts[3] == "acquisition"
+            ):
+                body = self._body()
+                return self._json(
+                    200, workbench.save_acquisition(parts[2], body["profile"], body.get("reason"))
+                )
             if (
                 self.command == "PATCH"
                 and len(parts) == 4

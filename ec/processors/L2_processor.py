@@ -5,15 +5,21 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel
 from scipy.signal import find_peaks, savgol_filter
 
-from ...common.utils import DataLayout, get_timestamp, read_json, read_parquet, read_parquet_metadata, write_json
-
+from ...common.utils import (
+    DataLayout,
+    get_timestamp,
+    read_json,
+    read_parquet,
+    read_parquet_metadata,
+    write_json,
+)
 
 BIN_WIDTH = 4.0
 DISPLAY_BIN_MERGE = 3
@@ -34,13 +40,14 @@ class ECL2Processor:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         return {"sha256": digest.hexdigest(),
-                "tb_correction": read_parquet_metadata(path, meta_key="tb_correction") or {}}
+                "tb_correction": read_parquet_metadata(path, meta_key="tb_correction") or {},
+                "acquisition": read_parquet_metadata(path, meta_key="acquisition") or {}}
 
-    def process(self, ec_l1_dir: Path, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def process(self, ec_l1_dir: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = config or {}
         bin_width = float(cfg.get("bin_width", BIN_WIDTH))
 
-        results: Dict[str, Any] = {
+        results: dict[str, Any] = {
             "payload": self.payload_name,
             "layer": "EC_L2",
             "timestamp": get_timestamp(),
@@ -48,6 +55,7 @@ class ECL2Processor:
             "n_processed": 0,
             "outputs": [],
             "errors": [],
+            "warnings": [],
         }
 
         parquet_dir = ec_l1_dir / "parquet"
@@ -57,25 +65,38 @@ class ECL2Processor:
         src_windows = self._load_source_windows()
         xray_windows = self._load_xray_windows()
 
-        src_re = re.compile(r"^src_(?P<name>[A-Za-z]+\d*)_(?P<min>\d+)m_corr\.l1\.parquet$")
+        src_re = re.compile(r"^src_(?P<name>.+)_(?P<min>\d+(?:\.\d+)?)m_corr\.l1\.parquet$")
+        bkg_re = re.compile(r"^src_bkg_(?P<min>\d+(?:\.\d+)?)m_corr\.l1\.parquet$")
 
-        bkg_df_global: Optional[Any] = None
+        bkg_df_global: Any | None = None
         bkg_file_global: str | None = None
-        bkg_exposure: Optional[int] = None
-        for pf in sorted(parquet_dir.glob("src_bkg_*_corr.l1.parquet")):
-            try:
+        bkg_exposure: float | None = None
+        selected_energies = cfg.get("only_energies")
+        needs_background = selected_energies is None or any(str(value).startswith("src_") for value in selected_energies)
+        if needs_background:
+            candidates = [pf for pf in sorted(parquet_dir.glob("src_bkg_*_corr.l1.parquet")) if bkg_re.fullmatch(pf.name)]
+            selected_background = cfg.get("background_stem")
+            if selected_background is not None:
+                if not re.fullmatch(r"src_bkg_\d+(?:\.\d+)?m", str(selected_background)):
+                    raise ValueError("Invalid EC background_stem; use src_bkg_<minutes>m")
+                candidates = [pf for pf in candidates if pf.name == f"{selected_background}_corr.l1.parquet"]
+            if len(candidates) > 1:
+                raise ValueError("Multiple EC backgrounds found; choose background_stem before peak fitting")
+            if candidates:
+                pf = candidates[0]
                 bkg_df_global = read_parquet(pf)
                 bkg_file_global = pf.name
-                bkg_min_match = re.search(r"src_bkg_(\d+)m_corr", pf.name)
-                if bkg_min_match:
-                    bkg_exposure = int(bkg_min_match.group(1))
-            except Exception:
-                pass
+                bkg_exposure = read_parquet_metadata(pf, "tb_correction").get(
+                    "exposure_minutes", float(bkg_re.fullmatch(pf.name).group("min")),
+                )
 
-        grouped_by_energy: Dict[str, Dict[int, Dict[str, Any]]] = {}
+        grouped_by_energy: dict[str, dict[int, dict[str, Any]]] = {}
         input_evidence: dict[str, dict[str, Any]] = {}
+        selected_stems = set(cfg["only_stems"]) if cfg.get("only_stems") is not None else None
         for parquet_file in sorted(parquet_dir.glob("*_corr.l1.parquet")):
-            if "src_bkg_" in parquet_file.name:
+            if bkg_re.fullmatch(parquet_file.name):
+                continue
+            if selected_stems is not None and parquet_file.name.removesuffix("_corr.l1.parquet") not in selected_stems:
                 continue
             try:
                 df = read_parquet(parquet_file)
@@ -84,7 +105,7 @@ class ECL2Processor:
                 src_match = src_re.match(parquet_file.name)
                 if src_match:
                     source_name = src_match.group("name")
-                    exposure_str = src_match.group("min")
+                    exposure_minutes = meta.get("exposure_minutes", float(src_match.group("min")))
                     peak_energies = meta.get("peak_energies_keV") or []
                     energy_key = f"src_{source_name}"
 
@@ -94,6 +115,8 @@ class ECL2Processor:
                         df_ch = df[df["channel"] == ch].copy()
                         if len(df_ch) < 10:
                             continue
+                        if int(ch) in grouped_by_energy.get(energy_key, {}):
+                            raise ValueError(f"Multiple observations of source {source_name}; select one source exposure with only_stems")
 
                         temp_val = float(df_ch["temp"].mean()) if "temp" in df_ch.columns else float("nan")
                         temp_err = float(df_ch["temp"].std()) if "temp" in df_ch.columns else 0.0
@@ -107,6 +130,7 @@ class ECL2Processor:
                             "data_type": "src",
                             "source_name": source_name,
                             "peak_energies_keV": list(peak_energies),
+                            "exposure_minutes": exposure_minutes,
                             "temp": temp_val,
                             "temp_err": temp_err,
                             "bias": bias_val,
@@ -130,7 +154,7 @@ class ECL2Processor:
                                 "parquet": parquet_file.name,
                                 "data_type": "x",
                                 "source_name": None,
-                                "peak_energies_keV": [self._energy_sort_key(energy_key)],
+                                "peak_energies_keV": [float(meta.get("energy_keV", self._energy_sort_key(energy_key)))],
                                 "temp": temp_val,
                                 "temp_err": temp_err,
                                 "bias": bias_val,
@@ -149,14 +173,19 @@ class ECL2Processor:
                 results["errors"].append({"energy": energy_key, "error": "Requires all four channels"})
                 continue
 
-            records: List[Dict[str, Any]] = []
-            plot_rows: List[Dict[str, Any]] = []
+            records: list[dict[str, Any]] = []
+            plot_rows: list[dict[str, Any]] = []
 
             try:
                 first = ch_map[0]
                 data_type = first["data_type"]
                 source_name = first.get("source_name")
                 peak_energies = first.get("peak_energies_keV") or [self._energy_sort_key(energy_key)]
+                if data_type == "src":
+                    if bkg_df_global is None:
+                        raise ValueError(f"Source {source_name} requires an explicitly available corrected background")
+                    if not peak_energies or not all(np.isfinite(float(value)) and float(value) > 0 for value in peak_energies):
+                        raise ValueError(f"Configure finite positive peak energies for source {source_name}")
                 manual_windows = (src_windows.get(source_name, {}) if data_type == "src" and source_name else {})
 
                 for ch in range(4):
@@ -174,22 +203,21 @@ class ECL2Processor:
                         bkg_ch, bkg = self._choose_background_channel(ch, ch_map)
                         bkg_df_ch = bkg["df"]
 
-                    peaks_to_fit = sorted(peak_energies) if data_type == "src" else [self._energy_sort_key(energy_key)]
-                    prev_center: Optional[float] = None
-                    prev_energy: Optional[float] = None
+                    peaks_to_fit = sorted(peak_energies) if data_type == "src" else [float(peak_energies[0])]
+                    prev_center: float | None = None
+                    prev_energy: float | None = None
                     for peak_E in peaks_to_fit:
                         peak_window = None
+                        window_source = "auto"
                         if data_type == "src":
                             peak_window = manual_windows.get(str(ch), {}).get(str(peak_E))
+                            if peak_window is not None:
+                                window_source = "packaged"
                         elif data_type == "x":
                             xw = xray_windows.get(energy_key, {}).get(str(ch))
                             if xw is not None:
                                 peak_window = [xw["lo"], xw["hi"]]
-                            else:
-                                # A workbench window can also enable an energy
-                                # absent from the packaged legacy configuration.
-                                if f"{self.payload_name}:ec:{energy_key}:{ch}:{float(peak_E):g}" not in cfg.get("ec_windows", {}):
-                                    continue
+                                window_source = "packaged"
                         point_id = f"{self.payload_name}:ec:{energy_key}:{ch}:{float(peak_E):g}"
                         manual_override = cfg.get("ec_windows", {}).get(point_id)
                         if manual_override is not None:
@@ -197,10 +225,12 @@ class ECL2Processor:
                             if not np.isfinite([lo, hi]).all() or hi - lo < 2 * bin_width:
                                 raise ValueError(f"Invalid manual EC window for {point_id}: [{lo}, {hi}]")
                             peak_window = [lo, hi]
+                            window_source = "manual"
                         if peak_window is None and prev_center is not None and prev_energy is not None:
                             center_guess = prev_center * (peak_E / prev_energy)
                             half_span = max(80.0, center_guess * 0.06)
                             peak_window = [center_guess - half_span, center_guess + half_span]
+                            window_source = "energy_ratio"
                         try:
                             fit, plot_data = self._fit_energy_spectrum(
                                 energy_key=energy_key,
@@ -246,6 +276,10 @@ class ECL2Processor:
                             "background_channel": int(fit["background_channel"]),
                             "model_parameters": fit["model_parameters"],
                             "window_manual": manual_override is not None,
+                            "window_source": window_source,
+                            "normalization": "utc_duration",
+                            "signal_exposure_minutes": signal.get("exposure_minutes"),
+                            "background_exposure_minutes": bkg_exposure if data_type == "src" else None,
                             "signal_file": signal["parquet"],
                             "background_file": bkg_file_global if data_type == "src" and bkg_df_global is not None else ch_map[bkg_ch]["parquet"],
                         }
@@ -253,7 +287,7 @@ class ECL2Processor:
                         plot_rows.append({"record": rec, "plot": plot_data})
 
                 if data_type == "x" and len(records) >= 2:
-                    ch_fits: Dict[int, Dict[str, Any]] = {}
+                    ch_fits: dict[int, dict[str, Any]] = {}
                     for rec in records:
                         ch_fits[rec["channel"]] = rec
                     consensus = self._xray_consensus_center(ch_fits)
@@ -269,12 +303,11 @@ class ECL2Processor:
                             if r2 >= 0.7 and abs(center - consensus) / max(consensus, 1.0) < 0.18:
                                 continue
                             signal = ch_map[ch]
-                            if bkg_df_global is None:
-                                refit_bkg_ch, refit_bkg = self._choose_background_channel(ch, ch_map)
-                                refit_bkg_df = refit_bkg["df"]
-                            else:
-                                refit_bkg_df = signal["df"].iloc[0:0]
-                                refit_bkg_ch = ch
+                            # X-ray spectra always use a different channel of
+                            # that energy. An unrelated gamma-source background
+                            # in the same directory must not change the refit.
+                            refit_bkg_ch, refit_bkg = self._choose_background_channel(ch, ch_map)
+                            refit_bkg_df = refit_bkg["df"]
                             cw = [consensus * 0.80, consensus * 1.22]
                             try:
                                 fit2, plot2 = self._fit_energy_spectrum(
@@ -285,7 +318,7 @@ class ECL2Processor:
                                     background_channel=refit_bkg_ch,
                                     bin_width=bin_width,
                                     forced_window=cw,
-                                    forced_peak_energy=self._energy_sort_key(energy_key),
+                                    forced_peak_energy=float(rec["E"]),
                                 )
                                 records.remove(rec)
                                 new_rec = {
@@ -303,8 +336,12 @@ class ECL2Processor:
                                     "background_channel": int(fit2["background_channel"]),
                                     "model_parameters": fit2["model_parameters"],
                                     "window_manual": False,
+                                    "window_source": "consensus",
+                                    "normalization": "utc_duration",
+                                    "signal_exposure_minutes": None,
+                                    "background_exposure_minutes": None,
                                     "signal_file": signal["parquet"],
-                                    "background_file": refit_bkg["parquet"] if bkg_df_global is None else None,
+                                    "background_file": refit_bkg["parquet"],
                                 }
                                 records.append(new_rec)
                                 plot_rows[:] = [pr for pr in plot_rows if pr.get("record", {}).get("channel") != ch]
@@ -329,6 +366,11 @@ class ECL2Processor:
                         evidence = input_evidence[filename] if filename else {}
                         rec[f"{role}_sha256"] = evidence.get("sha256")
                         rec[f"{role}_tb_correction"] = evidence.get("tb_correction", {})
+                        rec[f"{role}_acquisition"] = evidence.get("acquisition", {})
+
+                auto_count = sum(record.get("window_source") == "auto" for record in records)
+                if auto_count:
+                    results["warnings"].append(f"{energy_key}: {auto_count} peaks used automatic windows; review the fitted peaks and windows")
 
                 json_name = f"{energy_key}_fit_results.l2.json"
                 fig_name = f"{energy_key}_fit.l2.png"
@@ -355,7 +397,7 @@ class ECL2Processor:
         write_json(self.layout.get_ec_l2_json("L2_manifest.json"), results)
         return results
 
-    def _load_source_windows(self) -> Dict[str, Any]:
+    def _load_source_windows(self) -> dict[str, Any]:
         """读取源谱手选窗口配置（每源、每通道、每峰）。
 
         文件路径：``calibration_lib/resources/ec_source_windows_<payload>.json``
@@ -371,7 +413,6 @@ class ECL2Processor:
 
         缺省时 EC L2 会回退到自动峰检测。
         """
-        from ...common.utils import read_json
         path = Path(__file__).resolve().parents[2] / "resources" / f"ec_source_windows_{self.payload_name}.json"
         if not path.exists():
             return {}
@@ -381,13 +422,12 @@ class ECL2Processor:
         except Exception:
             return {}
 
-    def _load_xray_windows(self) -> Dict[str, Any]:
+    def _load_xray_windows(self) -> dict[str, Any]:
         """读取 X-ray 手选窗口配置。
 
         文件路径：``calibration_lib/resources/ec_xray_windows_<payload>.json``
         结构：``{energy_key: {channel: {lo, hi}}}``
         """
-        from ...common.utils import read_json
         path = Path(__file__).resolve().parents[2] / "resources" / f"ec_xray_windows_{self.payload_name}.json"
         if not path.exists():
             return {}
@@ -397,7 +437,7 @@ class ECL2Processor:
         except Exception:
             return {}
 
-    def _xray_consensus_center(self, channel_fits: Dict[int, Dict[str, Any]]) -> Optional[float]:
+    def _xray_consensus_center(self, channel_fits: dict[int, dict[str, Any]]) -> float | None:
         centers = []
         for _, fit in channel_fits.items():
             r2 = float(fit.get("rsquared", 0.0))
@@ -426,7 +466,7 @@ class ECL2Processor:
         amplitude: np.ndarray,
         time_axis: np.ndarray,
         edges: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         counts, _ = np.histogram(amplitude, bins=edges)
         duration = self._duration_from_time_axis(time_axis)
         rate = counts.astype(float) / duration
@@ -439,7 +479,7 @@ class ECL2Processor:
         x: np.ndarray,
         y: np.ndarray,
         merge: int = DISPLAY_BIN_MERGE,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         if merge <= 1 or x.size < merge or y.size < merge:
             return x, y
         n = (x.size // merge) * merge
@@ -474,8 +514,8 @@ class ECL2Processor:
     def _choose_background_channel(
         self,
         target_channel: int,
-        channel_map: Dict[int, Dict[str, Any]],
-    ) -> Tuple[int, Dict[str, Any]]:
+        channel_map: dict[int, dict[str, Any]],
+    ) -> tuple[int, dict[str, Any]]:
         signal_df = channel_map[target_channel]["df"]
         signal_amp = signal_df["amp_corr"].to_numpy(dtype=float)
         signal_time = signal_df["utc"].to_numpy(dtype=float)
@@ -494,7 +534,7 @@ class ECL2Processor:
         edges = np.arange(0.0, upper + BIN_WIDTH, BIN_WIDTH)
         signal_spec, _, _ = self._build_rate_spectrum(signal_amp, signal_time, edges)
 
-        best_ch: Optional[int] = None
+        best_ch: int | None = None
         best_score = -np.inf
         for ch, item in channel_map.items():
             if ch == target_channel:
@@ -520,7 +560,7 @@ class ECL2Processor:
         y: np.ndarray,
         bin_width: float,
         min_adc: float = 150.0,
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         smooth = self._smooth_hist(np.clip(y, a_min=0.0, a_max=None))
         if not np.any(np.isfinite(smooth)) or np.nanmax(smooth) <= 0:
             raise RuntimeError("empty spectrum after background subtraction")
@@ -653,16 +693,17 @@ class ECL2Processor:
         channel: int,
         background_channel: int,
         bin_width: float,
-        forced_window: Optional[List[float]] = None,
-        forced_peak_energy: Optional[float] = None,
-    ) -> Tuple[Dict[str, Any], Dict[str, np.ndarray]]:
+        forced_window: list[float] | None = None,
+        forced_peak_energy: float | None = None,
+    ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         prepared = self._prepare_spectrum(signal_df, background_df, bin_width)
         mids, spec, bkg_spec, net, net_err = (
             prepared[key] for key in ("mids", "spec", "bkg_spec", "net", "net_err")
         )
 
         if forced_window is not None and len(forced_window) == 2:
-            lo = float(forced_window[0]); hi = float(forced_window[1])
+            lo = float(forced_window[0])
+            hi = float(forced_window[1])
             mask_w = (mids >= lo) & (mids <= hi)
             if not np.any(mask_w):
                 raise RuntimeError(f"forced window [{lo},{hi}] empty")
@@ -742,7 +783,7 @@ class ECL2Processor:
     def _plot_energy_file(
         self,
         energy_key: str,
-        plot_rows: List[Dict[str, Any]],
+        plot_rows: list[dict[str, Any]],
         fig_path: Path,
     ) -> None:
         """每文件绘图：x 射线 4 通道排成 2x2；源谱多峰时按 (channel, peak) 排成网格。"""
@@ -758,7 +799,7 @@ class ECL2Processor:
         fig, axes = plt.subplots(nrows, ncols, figsize=(12.5, max(4.0, 4.0 * nrows)), sharex=False)
         axes = np.atleast_1d(axes).ravel()
 
-        for ax, item in zip(axes, plot_rows):
+        for ax, item in zip(axes, plot_rows, strict=False):
             row = item["record"]
             pdata = item["plot"]
             mids_view, spec_view = self._merge_bins_for_display(pdata["mids"], pdata["spec"])
@@ -805,8 +846,8 @@ class ECL2Processor:
     def _plot_4channels(
         self,
         energy_key: str,
-        fit_rows: List[Dict[str, Any]],
-        plot_rows: List[Dict[str, np.ndarray]],
+        fit_rows: list[dict[str, Any]],
+        plot_rows: list[dict[str, np.ndarray]],
         fig_path: Path,
     ) -> None:
         fig_path.parent.mkdir(parents=True, exist_ok=True)
@@ -814,7 +855,7 @@ class ECL2Processor:
         fig, axes = plt.subplots(2, 2, figsize=(12.5, 8.5), sharex=False)
         axes = axes.ravel()
 
-        for ax, row, pdata in zip(axes, fit_rows, plot_rows):
+        for ax, row, pdata in zip(axes, fit_rows, plot_rows, strict=False):
             mids_view, spec_view = self._merge_bins_for_display(pdata["mids"], pdata["spec"])
             _, bkg_view = self._merge_bins_for_display(pdata["mids"], pdata["bkg_spec"])
             _, net_view = self._merge_bins_for_display(pdata["mids"], pdata["net"])

@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+from .acquisition import discover
+from .acquisition_store import freeze_profile, load_profile, prepare_profile, presets, profile_digest
 from .compute import ComputeAdapter
 from .datasets import DatasetCatalog, validate_payload
 from .dependencies import snapshot, tb_package
@@ -124,10 +126,12 @@ class Workbench:
         return root
 
     def read(self, run_id):
-        return json.loads((self.root(run_id) / "state.json").read_text(encoding="utf-8"))
+        with self.lock:
+            return json.loads((self.root(run_id) / "state.json").read_text(encoding="utf-8"))
 
     def save(self, state):
-        write(self.root(state["id"]) / "state.json", state)
+        with self.lock:
+            write(self.root(state["id"]) / "state.json", state)
 
     def inventory(self, payload):
         if payload not in ("14B", "15B"):
@@ -137,7 +141,114 @@ class Workbench:
         return copy.deepcopy(self.inventory_cache[payload])
 
     def adapter_for(self, state):
+        if state.get("acquisition"):
+            return ComputeAdapter(self.workspace, state.get("dataset"), load_profile(state["acquisition"]))
         return ComputeAdapter(self.workspace, state["dataset"]) if state.get("dataset") else self.adapter
+
+    def acquisition_defaults(self, profile=None):
+        return {"profile": prepare_profile(self.workspace, payload_profile=profile), "presets": presets()}
+
+    def acquisition(self, run_id):
+        state = self.read(run_id)
+        reference = state.get("acquisition")
+        profile = (
+            load_profile(reference)
+            if reference
+            else prepare_profile(
+                self.workspace,
+                payload_profile=(state.get("dataset") or {}).get("profile") or state["payload"],
+            )
+        )
+        profile = {key: value for key, value in profile.items() if not key.startswith("_")}
+        return {
+            "profile": profile,
+            "revision": reference["revision"] if reference else 0,
+            "sha256": reference["sha256"] if reference else profile_digest(profile),
+            "presets": presets(),
+        }
+
+    def preview_acquisition(self, run_id, profile):
+        state = self.read(run_id)
+        prepared = prepare_profile(self.workspace, profile)
+        adapter = ComputeAdapter(self.workspace, state.get("dataset"), prepared)
+        raw_root = adapter._config(state["payload"]).raw_root
+        result = discover(raw_root, prepared)
+        if not raw_root.is_dir():
+            result["errors"] = []
+        result["sha256"] = profile_digest(prepared)
+        result["warnings"] = (
+            [] if result["rows"] else ["当前未发现原始数据；可保存规则，计算前需载入匹配文件。"]
+        )
+        return result
+
+    def save_acquisition(self, run_id, profile, reason=None):
+        with self.lock:
+            state = self.read(run_id)
+            if any(job["status"] in ("queued", "running") for job in state["jobs"]):
+                raise ValueError("计算运行中，无法修改读取配置")
+            prepared = prepare_profile(self.workspace, profile)
+            preview = self.preview_acquisition(run_id, prepared)
+            if preview["errors"]:
+                raise ValueError("读取配置校验失败: " + "; ".join(preview["errors"]))
+            previous = state.get("acquisition")
+            if previous and previous["sha256"] == preview["sha256"]:
+                return self.view(run_id)
+            inventory = ComputeAdapter(self.workspace, state.get("dataset"), prepared).inventory(
+                state["payload"]
+            )
+            reference = freeze_profile(
+                self.root(run_id), prepared, previous["revision"] + 1 if previous else 1
+            )
+            state.update(
+                acquisition=reference,
+                inventory=inventory,
+                acquisition_products={},
+                acquisition_pending_layers=list(LAYERS),
+                pending_windows=[],
+                pending_ec_windows=[],
+                pending_ec_l0=[],
+                ec_dependency=None,
+                ec_scope=None,
+            )
+            state["dirty_layers"] = sorted(set(state["dirty_layers"]) | set(LAYERS))
+            state["config_revision"] += 1
+            revision = {
+                "revision": state["config_revision"],
+                "saved_at": now(),
+                "reason": str(reason or "载荷读取配置修订")[:1000],
+                "acquisition": reference,
+                "config": copy.deepcopy(state["config"]),
+            }
+            state["revisions"].append(revision)
+            state["updated_at"] = now()
+            write(self.root(run_id) / "revisions" / f"{state['config_revision']:04d}.json", revision)
+            self.save(state)
+        return self.view(run_id)
+
+    def acquisition_coverage(self, state, layer):
+        if not state.get("acquisition"):
+            return None
+        rows = state["inventory"].get("raw", {}).get("reading_preview", {}).get("rows", [])
+        if layer.startswith("TB_"):
+            expected = {row["stem"] for row in rows if row["kind"] == "tb"}
+        else:
+            expected = {row["stem"] for row in rows if row["kind"] != "tb"}
+        if layer == "EC_L2":
+            expected = {
+                f"{row['energy_keV']:g}keV" if row["kind"] == "xray" else f"src_{row['source']}"
+                for row in rows
+                if row["kind"] in ("xray", "source")
+            }
+        if layer in ("TB_L2", "EC_L3"):
+            expected = {"aggregate"}
+        completed = set(state.get("acquisition_products", {}).get(layer, [])) & expected
+        return {
+            "completed": len(completed),
+            "required": len(expected),
+            "missing": sorted(expected - completed),
+            "current": bool(expected) and completed == expected,
+            "sha256": state["acquisition"]["sha256"],
+        }
 
     def scan_datasets(self, **paths):
         with self.lock:
@@ -158,9 +269,10 @@ class Workbench:
 
     def bootstrap(self):
         runs = []
-        for path in sorted(self.runs.glob("*/state.json"), reverse=True):
-            state = json.loads(path.read_text(encoding="utf-8"))
-            runs.append({k: state.get(k) for k in ("id", "payload", "created_at", "name")})
+        with self.lock:
+            for path in sorted(self.runs.glob("*/state.json"), reverse=True):
+                state = json.loads(path.read_text(encoding="utf-8"))
+                runs.append({k: state.get(k) for k in ("id", "payload", "created_at", "name")})
         catalog = self.catalog.scan()
         if self.catalog.path.exists():
             saved = json.loads(self.catalog.path.read_text(encoding="utf-8"))
@@ -239,6 +351,9 @@ class Workbench:
             "pending_ec_windows": [],
             "pending_ec_l0": [],
             "generated": {},
+            "acquisition": None,
+            "acquisition_pending_layers": [],
+            "acquisition_products": {},
             "inventory": inventory,
             "import_warnings": import_warnings,
             "tb_version": {
@@ -523,6 +638,12 @@ class Workbench:
                 raise ValueError("未知处理层")
             if any(j["status"] in ("queued", "running") for j in state["jobs"]):
                 raise ValueError("此试算已有计算任务")
+            required_layer = {"TB_L2": "TB_L1", "EC_L3": "EC_L2"}.get(layer)
+            if required_layer in state.get("acquisition_pending_layers", []):
+                coverage = self.acquisition_coverage(state, required_layer)
+                raise ValueError(
+                    f"读取配置尚未覆盖全部 {required_layer} 输入（{coverage['completed']}/{coverage['required']}），请先完成上游重算"
+                )
             if layer == "TB_L2" and "TB_L1" in state["dirty_layers"]:
                 raise ValueError("窗口修订尚未拟合，请先执行 TB L1")
             if (
@@ -601,6 +722,12 @@ class Workbench:
                     ]
                 elif config.get("only"):
                     affected = sorted(set(pending) & set(config["only"]))
+                    if any(
+                        stem.startswith("src_") and not stem.startswith("src_bkg_") for stem in config["only"]
+                    ):
+                        affected = sorted(
+                            set(affected) | {stem for stem in pending if stem.startswith("src_bkg_")}
+                        )
                 elif config["representative"]:
                     scope = self.adapter_for(state).inventory(state["payload"])["representative"]["ec_stems"]
                     affected = sorted(set(pending) & set(scope))
@@ -622,6 +749,7 @@ class Workbench:
                 if config["representative"]
                 else "all",
                 "tb_version": copy.deepcopy(selected if layer.startswith("EC_") else state["tb_version"]),
+                "acquisition": copy.deepcopy(state.get("acquisition")),
                 "error": None,
             }
             if layer == "EC_L3":
@@ -647,10 +775,17 @@ class Workbench:
             if job["layer"] in ("EC_L1", "EC_L2"):
                 self.verify_tb(job["tb_version"])
             # Each attempt has isolated inputs and outputs, including failed attempts.
-            for src in (root / "products").glob("*/*/*/json/*.json"):
-                target = output / src.relative_to(root / "products")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, target)
+            json_layers = {job["layer"]}
+            aggregate_input = {"TB_L2": "TB_L1", "EC_L3": "EC_L2"}.get(job["layer"])
+            if aggregate_input:
+                json_layers.add(aggregate_input)
+            for json_layer in json_layers:
+                for src in (layer_dir(root / "products", state["payload"], json_layer) / "json").glob(
+                    "*.json"
+                ):
+                    target = output / src.relative_to(root / "products")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, target)
             input_layer = {"TB_L1": "TB_L0", "EC_L1": "EC_L0", "EC_L2": "EC_L1"}.get(job["layer"])
             if input_layer:
                 for src in (layer_dir(root / "products", state["payload"], input_layer) / "parquet").glob(
@@ -663,13 +798,14 @@ class Workbench:
             before = {str(p): (digest(p), p.stat().st_mtime_ns) for p in target_dir.rglob("*") if p.is_file()}
             with (job_root / "processor.log").open("w", encoding="utf-8") as log:
                 with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-                    result = self.adapter_for(state).execute(
+                    result = self.adapter_for({**state, "acquisition": job.get("acquisition")}).execute(
                         state["payload"],
                         job["layer"],
                         output,
                         job["config"],
                         Path(job["tb_version"]["path"]) if job.get("tb_version") else None,
                     )
+            result["acquisition"] = job.get("acquisition")
             if job["layer"] == "EC_L3" and job.get("ec_coverage", {}).get("mixed"):
                 result.setdefault("warnings", []).append(job["ec_coverage"]["description"])
                 result["ec_coverage"] = job["ec_coverage"]
@@ -707,6 +843,31 @@ class Workbench:
                 state["generated"][layer] = list(accumulated.values())
                 dirty = set(state["dirty_layers"])
                 dirty.discard(layer)
+                if job.get("acquisition"):
+                    suffix = {
+                        "TB_L0": ".l0.parquet",
+                        "TB_L1": "_fit_results.l1.json",
+                        "EC_L0": ".l0.parquet",
+                        "EC_L1": "_corr.l1.parquet",
+                        "EC_L2": "_fit_results.l2.json",
+                    }.get(layer)
+                    completed = set(state.setdefault("acquisition_products", {}).get(layer, []))
+                    completed.update(
+                        Path(item["path"]).name.removesuffix(suffix)
+                        for item in job["outputs"]
+                        if suffix and item["path"].endswith(suffix)
+                    )
+                    if layer in ("TB_L2", "EC_L3"):
+                        completed.add("aggregate")
+                    state["acquisition_products"][layer] = sorted(completed)
+                    coverage = self.acquisition_coverage(state, layer)
+                    pending = set(state.get("acquisition_pending_layers", []))
+                    if coverage["current"]:
+                        pending.discard(layer)
+                    else:
+                        dirty.add(layer)
+                    state["acquisition_pending_layers"] = sorted(pending)
+                    job["acquisition_coverage"] = coverage
                 if layer == "TB_L1":
                     fitted_stems = {
                         Path(a["path"]).name.removesuffix("_fit_results.l1.json")
@@ -743,6 +904,41 @@ class Workbench:
                 if layer.startswith("TB_") and state.get("tb_binding") == "pinned":
                     affected.difference_update(("EC_L1", "EC_L2", "EC_L3"))
                 dirty.update(affected)
+                if job.get("acquisition"):
+                    suffix = {
+                        "TB_L0": ".l0.parquet",
+                        "EC_L0": ".l0.parquet",
+                        "EC_L1": "_corr.l1.parquet",
+                    }.get(layer)
+                    stems = {
+                        Path(item["path"]).name.removesuffix(suffix)
+                        for item in job["outputs"]
+                        if suffix and item["path"].endswith(suffix)
+                    }
+                    rows = state["inventory"]["raw"]["reading_preview"]["rows"]
+                    energy_keys = {
+                        f"{row['energy_keV']:g}keV" if row["kind"] == "xray" else f"src_{row['source']}"
+                        for row in rows
+                        if row["stem"] in stems and row["kind"] in ("xray", "source")
+                    }
+                    if any(row["kind"] == "background" and row["stem"] in stems for row in rows):
+                        energy_keys.update(f"src_{row['source']}" for row in rows if row["kind"] == "source")
+                    subsets = {"TB_L1": stems} if layer == "TB_L0" else {}
+                    if layer == "EC_L0":
+                        subsets["EC_L1"] = stems
+                    if layer in ("EC_L0", "EC_L1"):
+                        subsets["EC_L2"] = energy_keys
+                    pending = set(state.get("acquisition_pending_layers", []))
+                    for downstream_layer in affected:
+                        completed = set(state["acquisition_products"].get(downstream_layer, []))
+                        state["acquisition_products"][downstream_layer] = (
+                            sorted(completed - subsets[downstream_layer])
+                            if downstream_layer in subsets
+                            else []
+                        )
+                        if not self.acquisition_coverage(state, downstream_layer)["current"]:
+                            pending.add(downstream_layer)
+                    state["acquisition_pending_layers"] = sorted(pending)
                 state["dirty_layers"] = sorted(dirty)
                 if layer == "TB_L2":
                     files = [o for o in job["outputs"] if o["path"].endswith("_TB.l2.json")]
@@ -988,6 +1184,7 @@ class Workbench:
                 "input": input_text,
                 "output": output_text,
                 "dependencies": DEPENDENCIES[layer],
+                "acquisition_coverage": self.acquisition_coverage(state, layer),
             }
             if layer == "EC_L1":
                 stages[layer]["tb_dependency"] = self.selected_tb(state)
@@ -1023,6 +1220,13 @@ class Workbench:
             ec_coverage=self.ec_coverage(state),
             scientific_notes=[
                 *state.get("import_warnings", []),
+                *(
+                    [
+                        "当前启用试算独立读取标准；历史图表可能包含配置范围外的工况。新 TB L2 / EC L3 聚合只使用当前映射范围的产物，须先完成这些输入的重算。"
+                    ]
+                    if state.get("acquisition")
+                    else []
+                ),
                 "EC L3 现行处理器采用 E=f(ADC) 全局拟合（low/high 同系数）；wiki 规定分段 ADC=f(E)。本 Demo 保留现行算法，系数不可直接按 wiki 方向使用。",
                 "L0 CRC sanity 需单独检查；处理完成不等于 CRC 或 schema 校验通过。",
                 "代表样例只重算所示工况/能量；其余点来自明确导入的历史 JSON，EC L3 可能混合历史能峰。",

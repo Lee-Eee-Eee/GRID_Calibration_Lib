@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -24,7 +24,7 @@ def write_json(path: Path, data: Any, ensure_parent: bool = True) -> None:
 
 def read_json(path: Path) -> Any:
     """读取JSON文件"""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -32,13 +32,15 @@ def write_parquet(
     path: Path,
     df: pd.DataFrame,
     ensure_parent: bool = True,
-    metadata: Optional[Dict[str, Any]] = None,
-    meta_key: Optional[str] = None,
+    metadata: dict[str, Any] | None = None,
+    meta_key: str | None = None,
+    schema_metadata: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """写入 Parquet 文件，可选写入 JSON metadata 到 schema metadata。
 
     当 ``metadata`` 与 ``meta_key`` 均非 None 时，metadata 会以 ``meta_key``
-    为键写入 parquet 的 schema metadata。
+    为键写入 parquet 的 schema metadata。``schema_metadata`` 可同时写入
+    acquisition 等独立 provenance 键，不改变 hk_data 的科学格式。
     """
     if ensure_parent:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,7 +49,7 @@ def write_parquet(
         import pyarrow as pa
         import pyarrow.parquet as pq
     except ImportError as exc:
-        if metadata is not None:
+        if metadata is not None or schema_metadata:
             raise RuntimeError("pyarrow is required for parquet metadata writing") from exc
         if ensure_parent:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,10 +57,15 @@ def write_parquet(
         return
 
     table = pa.Table.from_pandas(df, preserve_index=False)
-    if metadata is not None and meta_key is not None:
-        encoded = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
+    if (metadata is not None and meta_key is not None) or schema_metadata:
         current = dict(table.schema.metadata or {})
-        current[meta_key.encode("utf-8")] = encoded
+        extra = dict(schema_metadata or {})
+        if metadata is not None and meta_key is not None:
+            if meta_key in extra:
+                raise ValueError(f"重复的 Parquet metadata 键: {meta_key}")
+            extra[meta_key] = metadata
+        for key, value in extra.items():
+            current[key.encode("utf-8")] = json.dumps(value, ensure_ascii=False).encode("utf-8")
         table = table.replace_schema_metadata(current)
 
     pq.write_table(table, path, compression="snappy")
@@ -69,7 +76,7 @@ def read_parquet(path: Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def read_parquet_metadata(path: Path, meta_key: Optional[str] = None) -> Dict[str, Any]:
+def read_parquet_metadata(path: Path, meta_key: str | None = None) -> dict[str, Any]:
     """读取 Parquet schema metadata 中以 ``meta_key`` 保存的 JSON metadata。
 
     若 ``meta_key`` 为 None 或未找到，返回空 dict。

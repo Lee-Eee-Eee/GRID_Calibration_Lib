@@ -124,7 +124,11 @@ class DatasetCatalog:
         source_name = str(dataset.get("source_payload") or dataset.get("payload") or "")
         raw_candidates = self._raw_sources(raw)
         product_candidates = self._product_sources(product)
-        if raw and len(raw_candidates) != 1:
+        if raw and not raw_candidates:
+            # Explicitly selected future layouts are configured in the reading
+            # profile; discovery need not assume today's subdirectory names.
+            pass
+        elif raw and len(raw_candidates) != 1:
             matches = [item for item in raw_candidates if _key(item.name) == _key(source_name)]
             if len(matches) != 1:
                 raise ValueError(
@@ -172,7 +176,7 @@ class DatasetCatalog:
         raws = self._raw_sources(raw_root)
         products = self._product_sources(product_root)
         if raw_dir and not raws:
-            raise ValueError("原始数据目录中未发现 Temp_Vbias、X、X_new 或 source 子目录")
+            raws = [raw_root]
         if product_dir and not products:
             raise ValueError(
                 "产品目录中未发现 tb/ec 分层产物；可选择 products 根目录、载荷目录或已有试算目录"

@@ -102,6 +102,12 @@ function renderStage() {
   const hasCrcFailure = validation?.files?.some((item) => !item.valid && /crc/i.test(item.details || ""));
   $("validation-detail").textContent = validation ? `${validation.passed ?? 0} / ${validation.total ?? 0} 文件通过${hasCrcFailure ? " · CRC 检查未通过" : ""} · 详见运行记录` : "计算与校验分别记录；历史存在不代表规范通过";
   $("stage-counts").textContent = `历史 ${stage.history_count ?? 0} · 本试算 ${stage.current_count ?? 0}`;
+  const acquisition = state.run.acquisition, acquisitionCoverage = stage.acquisition_coverage, acquisitionPending = (state.run.acquisition_pending_layers || []).includes(layer.id), acquisitionIndicator = $("acquisition-indicator");
+  acquisitionIndicator.hidden = !acquisition;
+  acquisitionIndicator.className = `badge ${acquisitionPending ? "stale" : acquisitionCoverage?.current ? "succeeded" : "neutral"}`;
+  acquisitionIndicator.textContent = acquisition ? `读取 v${acquisition.revision}${acquisitionCoverage ? ` · 已更新 ${acquisitionCoverage.completed} / ${acquisitionCoverage.required}` : ""}${acquisitionPending ? " · 待更新" : ""}` : "";
+  acquisitionIndicator.title = acquisition ? `读取配置 SHA-256 ${acquisition.sha256 || "未知"}${acquisitionCoverage?.missing?.length ? `\n待更新输入：${acquisitionCoverage.missing.join(", ")}` : ""}` : "";
+  $("acquisition-settings").title = acquisition ? `读取配置 v${acquisition.revision} · ${(acquisition.sha256 || "").slice(0, 10)}` : "选择或修改本载荷的 XML、文件规则与物理标签读取方式";
   $("tb-analysis").hidden = false;
   $("stage-analysis").hidden = true;
   configureLayerPanels();
@@ -413,7 +419,7 @@ async function loadEcSpectrum() {
 function windowShapes(lo, hi) { if (!(hi > lo)) return []; return [{ type: "rect", xref: "x", yref: "paper", x0: lo, x1: hi, y0: 0, y1: 1, fillcolor: "rgba(36,87,167,0.045)", line: { width: 0 }, layer: "below" }, ...[lo, hi].map((value) => ({ type: "line", xref: "x", yref: "paper", x0: value, x1: value, y0: 0, y1: 1, line: { color: "#6b84a6", width: 1, dash: "dash" } }))]; }
 function renderRunBadge() { const hasResult = state.run?.jobs?.some((job) => normalizedStatus(job.status) === "succeeded"); $("run-state").textContent = state.loading ? "载入中" : !state.run ? "尚未创建试算" : state.busy ? "处理器运行中" : state.dirty ? "窗口未保存" : hasResult ? "修订与结果已保存" : "配置已保存"; $("run-state").className = `badge ${state.busy ? "running" : state.dirty ? "stale" : "neutral"}`; }
 function updateExcludedButton() { const excluded = isExcluded(state.point); $("toggle-excluded").textContent = excluded ? "恢复此点" : "屏蔽此点"; $("toggle-excluded").className = `button${excluded ? "" : " danger"}`; $("toggle-excluded").disabled = !state.point || state.busy; }
-function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit-tb", "save-run", "new-run", "dataset-settings", "run-select", "payload"].forEach((id) => { $(id).disabled = busy || (!state.run && !["new-run", "dataset-settings", "payload"].includes(id)); }); ["fit-spectrum", "window-lo", "window-hi"].forEach((id) => { $(id).disabled = busy || !state.spectrum; }); $("apply-tb-version").disabled = busy || !$("tb-version-select").value; $("channel").disabled = state.loading; $("point-select").disabled = state.loading || busy; updateExcludedButton(); renderRunBadge(); }
+function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit-tb", "save-run", "new-run", "dataset-settings", "acquisition-settings", "run-select", "payload"].forEach((id) => { $(id).disabled = busy || (!state.run && !["new-run", "dataset-settings", "payload"].includes(id)); }); ["fit-spectrum", "window-lo", "window-hi"].forEach((id) => { $(id).disabled = busy || !state.spectrum; }); $("apply-tb-version").disabled = busy || !$("tb-version-select").value; $("channel").disabled = state.loading; $("point-select").disabled = state.loading || busy; updateExcludedButton(); renderRunBadge(); }
 
 async function resizeCharts() {
   if (!window.Plotly) return;
@@ -838,6 +844,150 @@ async function runPipeline() {
 }
 
 function handleError(action) { return async (...args) => { try { await action(...args); } catch (error) { messageError(error); } }; }
+const acquisitionDraft = { profile: null, presets: [], revision: null, sha256: null, previewFingerprint: null, previewValid: false, busy: false, changed: false, runId: null };
+const acquisitionFieldLabels = { channel: "通道字段", max: "幅度最大值字段", base: "基线字段", utc: "时间戳字段（按逗号列出）", crc: "CRC 字段", ccm: "电流监测字段", temp: "温度字段（{channel} 为通道）", bias: "偏压字段（{channel} 为通道）" };
+const acquisitionTransformLabels = { base_divisor: "基线除数", ccm_divisor: "电流归一化除数", temp_scale: "温度比例", temp_offset: "温度偏移 / °C", bias_scale: "偏压比例", bias_offset: "偏压偏移 / V", tail_samples: "末尾稳定工况样本数", stable_bias_min: "稳定偏压下限 / V" };
+const acquisitionMultipacketLabels = { event_multi_evt: "事件多包数量", event_multi_step: "事件多包步长", hk_multi_evt: "遥测多包数量", hk_multi_step: "遥测多包步长" };
+const acquisitionManifestColumns = ["event", "hk", "kind", "channel", "energy_keV", "peak_energies_keV", "source", "exposure_minutes", "temp", "bias"];
+const acquisitionRuleColumns = ["kind", "directory", "event_regex", "hk_regex", "metadata_regex", "prefer_suffix"];
+function acquisitionCopy(value) { return JSON.parse(JSON.stringify(value)); }
+function acquisitionStatus(text, error = false) { $("acquisition-status").textContent = text; $("acquisition-status").className = error ? "profile-error" : ""; }
+function acquisitionError(error) { acquisitionStatus(error.message || String(error), true); }
+function acquisitionMarkChanged() { if (!acquisitionDraft.profile) return; acquisitionDraft.changed = true; acquisitionDraft.previewValid = false; $("save-acquisition").disabled = true; acquisitionStatus("草稿已修改。预览并校验后可保存。仅影响本试算。"); }
+function acquisitionSetBusy(busy) { acquisitionDraft.busy = busy; for (const id of ["preview-acquisition", "load-acquisition-preset", "load-event-xml", "load-hk-xml", "use-event-xml-preset", "use-hk-xml-preset", "choose-event-xml-file", "choose-hk-xml-file"]) $(id).disabled = busy || (id === "preview-acquisition" && !acquisitionDraft.profile); $("save-acquisition").disabled = busy || !acquisitionDraft.previewValid; $("acquisition-dialog").setAttribute("aria-busy", String(busy)); }
+function acquisitionShowTab(tab) { for (const name of ["xml", "metadata", "preview"]) { const active = tab === name; $("acquisition-tab-" + name).classList.toggle("active", active); $("acquisition-tab-" + name).setAttribute("aria-selected", String(active)); $("acquisition-panel-" + name).hidden = !active; } $("acquisition-dialog").querySelector(".acquisition-scroll").scrollTop = 0; }
+function acquisitionNumber(id, nullable = false) { const raw = $(id).value.trim(); if (raw === "" && nullable) return null; const n = Number(raw); if (raw === "" || !Number.isFinite(n)) throw new Error(`请填写有效数值：${$(id).closest("label")?.firstChild?.textContent || id}`); return n; }
+function acquisitionFormField(holder, key, label, value, numeric = false) { const field = node("label", "", label), input = node("input"); input.id = "profile-" + key; input.type = numeric ? "number" : "text"; if (numeric) input.step = "any"; input.value = Array.isArray(value) ? value.join(", ") : value ?? ""; field.append(input); holder.append(field); }
+function acquisitionRemoveButton(row, label) { const cell = node("td"), button = node("button", "profile-remove-row", "×"); button.type = "button"; button.setAttribute("aria-label", label); button.addEventListener("click", () => { row.remove(); acquisitionMarkChanged(); }); cell.append(button); row.append(cell); }
+function acquisitionKindInput(value) { const input = node("select"); for (const [key, label] of [["tb", "TB 工况"], ["xray", "X 射线"], ["source", "放射源"], ["background", "本底"]]) input.append(new Option(label, key)); input.value = value || "tb"; return input; }
+function acquisitionAppendManifest(item = {}) {
+  const row = node("tr"); row._profileOriginal = acquisitionCopy(item);
+  for (const key of acquisitionManifestColumns) { const cell = node("td"), input = key === "kind" ? acquisitionKindInput(item[key]) : node("input"); input.dataset.key = key; input.setAttribute("aria-label", key); if (key !== "kind") { input.value = Array.isArray(item[key]) ? item[key].join(", ") : item[key] ?? ""; if (["channel", "energy_keV", "exposure_minutes", "temp", "bias"].includes(key)) { input.type = "number"; input.step = key === "channel" ? "1" : "any"; } } cell.append(input); row.append(cell); }
+  acquisitionRemoveButton(row, "删除文件配对"); $("profile-manifest-rows").append(row);
+}
+function acquisitionAppendRule(item = {}) {
+  const row = node("tr"); row._profileOriginal = acquisitionCopy(item);
+  for (const key of acquisitionRuleColumns) { const cell = node("td"), input = key === "kind" ? acquisitionKindInput(item[key]) : key.endsWith("regex") ? node("textarea") : node("input"); input.dataset.key = key; input.setAttribute("aria-label", key); input.value = item[key] ?? ""; input.spellcheck = false; cell.append(input); row.append(cell); }
+  acquisitionRemoveButton(row, "删除匹配规则"); $("profile-rule-rows").append(row);
+}
+function acquisitionAppendSource(item = {}) {
+  const row = node("tr"); row._profileOriginal = acquisitionCopy(item);
+  for (const key of ["name", "aliases", "energies_keV"]) { const cell = node("td"), input = node("input"); input.dataset.key = key; input.setAttribute("aria-label", key); input.value = Array.isArray(item[key]) ? item[key].join(", ") : item[key] ?? ""; cell.append(input); row.append(cell); }
+  acquisitionRemoveButton(row, "删除发射源"); $("profile-source-rows").append(row);
+}
+function acquisitionUpdateModes() {
+  const mode = $("profile-condition-mode").value, manual = $("profile-discovery-mode").value === "manifest";
+  $("profile-manifest-section").hidden = !manual; $("profile-rules-section").hidden = manual;
+  for (const id of ["profile-condition-temp", "profile-condition-bias"]) $(id).disabled = mode !== "fixed";
+  for (const id of ["profile-condition-temp-scale", "profile-condition-bias-scale"]) $(id).disabled = mode !== "filename";
+  const notes = { hk: "当前使用 HK 实测：原始温度、偏压经字段映射与比例换算后用于计算。文件名工况仅作为标称值。", filename: "显式采用文件名标称工况：在规则的工况表达式中提取 temp / bias，并应用提取比例。请核对预览后运行。", manifest: "显式采用映射表工况：在每行填写温度 / 偏压。请同时选择“逐文件映射表”并确保所需值完整。", fixed: "显式采用固定工况：本次所有输入使用上方温度 / 偏压，替代 HK 测量值。" };
+  $("profile-condition-help").textContent = notes[mode] || "";
+}
+function acquisitionRenderProfile(profile) {
+  acquisitionDraft.profile = acquisitionCopy(profile); const parser = profile.parser || {}, conditions = parser.conditions || {}, xml = profile.xml || {}, discovery = profile.discovery || {};
+  for (const role of ["event", "hk"]) { $(role + "-xml-path").value = xml[role]?.source_path || ""; $(role + "-xml-text").value = xml[role]?.text || ""; $(role + "-xml-status").textContent = xml[role]?.imported_name ? `浏览器导入 · ${xml[role].imported_name}` : xml[role]?.text ? "已载入 XML 快照" : "未载入"; const select = clear($(role + "-xml-preset")); for (const preset of acquisitionDraft.presets) select.append(new Option(preset.label || preset.id, preset.id)); if (!select.options.length) select.append(new Option("无内置 XML 预设", "")); }
+  $("profile-event-tag").value = parser.event_tag || ""; $("profile-hk-tag").value = parser.hk_tag || ""; $("profile-endian").value = parser.endian || "MSB";
+  const fields = clear($("profile-fields")); for (const [key, label] of Object.entries(acquisitionFieldLabels)) acquisitionFormField(fields, "field-" + key, label, parser.fields?.[key]);
+  const transforms = clear($("profile-transforms")); for (const [key, label] of Object.entries(acquisitionTransformLabels)) acquisitionFormField(transforms, "transform-" + key, label, parser.transform?.[key], true);
+  const multi = clear($("profile-multipacket")); for (const [key, label] of Object.entries(acquisitionMultipacketLabels)) acquisitionFormField(multi, key, label, parser[key], true);
+  $("profile-condition-mode").value = conditions.mode || "hk"; for (const key of ["temp", "bias", "temp_scale", "bias_scale"]) $("profile-condition-" + key.replaceAll("_", "-")).value = conditions[key] ?? (key.endsWith("_scale") ? 1 : "");
+  $("profile-discovery-mode").value = discovery.mode || "rules";
+  clear($("profile-manifest-rows")); for (const item of discovery.manifest || []) acquisitionAppendManifest(item);
+  clear($("profile-rule-rows")); for (const item of discovery.rules || []) acquisitionAppendRule(item);
+  clear($("profile-source-rows")); for (const item of discovery.sources || []) acquisitionAppendSource(item);
+  acquisitionUpdateModes(); acquisitionDraft.previewFingerprint = null; acquisitionDraft.previewValid = false; $("save-acquisition").disabled = true;
+  clear($("acquisition-preview-messages")); clear($("acquisition-preview-results")).append(node("p", "empty-list", "尚未预览当前草稿。")); $("acquisition-preview-summary").textContent = "修改配置后点击“预览与校验”";
+}
+function acquisitionReadProfile() {
+  const profile = acquisitionCopy(acquisitionDraft.profile), parser = profile.parser ||= {}; profile.xml ||= {};
+  for (const role of ["event", "hk"]) profile.xml[role] = { ...(profile.xml[role] || {}), source_path: $(role + "-xml-path").value.trim() || null, text: $(role + "-xml-text").value || null };
+  parser.event_tag = $("profile-event-tag").value.trim(); parser.hk_tag = $("profile-hk-tag").value.trim(); parser.endian = $("profile-endian").value; parser.fields ||= {};
+  for (const key of Object.keys(acquisitionFieldLabels)) { const value = $("profile-field-" + key).value.trim(); parser.fields[key] = key === "utc" ? value.split(",").map((s) => s.trim()).filter(Boolean) : value; }
+  parser.transform ||= {}; for (const key of Object.keys(acquisitionTransformLabels)) parser.transform[key] = acquisitionNumber("profile-transform-" + key);
+  for (const key of Object.keys(acquisitionMultipacketLabels)) parser[key] = acquisitionNumber("profile-" + key, true);
+  const conditionMode = $("profile-condition-mode").value;
+  parser.conditions = { ...(parser.conditions || {}), mode: conditionMode, temp: acquisitionNumber("profile-condition-temp", true), bias: acquisitionNumber("profile-condition-bias", true), temp_scale: acquisitionNumber("profile-condition-temp-scale"), bias_scale: acquisitionNumber("profile-condition-bias-scale") };
+  if (conditionMode === "fixed" && (parser.conditions.temp === null || parser.conditions.bias === null)) throw new Error("固定工况需要填写温度和偏压。");
+  profile.discovery ||= {}; profile.discovery.mode = $("profile-discovery-mode").value;
+  profile.discovery.manifest = [...$("profile-manifest-rows").rows].map((row) => { const item = { ...row._profileOriginal }; for (const input of row.querySelectorAll("[data-key]")) { const raw = input.value.trim(), key = input.dataset.key; if (!raw) { delete item[key]; continue; } if (["channel", "energy_keV", "exposure_minutes", "temp", "bias"].includes(key)) { if (!Number.isFinite(Number(raw))) throw new Error(`文件映射 ${key} 需要有效数值。`); item[key] = Number(raw); } else if (key === "peak_energies_keV") item[key] = raw.split(",").map((value) => { const n = Number(value.trim()); if (!(n > 0)) throw new Error("映射表的源能线须为正数，使用逗号分隔。"); return n; }); else item[key] = raw; } return item; });
+  profile.discovery.rules = [...$("profile-rule-rows").rows].map((row) => { const item = { ...row._profileOriginal }; for (const input of row.querySelectorAll("[data-key]")) item[input.dataset.key] = input.value.trim() || (input.dataset.key === "metadata_regex" ? null : ""); return item; });
+  profile.discovery.sources = [...$("profile-source-rows").rows].map((row) => { const item = { ...row._profileOriginal }; for (const input of row.querySelectorAll("[data-key]")) { const key = input.dataset.key, raw = input.value.trim(); item[key] = key === "aliases" ? raw.split(",").map((s) => s.trim()).filter(Boolean) : key === "energies_keV" ? raw.split(",").map((s) => s.trim()).filter(Boolean).map((s) => { const value = Number(s); if (!(value > 0)) throw new Error("源能线应填写正数，使用逗号分隔。"); return value; }) : raw; } return item; });
+  return profile;
+}
+async function acquisitionOpen() {
+  if (!state.run || state.busy) return; if (state.dirty) await saveRevision({}, true);
+  acquisitionDraft.runId = state.run.id; acquisitionDraft.changed = false; acquisitionDraft.profile = null; $("acquisition-dialog").showModal(); acquisitionShowTab("xml"); acquisitionSetBusy(true); acquisitionStatus("正在载入本试算的读取配置…");
+  try { const result = await api(runPath("/acquisition")); if (state.run.id !== acquisitionDraft.runId) return; acquisitionDraft.presets = Array.isArray(result.presets) ? result.presets : Object.entries(result.presets || {}).map(([id, preset]) => ({ id, ...preset })); acquisitionDraft.revision = result.revision; acquisitionDraft.sha256 = result.sha256 || result.hash; acquisitionRenderProfile(result.profile); $("acquisition-identity").textContent = `${state.run.payload} · ${state.run.id}`; $("acquisition-version").textContent = `${result.revision ? `版本 ${typeof result.revision === "object" ? result.revision.id || result.revision.version || "已保存" : result.revision}` : "默认读取配置"}${acquisitionDraft.sha256 ? ` · SHA-256 ${acquisitionDraft.sha256.slice(0, 10)}` : ""}`; const select = clear($("acquisition-preset")); select.append(new Option("14B · 默认读取配置", "14B"), new Option("15B · 默认读取配置", "15B")); select.value = state.run.dataset?.profile || state.run.payload; if (!select.value) select.value = "14B"; $("acquisition-reason").value = ""; acquisitionStatus("配置已载入。保存前可预览 XML、文件配对及物理标签。"); }
+  catch (error) { acquisitionError(error); }
+  finally { acquisitionSetBusy(false); }
+}
+async function acquisitionLoadPreset() { acquisitionSetBusy(true); try { const result = await api(`/api/acquisition/defaults?profile=${encodeURIComponent($("acquisition-preset").value)}`); acquisitionRenderProfile(result.profile); acquisitionMarkChanged(); acquisitionStatus("默认预设已载入草稿；保存后才应用于本试算。"); } finally { acquisitionSetBusy(false); } }
+async function acquisitionLoadXml(role, preset = false) {
+  const path = $(role + "-xml-path").value.trim(), id = $(role + "-xml-preset").value; if (!(preset ? id : path)) throw new Error(preset ? "请选择 XML 预设。" : "请填写 XML 的完整路径。");
+  acquisitionSetBusy(true); try { const result = await api("/api/xml/read", { method: "POST", body: preset ? { preset: id } : { path } }); $(role + "-xml-text").value = result.text || ""; $(role + "-xml-path").value = result.path || path; if (acquisitionDraft.profile?.xml?.[role]) delete acquisitionDraft.profile.xml[role].imported_name; $(role + "-xml-status").textContent = `${result.tags?.length ?? 0} 个包标签 · ${(result.sha256 || "").slice(0, 8)}`; const tag = $(role === "event" ? "profile-event-tag" : "profile-hk-tag"); if (result.tags?.length === 1) tag.value = result.tags[0]; acquisitionMarkChanged(); } finally { acquisitionSetBusy(false); }
+}
+async function acquisitionImportXmlFile(role) {
+  const input = $(role + "-xml-file"), file = input.files?.[0]; if (!file) return;
+  try {
+    if (!acquisitionDraft.profile) throw new Error("请先载入读取配置。");
+    if (!/\.xml$/i.test(file.name)) throw new Error("请选择 .xml 文件。");
+    if (file.size > 1024 * 1024) throw new Error("XML 文件超过 1 MiB，未导入。原草稿保持不变。");
+    acquisitionSetBusy(true);
+    let text; try { text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()); } catch { throw new Error("XML 无法以 UTF-8 读取，未导入。原草稿保持不变。"); }
+    $(role + "-xml-text").value = text; $(role + "-xml-path").value = "";
+    acquisitionDraft.profile.xml[role].source_path = null; acquisitionDraft.profile.xml[role].imported_name = file.name;
+    $(role + "-xml-status").textContent = `浏览器导入 · ${file.name}`;
+    acquisitionMarkChanged(); acquisitionStatus(`已导入 ${file.name}（${number(file.size / 1024, 1)} KiB）。仅读取文件内容，请预览校验包结构后保存。`);
+  } finally { input.value = ""; acquisitionSetBusy(false); }
+}
+function acquisitionDescribeIssue(issue) { if (typeof issue === "string") return issue; if (!issue) return ""; return [issue.event || issue.path || issue.file || issue.key, issue.message || issue.error || issue.reason || issue.detail || (Array.isArray(issue.paths) ? `${issue.role || "输入"} 匹配 ${issue.paths.length} 个文件：${issue.paths.join(", ")}` : "")].filter(Boolean).join(" · ") || JSON.stringify(issue); }
+function acquisitionRenderPreview(result) {
+  const messages = clear($("acquisition-preview-messages")), errors = result.errors || [], warnings = result.warnings || [];
+  for (const error of errors) messages.append(node("p", "profile-preview-error", acquisitionDescribeIssue(error)));
+  for (const warning of warnings) messages.append(node("p", "profile-preview-warning", acquisitionDescribeIssue(warning)));
+  for (const [key, label] of [["ambiguous", "存在多重匹配"], ["unmatched", "未配对文件"]]) { const items = result[key]; if (Array.isArray(items) && items.length) { const details = node("details", "profile-advanced"), summary = node("summary", "", `${label} · ${items.length}`); details.append(summary); for (const item of items.slice(0, 80)) details.append(node("p", "profile-preview-warning", acquisitionDescribeIssue(item))); messages.append(details); } }
+  const rows = result.rows || []; $("acquisition-preview-summary").textContent = `${rows.length} 组配对 · ${errors.length} 项错误 · ${warnings.length} 项提示`;
+  if (!errors.length) messages.prepend(node("p", "profile-preview-ok", rows.length ? "配置校验通过。请核对文件、能线与工况来源后保存。" : "配置校验通过；当前目录未发现可计算配对，请核对数据目录。"));
+  const holder = clear($("acquisition-preview-results")); if (!rows.length) { holder.append(node("p", "empty-list", "当前规则没有匹配的事件 / HK 配对。")); return; }
+  const table = node("table", "profile-preview-table"), head = node("tr"), conditions = acquisitionReadProfile().parser.conditions; ["输入文件 / HK", "类别 / 输出名称", "能量 / 通道", "源 / 曝光", "标称工况", "计算工况来源"].forEach((label) => head.append(node("th", "", label))); table.append(head);
+  for (const item of rows.slice(0, 500)) {
+    const metadata = item.metadata || item.nominal || {}, get = (key) => item[key] ?? metadata[key], row = node("tr"), files = node("td"), event = get("event") || item.event_path || "—", hk = get("hk") || item.hk_path || "—";
+    for (const path of [event, hk]) { const text = node("span", "profile-preview-file", String(path).split(/[\\/]/).pop()); text.title = String(path); files.append(text); }
+    const kind = { tb: "TB 工况", xray: "X 射线", source: "放射源", background: "本底" }[get("kind")] || get("kind") || "—", category = node("td"); category.append(node("strong", "", kind), node("span", "profile-preview-file", get("stem") || get("output_stem") || ""));
+    const energy = get("energy_keV") ?? get("energy"), peakEnergies = get("peak_energies_keV"), energyLabel = energy !== undefined && energy !== null ? `${number(energy, 3)} keV` : Array.isArray(peakEnergies) && peakEnergies.length ? `${peakEnergies.map((value) => number(value, 3)).join(" / ")} keV` : "—", channel = get("channel"), source = get("source"), exposure = get("exposure_minutes"), temp = get("temp") ?? get("temperature"), bias = get("bias");
+    const actualMode = item.condition_mode || item.conditions?.mode || conditions.mode, modeText = { hk: "HK 实测 · L0 解包后获得", filename: "显式采用文件名标称值", manifest: "显式采用映射表标称值", fixed: `固定 ${number(conditions.temp, 2)} °C / ${number(conditions.bias, 3)} V` }[actualMode] || actualMode;
+    row.append(files, category, node("td", "", `${energyLabel}${channel !== undefined && channel !== null ? ` · CH ${channel}` : ""}`), node("td", "", `${source || "—"}${exposure !== undefined && exposure !== null ? ` · ${number(exposure, 3)} min` : ""}`), node("td", "", temp !== undefined && temp !== null || bias !== undefined && bias !== null ? `${number(temp, 2)} °C / ${number(bias, 3)} V` : "未提供"), node("td", "", modeText)); table.append(row);
+  }
+  holder.append(table); if (rows.length > 500) holder.append(node("p", "muted-text", `预览前 500 / ${rows.length} 组，保存使用全部匹配。`));
+}
+async function acquisitionPreview() {
+  const profile = acquisitionReadProfile(), fingerprint = JSON.stringify(profile); acquisitionSetBusy(true); acquisitionStatus("正在验证 XML 并扫描真实文件配对…"); acquisitionShowTab("preview");
+  try { const result = await api(`/api/runs/${encodeURIComponent(acquisitionDraft.runId)}/acquisition/preview`, { method: "POST", body: { profile } }); acquisitionRenderPreview(result); const current = JSON.stringify(acquisitionReadProfile()); acquisitionDraft.previewFingerprint = fingerprint; acquisitionDraft.previewValid = !(result.errors || []).length && current === fingerprint; acquisitionStatus(acquisitionDraft.previewValid ? "当前草稿已校验，可保存为本试算的读取配置版本。" : current !== fingerprint ? "校验期间草稿已修改，请重新预览。" : "校验发现错误，请修改配置后重新预览。", !acquisitionDraft.previewValid); }
+  finally { acquisitionSetBusy(false); }
+}
+async function acquisitionSave() {
+  const profile = acquisitionReadProfile(); if (!acquisitionDraft.previewValid || JSON.stringify(profile) !== acquisitionDraft.previewFingerprint) { acquisitionMarkChanged(); throw new Error("当前草稿尚未校验，请先预览与校验。"); }
+  acquisitionSetBusy(true); acquisitionStatus("正在保存读取配置与 XML 版本快照…");
+  try { const result = await api(`/api/runs/${encodeURIComponent(acquisitionDraft.runId)}/acquisition`, { method: "PATCH", body: { profile, reason: $("acquisition-reason").value.trim() || "载荷协议与物理标签读取配置修订" } }); if (state.run.id === acquisitionDraft.runId) { state.run = result.run || result; state.surface = null; state.ecOverview = null; state.spectrum = null; state.point = null; renderRun(); await loadSurface(); } acquisitionDraft.changed = false; $("acquisition-dialog").close(); notify("读取配置与 XML 快照已保存。相关层已标记待更新；运行对应 L0 后应用新配置，历史产物继续保留。", "success"); }
+  finally { acquisitionSetBusy(false); }
+}
+function acquisitionParseDelimited(text) {
+  const delimiter = text.split(/\r?\n/, 1)[0].includes("\t") ? "\t" : ",", rows = [], row = []; let field = "", quoted = false;
+  for (let i = 0; i <= text.length; i++) { const c = text[i]; if (c === '"') { if (quoted && text[i + 1] === '"') { field += '"'; i++; } else quoted = !quoted; } else if (!quoted && (c === delimiter || c === "\n" || c === undefined)) { row.push(field.trim()); field = ""; if (c !== delimiter) { if (row.some(Boolean)) rows.push([...row]); row.length = 0; } } else if (c !== "\r" || quoted) field += c; }
+  if (quoted) throw new Error("映射表存在未闭合的引号。"); if (rows.length < 2) throw new Error("请粘贴含列名和至少一行数据的映射表。"); const headers = rows.shift(); if (!headers.includes("event") || !headers.includes("hk") || !headers.includes("kind")) throw new Error("映射表需要 event、hk、kind 列。");
+  return rows.map((values) => Object.fromEntries(headers.map((key, index) => [key, values[index] || ""])));
+}
+$("acquisition-settings").addEventListener("click", () => acquisitionOpen().catch(acquisitionError));
+for (const id of ["close-acquisition", "cancel-acquisition"]) $(id).addEventListener("click", () => { if (!acquisitionDraft.busy) $("acquisition-dialog").close(); });
+$("acquisition-dialog").addEventListener("cancel", (event) => { if (acquisitionDraft.busy) event.preventDefault(); });
+$("acquisition-dialog").addEventListener("input", (event) => { if (event.target.type !== "file" && event.target.id !== "acquisition-reason" && event.target.id !== "profile-manifest-import") acquisitionMarkChanged(); });
+$("acquisition-dialog").addEventListener("change", (event) => { if (["profile-condition-mode", "profile-discovery-mode"].includes(event.target.id)) acquisitionUpdateModes(); if (event.target.type !== "file" && event.target.id !== "acquisition-reason") acquisitionMarkChanged(); });
+for (const tab of ["xml", "metadata", "preview"]) { const button = $("acquisition-tab-" + tab); button.addEventListener("click", () => acquisitionShowTab(tab)); button.addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); const tabs = ["xml", "metadata", "preview"], index = event.key === "Home" ? 0 : event.key === "End" ? 2 : (tabs.indexOf(tab) + (event.key === "ArrowLeft" ? 2 : 1)) % 3; acquisitionShowTab(tabs[index]); $("acquisition-tab-" + tabs[index]).focus(); }); }
+for (const role of ["event", "hk"]) { $("load-" + role + "-xml").addEventListener("click", () => acquisitionLoadXml(role).catch(acquisitionError)); $("use-" + role + "-xml-preset").addEventListener("click", () => acquisitionLoadXml(role, true).catch(acquisitionError)); $("choose-" + role + "-xml-file").addEventListener("click", () => $(role + "-xml-file").click()); $(role + "-xml-file").addEventListener("change", () => acquisitionImportXmlFile(role).catch(acquisitionError)); }
+$("load-acquisition-preset").addEventListener("click", () => acquisitionLoadPreset().catch(acquisitionError));
+$("preview-acquisition").addEventListener("click", () => acquisitionPreview().catch(acquisitionError)); $("save-acquisition").addEventListener("click", () => acquisitionSave().catch(acquisitionError));
+$("profile-add-manifest").addEventListener("click", () => { acquisitionAppendManifest(); acquisitionMarkChanged(); }); $("profile-add-rule").addEventListener("click", () => { acquisitionAppendRule(); acquisitionMarkChanged(); }); $("profile-add-source").addEventListener("click", () => { acquisitionAppendSource(); acquisitionMarkChanged(); });
+$("profile-import-manifest").addEventListener("click", () => { try { const rows = acquisitionParseDelimited($("profile-manifest-import").value); clear($("profile-manifest-rows")); for (const row of rows) acquisitionAppendManifest(row); acquisitionMarkChanged(); acquisitionStatus(`已导入 ${rows.length} 组文件映射，请预览后保存。`); } catch (error) { acquisitionError(error); } });
 $("new-run").addEventListener("click", () => openCreateDialog());
 $("dataset-settings").addEventListener("click", () => openCreateDialog());
 $("create-first-run").addEventListener("click", () => openCreateDialog());

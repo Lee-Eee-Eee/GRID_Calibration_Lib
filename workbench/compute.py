@@ -37,6 +37,7 @@ from ..ec.processors.L3_processor import ECL3Processor
 from ..tb.processors.L0_processor import TBL0Processor
 from ..tb.processors.L1_processor import TBL1Processor
 from ..tb.processors.L2_processor import TBL2Processor
+from .acquisition import discover, validate_profile
 from .datasets import DatasetCatalog, validate_payload
 from .dependencies import tb_package
 
@@ -63,7 +64,7 @@ def _clean(value: Any) -> Any:
 
 
 class ComputeAdapter:
-    def __init__(self, workspace: Path, dataset: dict | None = None):
+    def __init__(self, workspace: Path, dataset: dict | None = None, acquisition: dict | None = None):
         self.workspace = Path(workspace).resolve()
         self.dataset = DatasetCatalog(self.workspace).resolve(dataset) if dataset is not None else None
         self.source_payload = self.dataset["source_payload"] if self.dataset else None
@@ -73,6 +74,10 @@ class ComputeAdapter:
             else self.workspace / "products"
         )
         self.resources = Path(__file__).resolve().parents[1] / "resources"
+        self.acquisition = validate_profile(acquisition) if acquisition is not None else None
+
+    def observations(self, payload):
+        return discover(self._config(payload).raw_root, self.acquisition) if self.acquisition else None
 
     def historical_layer(self, payload: str, layer: str) -> Path:
         """Read-only source layer; an edited output label never renames its input."""
@@ -139,6 +144,33 @@ class ComputeAdapter:
             if self.dataset
             else self.workspace / "14、15B标定数据" / cfg.payload_id
         )
+        if self.acquisition:
+            found = discover(raw, self.acquisition)
+            specs = [
+                SourceSpec(
+                    row["source"],
+                    row["event"],
+                    row["hk"],
+                    row["exposure_minutes"],
+                    list(row["peak_energies_keV"]),
+                )
+                for row in found["rows"]
+                if row["kind"] == "source"
+            ]
+            backgrounds = [row for row in found["rows"] if row["kind"] == "background"]
+            background = backgrounds[0] if backgrounds else None
+            return replace(
+                cfg,
+                payload_name=payload,
+                raw_root=raw,
+                tb_raw_dir=raw,
+                ec_xray_dir=raw,
+                ec_source_dir=raw,
+                source_specs=specs,
+                bkg_event_file=background["event"] if background else "",
+                bkg_hk_file=background["hk"] if background else "",
+                bkg_exposure_minutes=background["exposure_minutes"] if background else 0,
+            )
         xray = raw / (cfg.ec_xray_dir.name if cfg.ec_xray_dir.name in ("X", "X_new") else "X_new")
         if not xray.is_dir():
             xray = next((raw / folder for folder in ("X_new", "X") if (raw / folder).is_dir()), raw / "X")
@@ -185,16 +217,24 @@ class ComputeAdapter:
         cfg = self._config(payload)
         tb = TBL0Processor(payload, self.history)
         ec = ECL0Processor(payload, self.history)
-        tb_pairs = [
-            (event, hk)
-            for event, hk in tb.match_tb_pairs(cfg.tb_raw_dir)
-            if event.stat().st_size and hk.stat().st_size
-        ]
-        ec_pairs = [
-            (event, hk, energy)
-            for event, hk, energy in ec.match_xray_file_pairs(cfg.ec_xray_dir)
-            if event.stat().st_size and hk.stat().st_size
-        ]
+        tb_pairs = (
+            []
+            if self.acquisition
+            else [
+                (event, hk)
+                for event, hk in tb.match_tb_pairs(cfg.tb_raw_dir)
+                if event.stat().st_size and hk.stat().st_size
+            ]
+        )
+        ec_pairs = (
+            []
+            if self.acquisition
+            else [
+                (event, hk, energy)
+                for event, hk, energy in ec.match_xray_file_pairs(cfg.ec_xray_dir)
+                if event.stat().st_size and hk.stat().st_size
+            ]
+        )
         tb_samples = [
             {
                 "stem": event.name.removesuffix(".event.dat"),
@@ -214,6 +254,20 @@ class ComputeAdapter:
             }
             for event, hk, energy in ec_pairs
         ]
+        input_scan = None
+        if self.acquisition:
+            input_scan = discover(cfg.raw_root, self.acquisition)
+
+            def sample(row):
+                return {
+                    **row,
+                    "bytes": Path(row["event"]).stat().st_size,
+                    "energy": f"{row['energy_keV']:g}keV" if row["kind"] == "xray" else None,
+                }
+
+            tb_samples = [sample(row) for row in input_scan["rows"] if row["kind"] == "tb"]
+            ec_samples = [sample(row) for row in input_scan["rows"] if row["kind"] == "xray"]
+            tb_pairs, ec_pairs = tb_samples, ec_samples
         # Choose a complete four-channel energy, never the zero-byte .cut file.
         energy_groups = {}
         for item in ec_samples:
@@ -257,7 +311,8 @@ class ComputeAdapter:
                 "source_files": len(cfg.source_specs),
                 "tb_samples": tb_samples,
                 "ec_samples": ec_samples,
-                "issues": self._source_config(cfg.raw_root)[2],
+                "issues": input_scan["errors"] if input_scan else self._source_config(cfg.raw_root)[2],
+                "reading_preview": input_scan,
             },
             "historical": historical,
             "representative": {
@@ -406,8 +461,11 @@ class ComputeAdapter:
                 records = read_json(path)
                 if isinstance(records, dict):
                     records = records["fit_params"]
-                params = next(record for index, record in enumerate(records)
-                              if int(record.get("channel", index)) == channel)
+                params = next(
+                    record
+                    for index, record in enumerate(records)
+                    if int(record.get("channel", index)) == channel
+                )
                 selected_path = path
                 break
             except (ValueError, KeyError, TypeError, OSError, OverflowError):
@@ -589,6 +647,21 @@ class ComputeAdapter:
         write_json(output, windows)
         return output
 
+    def _verify_acquisition_inputs(self, payload, product_root, layer, selection):
+        if not self.acquisition:
+            return
+        paths = [
+            path
+            for path in (self._layer_dir(product_root, payload, layer) / "parquet").glob("*.parquet")
+            if selection is None or _stem(path.name) in selection
+        ]
+        if not paths or (selection is not None and len(paths) < len(selection)):
+            raise ValueError(f"{layer} 输入不完整，请先按当前读取配置重新运行上游层")
+        for path in paths:
+            metadata = read_parquet_metadata(path, "acquisition")
+            if metadata.get("profile_sha256") != self.acquisition.get("_sha256"):
+                raise ValueError(f"{path.name} 使用旧读取标准或缺少配置来源；请先重新运行 {layer}")
+
     def execute(
         self, payload: str, layer: str, product_root: Path, config: dict, tb_path: Path | None = None
     ) -> dict:
@@ -607,6 +680,9 @@ class ComputeAdapter:
             selection = [_stem(item) for item in selection]
         elif representative:
             selection = inventory["representative"]["tb_stems" if layer.startswith("TB_") else "ec_stems"]
+        if self.acquisition and selection is None and layer not in ("TB_L2", "EC_L3"):
+            rows = inventory["raw"]["reading_preview"]["rows"]
+            selection = [row["stem"] for row in rows if (row["kind"] == "tb") == layer.startswith("TB_")]
         if config.get("ec_point_id") and layer in ("EC_L1", "EC_L2"):
             pieces = str(config["ec_point_id"]).split(":")
             if len(pieces) != 5 or pieces[0] != payload or pieces[1] != "ec":
@@ -632,11 +708,17 @@ class ComputeAdapter:
         hydrated = []
         warnings = []
         if layer == "TB_L0":
-            processor = TBL0Processor(payload, product_root)
+            processor = (
+                TBL0Processor(payload, product_root, input_profile=self.acquisition)
+                if self.acquisition
+                else TBL0Processor(payload, product_root)
+            )
             processor.root_dir = self.workspace
+            processor.raw_root = cfg.raw_root
             result = processor.process(cfg.tb_raw_dir, only_stems=selection)
         elif layer == "TB_L1":
             hydrated = self._hydrate(payload, product_root, "TB_L0", selection)
+            self._verify_acquisition_inputs(payload, product_root, "TB_L0", selection)
             windows = self._windows(payload, config, product_root)
             result = TBL1Processor(payload, product_root).process(
                 layout.get_tb_l0_dir(),
@@ -644,18 +726,37 @@ class ComputeAdapter:
                 only_stems=[f"{stem}.l0" for stem in selection] if selection is not None else None,
             )
         elif layer == "TB_L2":
+            if self.acquisition:
+                allowed = {
+                    row["stem"] for row in inventory["raw"]["reading_preview"]["rows"] if row["kind"] == "tb"
+                }
+                for path in (layout.get_tb_l1_dir() / "json").glob("*_fit_results.l1.json"):
+                    if path.name.removesuffix("_fit_results.l1.json") not in allowed:
+                        path.unlink()
             (layout.get_tb_l0_dir() / "parquet").mkdir(parents=True, exist_ok=True)
             result = TBL2Processor(payload, product_root).process(
                 layout.get_tb_l1_dir(), layout.get_tb_l0_dir(), excluded_points=config.get("excluded", [])
             )
             selection = None  # A surface always uses the full current L1 snapshot.
         elif layer == "EC_L0":
-            issues = self._source_config(cfg.raw_root)[2]
+            issues = (
+                discover(cfg.raw_root, self.acquisition)["errors"]
+                if self.acquisition
+                else self._source_config(cfg.raw_root)[2]
+            )
             if issues and not representative and selection is None:
                 raise ValueError("源谱输入配置不完整: " + "; ".join(issues))
-            processor = ECL0Processor(payload, product_root)
+            processor = (
+                ECL0Processor(payload, product_root, input_profile=self.acquisition)
+                if self.acquisition
+                else ECL0Processor(payload, product_root)
+            )
             processor.root_dir = self.workspace
-            if selection is not None and any(item.startswith("src_") for item in selection):
+            if self.acquisition:
+                if issues:
+                    raise ValueError("读取配置的文件配对存在错误: " + "; ".join(issues))
+                result = processor.process(cfg, only_stems=selection)
+            elif selection is not None and any(item.startswith("src_") for item in selection):
                 source_stems = {f"src_{spec.name}_{spec.exposure_minutes}m" for spec in cfg.source_specs}
                 if cfg.bkg_event_file and cfg.bkg_exposure_minutes:
                     source_stems.add(f"src_bkg_{cfg.bkg_exposure_minutes}m")
@@ -701,9 +802,12 @@ class ComputeAdapter:
                         self.historical_layer(payload, "EC_L0") / "parquet",
                     )
                     for path in directory.glob("src_bkg_*.l0.parquet")
+                    if not self.acquisition
+                    or _stem(path.name) == f"src_bkg_{float(cfg.bkg_exposure_minutes):g}m"
                 }
                 selection = sorted(set(selection) | backgrounds)
             hydrated = self._hydrate(payload, product_root, "EC_L0", selection)
+            self._verify_acquisition_inputs(payload, product_root, "EC_L0", selection)
             result = ECL1Processor(payload, product_root).process(cfg, Path(tb_path), only_stems=selection)
         elif layer == "EC_L2":
             if tb_path is None or not Path(tb_path).is_file():
@@ -718,9 +822,12 @@ class ComputeAdapter:
                         self.historical_layer(payload, "EC_L1") / "parquet",
                     )
                     for path in directory.glob("src_bkg_*_corr.l1.parquet")
+                    if not self.acquisition
+                    or _stem(path.name) == f"src_bkg_{float(cfg.bkg_exposure_minutes):g}m"
                 }
                 selection = sorted(set(selection) | backgrounds)
             hydrated = self._hydrate(payload, product_root, "EC_L1", selection)
+            self._verify_acquisition_inputs(payload, product_root, "EC_L1", selection)
             selected_files = [
                 path
                 for path in (layout.get_ec_l1_dir() / "parquet").glob("*_corr.l1.parquet")
@@ -738,7 +845,7 @@ class ComputeAdapter:
             energies = (
                 sorted(
                     {
-                        re.sub(r"^(src_[A-Za-z]+\d*)_\d+m$", r"\1", stem.rsplit("_ch", 1)[0])
+                        re.sub(r"^(src_.+)_\d+(?:\.\d+)?m$", r"\1", stem.rsplit("_ch", 1)[0])
                         for stem in selection
                     }
                 )
@@ -753,9 +860,26 @@ class ComputeAdapter:
                 processor._load_source_windows = window_source._load_source_windows
             result = processor.process(
                 layout.get_ec_l1_dir(),
-                {**EC_PROCESS_PARAMS, "only_energies": energies, "ec_windows": config.get("ec_windows", {})},
+                {
+                    **EC_PROCESS_PARAMS,
+                    "only_energies": energies,
+                    "only_stems": selection,
+                    "ec_windows": config.get("ec_windows", {}),
+                    "background_stem": f"src_bkg_{float(cfg.bkg_exposure_minutes):g}m"
+                    if cfg.bkg_exposure_minutes
+                    else None,
+                },
             )
         else:
+            if self.acquisition:
+                allowed = {
+                    f"{row['energy_keV']:g}keV" if row["kind"] == "xray" else f"src_{row['source']}"
+                    for row in inventory["raw"]["reading_preview"]["rows"]
+                    if row["kind"] in ("xray", "source")
+                }
+                for path in (layout.get_ec_l2_dir() / "json").glob("*_fit_results.l2.json"):
+                    if path.name.removesuffix("_fit_results.l2.json") not in allowed:
+                        path.unlink()
             result = ECL3Processor(payload, product_root).process(
                 layout.get_ec_l2_dir(), {**EC_PROCESS_PARAMS, "ec_excluded": config.get("ec_excluded", [])}
             )
@@ -766,6 +890,7 @@ class ComputeAdapter:
                 )
 
         errors = list(result.get("errors", []))
+        warnings.extend(result.get("warnings", []))
         quality = {}
         directory = self._layer_dir(product_root, payload, layer)
         outputs = []
