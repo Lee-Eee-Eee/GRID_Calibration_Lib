@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,7 @@ class ECL1Processor:
         self,
         config: PayloadConfig,
         tb_l2_json_path: Path,
+        only_stems: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         results: Dict[str, Any] = {
             "payload": self.payload_name,
@@ -56,6 +57,7 @@ class ECL1Processor:
         bkg_re = re.compile(r"^src_bkg_(?P<min>\d+)m\.l0\.parquet$")
 
         source_spec_map: Dict[str, Any] = {}
+        selected = set(only_stems) if only_stems is not None else None
         for spec in config.source_specs:
             source_spec_map[spec.name] = spec
 
@@ -70,7 +72,14 @@ class ECL1Processor:
                 df_bkg = read_parquet(bkg_path)
                 bkg_df_corrected = self._apply_correction(df_bkg, tb_params)
                 bkg_out_path = self.layout.get_ec_l1_parquet(f"{bkg_stem}_corr.l1.parquet")
-                write_parquet(bkg_out_path, bkg_df_corrected, meta_key=None)
+                write_parquet(bkg_out_path, bkg_df_corrected,
+                              metadata={"tb_corrfile": str(tb_l2_json_path.name),
+                                        "tb_params_used": tb_params_used},
+                              meta_key="tb_correction")
+                results["outputs"].append({"stem": bkg_stem, "data_type": "source_bkg",
+                                           "n_pulses": int(len(bkg_df_corrected)),
+                                           "parquet": bkg_out_path.name})
+                results["n_processed"] += 1
                 print(f"EC L1: bkg {bkg_stem}_corr ({len(bkg_df_corrected)} pulses)")
             except Exception as exc:
                 results["errors"].append({"file": str(bkg_path), "error": str(exc)})
@@ -80,6 +89,8 @@ class ECL1Processor:
             if parquet_file.name.startswith("src_bkg_"):
                 continue
             stem = parquet_file.stem.replace(".l0", "")
+            if selected is not None and stem not in selected:
+                continue
 
             src_match = src_re.match(parquet_file.name)
             if src_match:

@@ -56,6 +56,20 @@ uv sync --extra dev
 
 ## 快速开始
 
+### 可操作的本地可视化 Demo
+
+在包含 `calibration_lib/`、原始数据和 `products/` 的工作区根目录运行：
+
+```powershell
+uv venv calibration_lib/.venv --python 3.11
+uv pip install --python calibration_lib/.venv/Scripts/python.exe -r calibration_lib/pyproject.toml --extra workbench --extra dev
+calibration_lib/.venv/Scripts/python.exe -X utf8 -m calibration_lib.workbench.server --workspace . --port 8765
+```
+
+打开 <http://127.0.0.1:8765>。支持两载荷/四通道、七层真实处理、曲面/残差点选下钻、改窗拟合、屏蔽与恢复、TB 新旧对比、试算恢复及显式 EC 依赖。所有新产物和失败尝试保存在 `runs/<run_id>/`，原始数据和历史 products 只读。图表资源由本地 Plotly 提供，无 CDN。
+
+默认“代表样例”会结合历史快照完成操作闭环，**不等于全量重新标定**。计算状态与规范/CRC 检查分开显示。当前 L0 样例 CRC 未通过；现行 EC L3 的拟合方向与 wiki 尚有差异，界面会明确提示。详细操作、数据范围及验收见 [workbench/README.md](workbench/README.md)。
+
 库默认从 `14、15B标定数据/{02,03}/{Temp_Vbias,X,X_new,source}/` 读原始数据，向 `products/{14B,15B}/{tb,ec}/L{0..3}/` 写产物。两个根目录都可以在 [`config/payload_config.py`](config/payload_config.py) 里改。
 
 ### 单层运行

@@ -21,6 +21,15 @@ def res_fit(E, a, b, c):
     return np.sqrt(np.abs(a * E + b * E**2 + c)) / E
 
 
+def _empty_channel_result(channel: int) -> Dict[str, Any]:
+    """Keep unavailable fits explicit and compliant with the documented schema."""
+    result: Dict[str, Any] = {"channel": channel}
+    for name in ("EC_low", "EC_high", "resolution_low", "resolution_high"):
+        result[name] = None
+        result[f"{name}_err"] = [None, None, None]
+    return result
+
+
 class ECL3Processor:
     """EC L3层处理器 - 能量标定与分辨率拟合。每个通道独立。"""
 
@@ -53,19 +62,22 @@ class ECL3Processor:
             for ch in range(4):
                 ch_data_raw = [d for d in fit_data_all if d["channel"] == ch]
                 if not ch_data_raw:
-                    results["calibration_params"][str(ch)] = None
+                    results["calibration_params"][str(ch)] = _empty_channel_result(ch)
+                    results["errors"].append(f"Channel {ch}: no L2 points available")
                     continue
 
                 ch_data = self._filter_quality(ch_data_raw)
                 if not ch_data:
                     print(f"⚠ EC L3 ch{ch}: all {len(ch_data_raw)} points filtered out by quality check")
-                    results["calibration_params"][str(ch)] = None
+                    results["calibration_params"][str(ch)] = _empty_channel_result(ch)
+                    results["errors"].append(f"Channel {ch}: no points passed quality checks")
                     continue
 
                 ch_data = self._filter_monotonic(ch_data)
                 if not ch_data:
                     print(f"⚠ EC L3 ch{ch}: all points removed by monotonic check")
-                    results["calibration_params"][str(ch)] = None
+                    results["calibration_params"][str(ch)] = _empty_channel_result(ch)
+                    results["errors"].append(f"Channel {ch}: no points passed monotonic checks")
                     continue
 
                 n_raw = len(ch_data_raw)
@@ -73,7 +85,9 @@ class ECL3Processor:
                 if n_kept < n_raw:
                     print(f"  EC L3 ch{ch}: kept {n_kept}/{n_raw} points after filtering")
 
-                ch_result = {"channel": ch}
+                # Error vectors remain part of the schema even when a segment
+                # has too few points and its coefficient vector is null.
+                ch_result = _empty_channel_result(ch)
 
                 energies = np.array([d["E"] for d in ch_data], dtype=float)
                 centers = np.array([d["center"] for d in ch_data], dtype=float)

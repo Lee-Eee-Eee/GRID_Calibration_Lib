@@ -1,0 +1,603 @@
+"""Workbench adapters for the library's seven scientific processors.
+
+The workbench stores revisions and provenance separately from the wiki-defined
+scientific files. Historical products are read-only inputs; processors write only
+inside a workspace run. No peak or surface fitting algorithm is implemented here.
+"""
+
+from __future__ import annotations
+
+import copy
+import math
+import shutil
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import numpy as np
+from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
+
+from ..common.utils import DataLayout, read_json, read_parquet, read_parquet_metadata, write_json
+from ..config.payload_config import EC_PROCESS_PARAMS, TB_PROCESS_PARAMS, get_payload_config
+from ..ec.processors.L0_processor import ECL0Processor
+from ..ec.processors.L1_processor import ECL1Processor
+from ..ec.processors.L2_processor import ECL2Processor
+from ..ec.processors.L3_processor import ECL3Processor
+from ..tb.processors.L0_processor import TBL0Processor
+from ..tb.processors.L1_processor import TBL1Processor
+from ..tb.processors.L2_processor import TBL2Processor
+
+LAYERS = ("TB_L0", "TB_L1", "TB_L2", "EC_L0", "EC_L1", "EC_L2", "EC_L3")
+
+
+def _stem(value: str) -> str:
+    return str(value).removesuffix(".parquet").removesuffix(".l0")
+
+
+def _clean(value: Any) -> Any:
+    """JSON has no NaN/Infinity: missing numerical diagnostics become null."""
+    if isinstance(value, dict):
+        return {str(key): _clean(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [_clean(item) for item in value]
+    if isinstance(value, (np.floating, float)):
+        return float(value) if math.isfinite(value) else None
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+class ComputeAdapter:
+    def __init__(self, workspace: Path):
+        self.workspace = Path(workspace).resolve()
+        self.history = self.workspace / "products"
+        self.resources = Path(__file__).resolve().parents[1] / "resources"
+
+    def _config(self, payload: str):
+        cfg = get_payload_config(payload)
+        raw = self.workspace / "14、15B标定数据" / cfg.payload_id
+        return replace(
+            cfg,
+            raw_root=raw,
+            tb_raw_dir=raw / "Temp_Vbias",
+            ec_xray_dir=raw / cfg.ec_xray_dir.name,
+            ec_source_dir=raw / "source",
+        )
+
+    def _layer_dir(self, product_root: Path, payload: str, layer: str) -> Path:
+        kind, level = layer.split("_")
+        return Path(product_root) / payload / kind.lower() / level
+
+    def _assert_output_root(self, product_root: Path) -> None:
+        target = Path(product_root).resolve()
+        runs = (self.workspace / "runs").resolve()
+        if not target.is_relative_to(runs) or target == runs:
+            raise ValueError("New computations must write inside workspace runs/<run_id>/")
+
+    def inventory(self, payload: str) -> dict:
+        cfg = self._config(payload)
+        tb = TBL0Processor(payload, self.history)
+        ec = ECL0Processor(payload, self.history)
+        tb_pairs = [
+            (event, hk)
+            for event, hk in tb.match_tb_pairs(cfg.tb_raw_dir)
+            if event.stat().st_size and hk.stat().st_size
+        ]
+        ec_pairs = [
+            (event, hk, energy)
+            for event, hk, energy in ec.match_xray_file_pairs(cfg.ec_xray_dir)
+            if event.stat().st_size and hk.stat().st_size
+        ]
+        tb_samples = [
+            {
+                "stem": event.name.removesuffix(".event.dat"),
+                "event": str(event),
+                "hk": str(hk),
+                "bytes": event.stat().st_size,
+            }
+            for event, hk in tb_pairs
+        ]
+        ec_samples = [
+            {
+                "stem": f"{energy}_{event.name.split('-')[1]}",
+                "event": str(event),
+                "hk": str(hk),
+                "energy": energy,
+                "bytes": event.stat().st_size,
+            }
+            for event, hk, energy in ec_pairs
+        ]
+        # Choose a complete four-channel energy, never the zero-byte .cut file.
+        energy_groups = {}
+        for item in ec_samples:
+            energy_groups.setdefault(item["energy"], []).append(item)
+        complete = [
+            items
+            for items in energy_groups.values()
+            if {int(item["stem"].rsplit("_ch", 1)[1]) for item in items} == {0, 1, 2, 3}
+        ]
+        chosen = min(complete, key=lambda items: sum(item["bytes"] for item in items)) if complete else []
+        quality_stems = set()
+        for item in tb_samples:
+            l1_path = (
+                self._layer_dir(self.history, payload, "TB_L1")
+                / "json"
+                / f"{item['stem']}_fit_results.l1.json"
+            )
+            if l1_path.exists():
+                records = read_json(l1_path)
+                if (
+                    isinstance(records, list)
+                    and len(records) == 4
+                    and all(record.get("rsquared", 0) >= 0.9 for record in records)
+                ):
+                    quality_stems.add(item["stem"])
+        candidates = [item for item in tb_samples if item["stem"] in quality_stems] or tb_samples
+        representative_tb = min(candidates, key=lambda item: item["bytes"])["stem"] if candidates else None
+        historical = {}
+        for layer in LAYERS:
+            directory = self._layer_dir(self.history, payload, layer)
+            historical[layer] = {
+                "files": len([path for path in directory.rglob("*") if path.is_file()]),
+                **{
+                    kind: len([path for path in (directory / kind).glob("*") if path.is_file()])
+                    for kind in ("json", "parquet", "figures")
+                },
+                "manifest": str(directory / "json" / f"{layer.split('_')[1]}_manifest.json"),
+            }
+        return {
+            "payload": payload,
+            "raw": {
+                "tb_pairs": len(tb_pairs),
+                "ec_xray_pairs": len(ec_pairs),
+                "source_files": len(cfg.source_specs),
+                "tb_samples": tb_samples,
+                "ec_samples": ec_samples,
+            },
+            "historical": historical,
+            "representative": {
+                "tb_stems": [representative_tb] if representative_tb else [],
+                "ec_stems": [item["stem"] for item in chosen],
+                "ec_energies": [chosen[0]["energy"]] if chosen else [],
+            },
+        }
+
+    def points(self, payload: str, product_root: Path) -> list:
+        directory = self._layer_dir(product_root, payload, "TB_L1") / "json"
+        rows = []
+        for path in sorted(directory.glob("*_fit_results.l1.json")):
+            stem = path.name.removesuffix("_fit_results.l1.json")
+            records = read_json(path)
+            if not isinstance(records, list):
+                continue
+            seen = set()
+            for record in records:
+                channel = record.get("channel")
+                if channel not in range(4) or channel in seen:
+                    continue
+                seen.add(channel)
+                l0_path = self._find_l0(payload, product_root, stem)
+                rows.append(
+                    {
+                        **record,
+                        "id": f"{payload}:{stem}:{channel}",
+                        "stem": stem,
+                        "payload": payload,
+                        "gain": record.get("center"),
+                        "l1_path": str(path),
+                        "l0_path": str(l0_path) if l0_path else None,
+                    }
+                )
+        return _clean(rows)
+
+    def _find_l0(self, payload: str, product_root: Path, stem: str) -> Path | None:
+        for root in (Path(product_root), self.history):
+            directory = self._layer_dir(root, payload, "TB_L0") / "parquet"
+            for name in (f"{stem}.l0.parquet", f"{stem}.parquet"):
+                path = directory / name
+                if path.is_file():
+                    return path
+        return None
+
+    def spectrum(self, payload: str, product_root: Path, stem: str, channel: int) -> dict:
+        if channel not in range(4):
+            raise ValueError("Channel must be 0, 1, 2 or 3")
+        record = next(
+            (
+                row
+                for row in self.points(payload, product_root)
+                if row["stem"] == stem and row["channel"] == channel
+            ),
+            None,
+        )
+        if record is None:
+            raise FileNotFoundError(f"No TB L1 record for {stem} ch{channel}")
+        path = self._find_l0(payload, product_root, stem)
+        if path is None:
+            raise FileNotFoundError(f"No real L0 spectrum available for {stem}")
+        frame = read_parquet(path)
+        amp = frame.loc[frame["channel"] == channel, "amp"].to_numpy(dtype=float)
+        if not amp.size:
+            raise ValueError(f"L0 has no events for {stem} ch{channel}")
+        # One-ADC display bins are the same bins used by the existing L1 fitter.
+        upper = min(1200, int(max(420, np.percentile(amp, 99.8) + 40)))
+        hist, edges = np.histogram(amp, bins=np.arange(0, upper + 1, 1))
+        x = (edges[:-1] + edges[1:]) / 2
+        fit_x = x[(x >= record["window_lo"]) & (x <= record["window_hi"])]
+        gaussian = GaussianModel().eval(
+            x=fit_x, amplitude=record["amplitude"], center=record["center"], sigma=record["sigma"]
+        )
+        mode = record["fit_mode"]
+        background = np.zeros_like(fit_x)
+        if mode == "lin + gaus":
+            background = LinearModel().eval(x=fit_x, slope=record["slope"], intercept=record["intercept"])
+        elif mode == "exp + gaus":
+            background = ExponentialModel().eval(
+                x=fit_x, amplitude=record["exp_amplitude"], decay=record["exp_decay"]
+            )
+        elif mode == "quad + gaus":
+            background = QuadraticModel().eval(
+                x=fit_x, a=record["quad_a"], b=record["quad_b"], c=record["quad_c"]
+            )
+        return _clean(
+            {
+                "id": record["id"],
+                "stem": stem,
+                "channel": channel,
+                "x": x,
+                "y": hist,
+                "fit": record,
+                "curve": {
+                    "x": fit_x,
+                    "y": gaussian + background,
+                    "gaussian": gaussian,
+                    "background": background,
+                },
+                "n_events": len(amp),
+                "source_path": str(path),
+                "source": "run" if Path(product_root).resolve() in path.resolve().parents else "historical",
+            }
+        )
+
+    def surface(self, payload: str, product_root: Path, channel: int) -> dict:
+        if channel not in range(4):
+            raise ValueError("Channel must be 0, 1, 2 or 3")
+        paths = sorted((self._layer_dir(product_root, payload, "TB_L2") / "json").glob("*_TB.l2.json"))
+        rows = [point for point in self.points(payload, product_root) if point["channel"] == channel]
+        if not paths:
+            return {"params": None, "points": rows, "grid": None, "diagnostics": {}, "version": None}
+        params = read_json(paths[-1])[channel]
+        if not params or not params.get("G0"):
+            return {
+                "params": params,
+                "points": rows,
+                "grid": None,
+                "diagnostics": {},
+                "version": paths[-1].name,
+            }
+        evaluator = ECL1Processor(payload, product_root)._gain_temp_bias_model
+        manifest_path = self._layer_dir(product_root, payload, "TB_L2") / "json" / "L2_manifest.json"
+        manifest = read_json(manifest_path) if manifest_path.exists() else {}
+        excluded = set(manifest.get("excluded_points", []))
+        finite = []
+        for point in rows:
+            if point.get("temp") is None or point.get("bias") is None or point.get("center") is None:
+                continue
+            prediction = float(evaluator(np.array([point["temp"]]), np.array([point["bias"]]), params)[0])
+            point["predicted"] = prediction
+            point["residual"] = point["center"] - prediction
+            point["excluded"] = point["id"] in excluded
+            point["used"] = (
+                not point["excluded"] and (point.get("rsquared") or 0) >= TBL2Processor.MIN_RSQUARED
+            )
+            finite.append(point)
+        if not finite:
+            return {
+                "params": params,
+                "points": rows,
+                "grid": None,
+                "diagnostics": {},
+                "version": paths[-1].name,
+            }
+        temperatures = np.linspace(min(row["temp"] for row in finite), max(row["temp"] for row in finite), 24)
+        biases = np.linspace(min(row["bias"] for row in finite), max(row["bias"] for row in finite), 24)
+        tt, vv = np.meshgrid(temperatures, biases)
+        gain = evaluator(tt, vv, params)
+        used = [row for row in finite if row["used"]]
+        residuals = np.array([row["residual"] for row in used])
+        gains = np.array([row["center"] for row in used])
+        return _clean(
+            {
+                "params": params,
+                "points": rows,
+                "version": paths[-1].name,
+                "grid": {"temp": temperatures, "bias": biases, "gain": gain},
+                "diagnostics": {
+                    "n_points": len(used),
+                    "n_excluded": len(finite) - len(used),
+                    "rmse": np.sqrt(np.mean(residuals**2)) if used else None,
+                    "mape_percent": np.mean(np.abs(residuals / gains)) * 100 if used else None,
+                    "chisquare": params.get("chisquare"),
+                    "dof": max(len(used) - 5, 1),
+                    "chi2_reduced": params.get("chisquare", 0) / max(len(used) - 5, 1),
+                },
+            }
+        )
+
+    def ec_spectrum(self, payload: str, product_root: Path, layer: str, channel: int) -> dict:
+        """Read an actual raw/corrected EC spectrum without triggering a fit."""
+        if layer not in ("EC_L0", "EC_L1") or channel not in range(4):
+            raise ValueError("EC spectrum requires EC_L0/EC_L1 and channel 0..3")
+        representative = self.inventory(payload)["representative"]["ec_stems"]
+        preferred = next((stem for stem in representative if stem.endswith(f"_ch{channel}")), None)
+        filename = f"{preferred}.l0.parquet" if layer == "EC_L0" else f"{preferred}_corr.l1.parquet"
+        found = None
+        for root in (Path(product_root), self.history):
+            directory = self._layer_dir(root, payload, layer) / "parquet"
+            candidate = directory / filename
+            if not candidate.is_file():
+                candidates = sorted(directory.glob(f"*keV_ch{channel}*.parquet"))
+                candidate = candidates[0] if candidates else None
+            if candidate is not None and candidate.is_file():
+                found = (candidate, "run" if root != self.history else "historical")
+                break
+        if found is None:
+            raise FileNotFoundError(f"No real {layer} spectrum for {payload} ch{channel}")
+        path, source = found
+        frame = read_parquet(path)
+        field = "amp" if layer == "EC_L0" else "amp_corr"
+        values = frame.loc[frame["channel"] == channel, field].to_numpy(dtype=float)
+        values = values[np.isfinite(values)]
+        if not values.size:
+            raise ValueError(f"No finite {field} events in {path.name} ch{channel}")
+        lo = min(0.0, float(np.percentile(values, 0.2)))
+        hi = max(lo + 4.0, float(np.percentile(values, 99.8)))
+        energy = path.name.split("_ch", 1)[0]
+        window = ECL2Processor(payload, product_root)._load_xray_windows().get(energy, {}).get(str(channel))
+        if window:
+            # Focus the display on the existing scientific review window;
+            # overflow events remain counted and explicitly reported below.
+            lo = 0.0
+            hi = min(hi, max(160.0, float(window["hi"]) * 1.5))
+        width = max(4.0, (hi - lo) / 400)
+        counts, edges = np.histogram(values, bins=np.arange(lo, hi + width, width))
+        correction = read_parquet_metadata(path, "tb_correction") if layer == "EC_L1" else {}
+        return _clean(
+            {
+                "x": (edges[:-1] + edges[1:]) / 2,
+                "y": counts,
+                "stem": path.name.removesuffix(".l0.parquet").removesuffix("_corr.l1.parquet"),
+                "channel": channel,
+                "n_events": len(values),
+                "source": source,
+                "source_path": str(path),
+                "path": str(path),
+                "field": field,
+                "tb_corrfile": correction.get("tb_corrfile"),
+                "display_range": [lo, hi],
+                "events_in_display": int(counts.sum()),
+                "events_outside_display": len(values) - int(counts.sum()),
+                "display_note": "Histogram is focused on the configured EC review window; events outside the shown ADC range are counted separately",
+            }
+        )
+
+    def _hydrate(
+        self, payload: str, product_root: Path, layer: str, stems: list[str] | None = None
+    ) -> list[str]:
+        source = self._layer_dir(self.history, payload, layer) / "parquet"
+        target = self._layer_dir(product_root, payload, layer) / "parquet"
+        target.mkdir(parents=True, exist_ok=True)
+        copied = []
+        for path in sorted(source.glob("*.parquet")):
+            if stems is not None and _stem(path.name) not in stems:
+                continue
+            destination = target / path.name
+            if not destination.exists():
+                shutil.copy2(path, destination)
+                copied.append(str(path))
+        return copied
+
+    def _windows(self, payload: str, config: dict, target: Path) -> Path:
+        path = self.resources / f"legacy_fit_windows_config_{payload}.json"
+        windows = copy.deepcopy(read_json(path)) if path.exists() else {}
+        # Older hand-picked windows used '-' while 14B raw files use '_'.
+        for key, value in list(windows.items()):
+            windows.setdefault(key.replace("-", "_"), copy.deepcopy(value))
+            windows.setdefault(key.replace("_", "-"), copy.deepcopy(value))
+        # A run starts from the exact saved historical windows wherever present.
+        for point in self.points(payload, target):
+            windows.setdefault(point["stem"], {})[str(point["channel"])] = {
+                "lo": point["window_lo"],
+                "hi": point["window_hi"],
+                "manual": True,
+            }
+        for stem, channels in config.get("windows", {}).items():
+            for channel, window in channels.items():
+                lo, hi = float(window["lo"]), float(window["hi"])
+                if (
+                    int(channel) not in range(4)
+                    or not all(map(math.isfinite, (lo, hi)))
+                    or lo < 0
+                    or hi > 1200
+                    or hi - lo < 8
+                ):
+                    raise ValueError(
+                        f"Invalid fit window for {stem} ch{channel}: require 0 <= lo < hi <= 1200 and width >= 8"
+                    )
+                windows.setdefault(_stem(stem), {})[str(channel)] = {"lo": lo, "hi": hi, "manual": True}
+        output = target.parent / "workbench-fit-windows.json"
+        write_json(output, windows)
+        return output
+
+    def execute(
+        self, payload: str, layer: str, product_root: Path, config: dict, tb_path: Path | None = None
+    ) -> dict:
+        if layer not in LAYERS:
+            raise ValueError(f"Unknown layer: {layer}")
+        self._assert_output_root(product_root)
+        product_root = Path(product_root)
+        cfg = self._config(payload)
+        layout = DataLayout(product_root, payload)
+        representative = bool(config.get("representative", True))
+        inventory = self.inventory(payload)
+        selection = config.get("only")
+        if selection is not None:
+            selection = [_stem(item) for item in selection]
+        elif representative:
+            selection = inventory["representative"]["tb_stems" if layer.startswith("TB_") else "ec_stems"]
+        hydrated = []
+        warnings = []
+        if layer == "TB_L0":
+            processor = TBL0Processor(payload, product_root)
+            processor.root_dir = self.workspace
+            result = processor.process(cfg.tb_raw_dir, only_stems=selection)
+        elif layer == "TB_L1":
+            hydrated = self._hydrate(payload, product_root, "TB_L0", selection)
+            windows = self._windows(payload, config, product_root)
+            result = TBL1Processor(payload, product_root).process(
+                layout.get_tb_l0_dir(),
+                {**TB_PROCESS_PARAMS, "fit_windows_config": str(windows)},
+                only_stems=[f"{stem}.l0" for stem in selection] if selection is not None else None,
+            )
+        elif layer == "TB_L2":
+            (layout.get_tb_l0_dir() / "parquet").mkdir(parents=True, exist_ok=True)
+            result = TBL2Processor(payload, product_root).process(
+                layout.get_tb_l1_dir(), layout.get_tb_l0_dir(), excluded_points=config.get("excluded", [])
+            )
+            selection = None  # A surface always uses the full current L1 snapshot.
+        elif layer == "EC_L0":
+            processor = ECL0Processor(payload, product_root)
+            processor.root_dir = self.workspace
+            result = processor.process(cfg, only_stems=selection)
+        elif layer == "EC_L1":
+            if tb_path is None or not Path(tb_path).is_file():
+                raise ValueError("EC L1 requires an explicitly selected TB L2 version; run TB L2 first")
+            hydrated = self._hydrate(payload, product_root, "EC_L0", selection)
+            result = ECL1Processor(payload, product_root).process(cfg, Path(tb_path), only_stems=selection)
+        elif layer == "EC_L2":
+            if tb_path is None or not Path(tb_path).is_file():
+                raise ValueError("EC L2 requires the explicitly selected TB L2 dependency")
+            selected_files = [
+                path
+                for path in (layout.get_ec_l1_dir() / "parquet").glob("*_corr.l1.parquet")
+                if selection is None or path.name.removesuffix("_corr.l1.parquet") in selection
+            ]
+            if not selected_files or (selection is not None and len(selected_files) < len(selection)):
+                raise ValueError(
+                    "EC L1 input is incomplete for this scope; compute EC L1 with the selected TB version first"
+                )
+            expected = ECL1Processor(payload, product_root)._load_tb_params(Path(tb_path))
+            for path in selected_files:
+                actual = read_parquet_metadata(path, "tb_correction").get("tb_params_used", {})
+                if any(actual.get(str(ch)) != params for ch, params in expected.items()):
+                    raise ValueError(f"Stale TB dependency in {path.name}; rerun EC L1 before EC L2")
+            energies = (
+                sorted({stem.rsplit("_ch", 1)[0] for stem in selection}) if selection is not None else None
+            )
+            result = ECL2Processor(payload, product_root).process(
+                layout.get_ec_l1_dir(), {**EC_PROCESS_PARAMS, "only_energies": energies}
+            )
+        else:
+            result = ECL3Processor(payload, product_root).process(layout.get_ec_l2_dir(), EC_PROCESS_PARAMS)
+            selection = None
+            if representative:
+                warnings.append(
+                    "L3 uses the full current L2 snapshot, including historical points outside the representative recomputation scope"
+                )
+
+        errors = list(result.get("errors", []))
+        quality = {}
+        directory = self._layer_dir(product_root, payload, layer)
+        outputs = []
+        for item in result.get("outputs", []):
+            for key, kind in (("parquet", "parquet"), ("json", "json"), ("figure", "figures")):
+                if item.get(key):
+                    path = directory / kind / item[key]
+                    if path.is_file() and path.stat().st_size:
+                        outputs.append(str(path))
+                    else:
+                        errors.append(f"Processor reported missing output: {path}")
+        if result.get("output_json"):
+            path = directory / "json" / result["output_json"]
+            if path.is_file() and path.stat().st_size:
+                outputs.append(str(path))
+            else:
+                errors.append(f"Processor reported missing output: {path}")
+        for name in result.get("output_figures", []):
+            path = directory / "figures" / name
+            if path.is_file():
+                outputs.append(str(path))
+        if not outputs:
+            errors.append("Processor produced no scientific output for this attempt")
+        if layer in ("TB_L0", "EC_L0"):
+            import pyarrow.parquet as pq
+
+            crc_files = []
+            for path in map(Path, outputs):
+                if path.suffix != ".parquet":
+                    continue
+                table = pq.read_table(path, columns=["crc_check"])
+                flags = table.column("crc_check").to_numpy(zero_copy_only=False)
+                failed = int(np.count_nonzero(~flags))
+                crc_files.append({"file": path.name, "total": len(flags), "failed": failed})
+                if failed:
+                    warnings.append(
+                        f"CRC quality rejection: {path.name} retains {failed}/{len(flags)} failed crc_check flags from the bundled parser; parsing success does not imply schema/quality acceptance"
+                    )
+            quality = {
+                "crc_check": {"accepted": not any(item["failed"] for item in crc_files), "files": crc_files}
+            }
+        if layer == "TB_L0" and len(result.get("outputs", [])) != result.get("n_files"):
+            errors.append("Not every selected raw TB file was parsed successfully")
+        if layer == "TB_L1":
+            for item in result.get("outputs", []):
+                if item.get("channels_fitted") != 4:
+                    errors.append(f"Incomplete L1 channels for {item['stem']}")
+        if layer == "EC_L2":
+            for item in result.get("outputs", []):
+                records = read_json(directory / "json" / item["json"])
+                if {record.get("channel") for record in records} != {0, 1, 2, 3}:
+                    errors.append(f"Incomplete EC L2 channels for {item['energy']}")
+        if layer == "TB_L2" and any(not params for params in (result.get("fit_params") or [None] * 4)):
+            errors.append("TB surface fit did not produce all four channels")
+        if layer == "EC_L3":
+            for channel in range(4):
+                record = result.get("calibration_params", {}).get(str(channel))
+                if not record or record.get("EC_low") is None:
+                    errors.append(f"No valid energy coefficients for channel {channel}")
+                elif record.get("resolution_low") is None or record.get("resolution_high") is None:
+                    warnings.append(
+                        f"Channel {channel}: insufficient usable points for one resolution segment"
+                    )
+            warnings.append(
+                "Existing L3 algorithm fits E(ADC) globally and shares low/high coefficients; wiki describes segmented ADC(E). Scientific direction is preserved and requires review"
+            )
+        return _clean(
+            {
+                "success": not errors,
+                "errors": errors,
+                "warnings": warnings,
+                "layer": layer,
+                "quality": quality,
+                "payload": payload,
+                "outputs": outputs,
+                "output_paths": outputs,
+                "counts": {
+                    "outputs": len(outputs),
+                    "processed": result.get(
+                        "n_processed", result.get("n_files", len(result.get("outputs", [])))
+                    ),
+                },
+                "scope": {"representative": representative, "only": selection},
+                "hydrated_historical_inputs": hydrated,
+                "tb_dependency": str(tb_path) if layer.startswith("EC_") and tb_path else None,
+                "processor": result,
+                "processor_class": layer.replace("_", "") + "Processor",
+            }
+        )

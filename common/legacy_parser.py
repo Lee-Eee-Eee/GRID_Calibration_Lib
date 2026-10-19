@@ -7,7 +7,7 @@ import contextlib
 import io
 import sys
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -21,12 +21,18 @@ def _find_parser_resource_dir(root_dir: Path) -> Path:
       2) ``1415B_json/homework2`` from the original GRID monorepo (kept as a
          fallback for users who run this code inside that monorepo).
     """
-    internal = root_dir / "calibration_lib" / "resources" / "legacy"
-    if (internal / "hnu_packet.xml").exists() and (internal / "parse_grid_data.py").exists():
-        return internal
+    # Resolve against this installed package before considering workspace fallbacks.
+    for internal in (
+        Path(__file__).resolve().parents[1] / "resources" / "legacy",
+        root_dir / "calibration_lib" / "resources" / "legacy",
+    ):
+        if (internal / "hnu_packet.xml").exists() and (internal / "parse_grid_data.py").exists():
+            return internal
 
     monorepo_fallback = root_dir / "1415B_json" / "homework2"
-    if (monorepo_fallback / "hnu_packet.xml").exists() and (monorepo_fallback / "parse_grid_data.py").exists():
+    if (monorepo_fallback / "hnu_packet.xml").exists() and (
+        monorepo_fallback / "parse_grid_data.py"
+    ).exists():
         return monorepo_fallback
 
     raise FileNotFoundError(
@@ -52,7 +58,7 @@ def _parse_silent(parse_fn, path: Path, data_tag: str, xml_file: Path):
         )[0]
 
 
-def _extract_time_axis(event_data: Dict[str, Any], size: int) -> np.ndarray:
+def _extract_time_axis(event_data: dict[str, Any], size: int) -> np.ndarray:
     for key in ("utc", "utc_time", "timestamp"):
         arr = np.asarray(event_data.get(key, []), dtype=float)
         if arr.size == size:
@@ -67,7 +73,7 @@ def _tail_mean(arr: np.ndarray, n: int = 60) -> float:
     return float(np.mean(tail))
 
 
-def _tail_stats(arr: np.ndarray, n: int = 60) -> Dict[str, float]:
+def _tail_stats(arr: np.ndarray, n: int = 60) -> dict[str, float]:
     if arr.size == 0:
         return {"mean": float("nan"), "std": float("nan"), "n": 0}
     tail = arr[-min(n, arr.size) :]
@@ -85,7 +91,7 @@ def parse_event_hk_to_dataframe(
     event_tag: str,
     hk_tag: str,
     include_per_point_tv: bool,
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """解析单对 event/hk，返回统一 DataFrame 与 metadata。"""
     parser_dir = _ensure_parser_path(root_dir)
 
@@ -126,9 +132,9 @@ def parse_event_hk_to_dataframe(
     else:
         cal_ccm = np.full(n_evt, np.nan, dtype=float)
 
-    temp_by_ch: Dict[int, float] = {}
-    bias_by_ch: Dict[int, float] = {}
-    channel_meta: Dict[str, Dict[str, float]] = {}
+    temp_by_ch: dict[int, float] = {}
+    bias_by_ch: dict[int, float] = {}
+    channel_meta: dict[str, dict[str, float]] = {}
 
     temp = np.full(n_evt, np.nan, dtype=float)
     bias = np.full(n_evt, np.nan, dtype=float)
@@ -231,15 +237,15 @@ def parse_event_hk_to_dataframe(
     return df, metadata
 
 
-def to_hk_data(channel_meta: Dict[str, Any]) -> Dict[str, Any]:
+def to_hk_data(channel_meta: dict[str, Any]) -> dict[str, Any]:
     """将 nested channel_meta 转换为 cali_format wiki 规范的 flat hk_data。
 
     规范要求四个长度为 4 的平铺数值列表：
     ``{"temp": [...], "bias": [...], "temp_err": [...], "bias_err": [...]}``
     """
     return {
-        "temp":     [float(channel_meta[str(c)].get("temp", float("nan")))     for c in range(4)],
-        "bias":     [float(channel_meta[str(c)].get("bias", float("nan")))     for c in range(4)],
-        "temp_err": [float(channel_meta[str(c)].get("temp_err", 0.0))          for c in range(4)],
-        "bias_err": [float(channel_meta[str(c)].get("bias_err", 0.0))          for c in range(4)],
+        "temp": [float(channel_meta[str(c)].get("temp", float("nan"))) for c in range(4)],
+        "bias": [float(channel_meta[str(c)].get("bias", float("nan"))) for c in range(4)],
+        "temp_err": [float(channel_meta[str(c)].get("temp_err", 0.0)) for c in range(4)],
+        "bias_err": [float(channel_meta[str(c)].get("bias_err", 0.0)) for c in range(4)],
     }

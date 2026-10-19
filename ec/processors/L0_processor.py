@@ -48,6 +48,7 @@ class ECL0Processor:
     def process(
         self,
         config: PayloadConfig,
+        only_stems: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         results: Dict[str, Any] = {
             "payload": self.payload_name,
@@ -62,6 +63,10 @@ class ECL0Processor:
         }
 
         pairs = self.match_xray_file_pairs(config.ec_xray_dir)
+        if only_stems is not None:
+            selected = set(only_stems)
+            pairs = [(event, hk, energy) for event, hk, energy in pairs
+                     if f"{energy}_{event.name.split('-')[1]}" in selected]
         results["n_xray_files"] = len(pairs)
 
         for event_path, hk_path, energy_name in pairs:
@@ -91,7 +96,7 @@ class ECL0Processor:
                 results["errors"].append({"file": event_path.name, "error": str(exc)})
                 print(f"Error: {event_path.name} - {exc}")
 
-        if config.source_specs:
+        if config.source_specs and only_stems is None:
             self._process_sources(config, results)
 
         write_json(self.layout.get_ec_l0_json("L0_manifest.json"), results)

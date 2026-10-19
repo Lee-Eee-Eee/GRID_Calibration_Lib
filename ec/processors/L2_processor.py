@@ -127,8 +127,12 @@ class ECL2Processor:
                 print(f"✗ Error: {parquet_file.name} - {exc}")
 
         for energy_key, ch_map in sorted(grouped_by_energy.items(), key=lambda item: self._energy_sort_key(item[0])):
+            selected_energies = cfg.get("only_energies")
+            if selected_energies is not None and energy_key not in selected_energies:
+                continue
             if set(ch_map) != {0, 1, 2, 3}:
                 print(f"⚠ EC L2: {energy_key} - not all 4 channels present, skipping")
+                results["errors"].append({"energy": energy_key, "error": "Requires all four channels"})
                 continue
 
             records: List[Dict[str, Any]] = []
@@ -188,6 +192,8 @@ class ECL2Processor:
                             prev_energy = float(peak_E)
                         except Exception as exc:
                             print(f"⚠ EC L2: {energy_key} ch{ch} peak={peak_E}keV failed: {exc}")
+                            results["errors"].append({"energy": energy_key, "channel": ch,
+                                                       "peak_keV": peak_E, "error": str(exc)})
                             continue
 
                         rec = {
@@ -272,6 +278,7 @@ class ECL2Processor:
 
                 if not records:
                     print(f"⚠ EC L2: {energy_key} - no successful fits")
+                    results["errors"].append({"energy": energy_key, "error": "No successful peak fits"})
                     continue
 
                 json_name = f"{energy_key}_fit_results.l2.json"

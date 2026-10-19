@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ...common.legacy_parser import parse_event_hk_to_dataframe, to_hk_data
 from ...common.utils import DataLayout, get_timestamp, write_json, write_parquet
@@ -38,7 +38,7 @@ class TBL0Processor:
 
         return pairs
 
-    def process(self, raw_dir: Path) -> Dict[str, Any]:
+    def process(self, raw_dir: Path, only_stems: Optional[Iterable[str]] = None) -> Dict[str, Any]:
         """处理 TB L0。
 
         说明:
@@ -46,6 +46,10 @@ class TBL0Processor:
         2. 原先独立 metadata.json 改为写入 parquet schema metadata。
         """
         pairs = self.match_tb_pairs(raw_dir)
+        if only_stems is not None:
+            selected = set(only_stems)
+            pairs = [(event, hk) for event, hk in pairs
+                     if event.name.removesuffix(".event.dat") in selected]
 
         if not pairs:
             raise ValueError(f"No TB data files found in {raw_dir}")
@@ -57,6 +61,7 @@ class TBL0Processor:
             "raw_dir": str(raw_dir),
             "n_files": len(pairs),
             "outputs": [],
+            "errors": [],
             "metadata_in_parquet": True,
         }
 
@@ -86,6 +91,7 @@ class TBL0Processor:
                 print(f"✓ Processed: {stem}")
 
             except Exception as e:
+                results["errors"].append({"file": event_path.name, "error": str(e)})
                 print(f"✗ Error processing {event_path}: {e}")
                 continue
 

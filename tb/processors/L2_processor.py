@@ -1,7 +1,7 @@
 """温度偏压(TB)标定 - L2层处理器。"""
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
@@ -55,6 +55,7 @@ class TBL2Processor:
         self,
         tb_l1_dir: Path,
         tb_l0_dir: Optional[Path] = None,
+        excluded_points: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         l0_dir = tb_l0_dir if tb_l0_dir is not None else self.layout.get_tb_l0_dir()
 
@@ -71,6 +72,10 @@ class TBL2Processor:
 
         try:
             fit_data = self._collect_fit_data(tb_l1_dir, l0_dir)
+            excluded = set(excluded_points or [])
+            results["excluded_points"] = sorted(excluded)
+            fit_data = [row for row in fit_data
+                        if f"{self.payload_name}:{row['file']}:{row['channel']}" not in excluded]
             if not fit_data:
                 raise ValueError("No TB L1/L0 matched data for L2 fit")
 
@@ -82,6 +87,7 @@ class TBL2Processor:
                 ch_data = [d for d in fit_data if d["channel"] == ch]
                 if len(ch_data) < 8:
                     print(f"Channel {ch} has too few data points ({len(ch_data)}) for L2 fit.")
+                    results["errors"].append(f"Channel {ch}: requires at least 8 usable points, got {len(ch_data)}")
                     params_list.append(None)
                     continue
 
