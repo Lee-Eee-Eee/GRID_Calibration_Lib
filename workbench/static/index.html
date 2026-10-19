@@ -3,74 +3,93 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#132c40">
-  <title>GRID · Calibration Workbench</title>
+  <meta name="theme-color" content="#f5f6f7">
+  <title>GRID · 标定工作台</title>
   <link rel="stylesheet" href="/static/workbench.css">
   <script defer src="/static/plotly.min.js"></script>
   <script defer src="/static/workbench.js"></script>
 </head>
 <body>
-  <aside class="sidebar" aria-label="标定流程导航">
-    <a class="brand" href="/" aria-label="GRID 标定工作台首页"><span class="brand-symbol">G<span></span></span><span>GRID<span class="brand-sub">CALIBRATION LAB</span></span></a>
-    <div class="workspace-label">标定工作台 <span class="subtle-tag">LOCAL</span></div>
-    <div class="sidebar-selects">
-      <label for="payload">载荷</label>
-      <select id="payload"><option value="14B">14B · GRID-02</option><option value="15B">15B · GRID-03</option></select>
-      <label for="channel">分析通道</label>
-      <select id="channel"><option value="0">CH 0</option><option value="1">CH 1</option><option value="2">CH 2</option><option value="3">CH 3</option></select>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="GRID 标定工作台首页"><strong>GRID</strong><span class="brand-divider"></span><span>Calibration</span></a>
+    <div class="run-controls">
+      <label for="run-select" class="sr-only">已保存的试算</label>
+      <select id="run-select"><option value="">选择已保存试算</option></select>
+      <button id="new-run" class="button">新建试算</button>
+      <button id="save-run" class="button" disabled>保存修订</button>
     </div>
-    <nav id="stage-nav"></nav>
-    <div class="sidebar-footer"><span class="connection-dot"></span><span id="connection-label">连接本地处理服务</span><small>原始数据与历史产物只读<br>新试算独立保存于 runs/</small></div>
+  </header>
+
+  <aside class="sidebar" aria-label="标定流程导航">
+    <div class="sidebar-title">标定流程 <span class="local-label">LOCAL</span></div>
+    <div class="sidebar-selects">
+      <div><label for="payload">载荷</label><select id="payload"><option value="14B">14B · GRID-02</option><option value="15B">15B · GRID-03</option></select></div>
+      <div><label for="channel">分析通道</label><select id="channel"><option value="0">CH 0</option><option value="1">CH 1</option><option value="2">CH 2</option><option value="3">CH 3</option></select></div>
+    </div>
+    <nav id="stage-nav" aria-label="TB 与 EC 处理步骤"></nav>
+    <div class="sidebar-footer"><div class="connection-line"><span class="connection-dot"></span><span id="connection-label">连接本地处理服务</span></div><p>原始数据与历史产物只读<br>新试算保存于 <code>runs/</code></p></div>
   </aside>
 
   <div class="app-shell">
-    <header class="topbar">
-      <div class="breadcrumb">实验工作区 <span>/</span> 标定复核</div>
-      <div class="run-controls"><label class="sr-only" for="run-select">已保存的试算</label><select id="run-select"><option value="">选择已保存试算</option></select><button id="new-run" class="button small">＋ 新建试算</button><button id="save-run" class="button small" disabled>保存修订</button></div>
-    </header>
     <main>
-      <div class="page-heading"><div><div class="eyebrow">TEMPERATURE · BIAS / ENERGY CALIBRATION</div><h1>标定分析工作台</h1><p>从工况到能谱，追溯每一次拟合。</p></div><div class="run-identity"><span class="badge neutral" id="run-state">尚未创建试算</span><span id="run-identity" class="mono">runs / —</span></div></div>
-
-      <div id="message" class="notice" role="status" aria-live="polite" hidden></div>
-      <section id="empty-state" class="empty-state" hidden><span class="empty-glyph">⌁</span><h2>创建一次独立试算</h2><p>以真实历史数据为起点，复核能谱、调整窗口与重算标定。<br>修订、计算结果和运行记录将保存到独立的 run 目录。</p><button id="create-first-run" class="button primary">创建试算并载入真实数据</button></section>
+      <div class="workspace-heading"><h1>标定复核</h1><span id="run-identity" class="mono">runs / —</span></div>
+      <div class="feedback-bar"><div id="message" class="notice" role="status" aria-live="polite" hidden></div><button id="dismiss-message" aria-label="关闭操作提示" hidden>×</button></div>
+      <section id="empty-state" class="empty-state" hidden><span class="empty-index">GRID / CALIBRATION</span><h2>开始一次标定复核</h2><p>载入真实工况与历史结果，建立独立的修订和计算记录。</p><button id="create-first-run" class="button primary">创建试算并载入真实数据</button><p class="empty-footnote">支持 14B / 15B · TB L0—L2 · EC L0—L3</p></section>
 
       <div id="run-workspace" hidden>
         <section class="stage-card" aria-label="当前处理层">
-          <div class="stage-title-row"><div class="stage-title"><span id="stage-number" class="stage-number">L2</span><div><h2 id="stage-title">TB 曲面拟合</h2><p id="stage-description"></p></div></div><div class="stage-actions"><label class="sr-only" for="run-scope">本次计算范围</label><select id="run-scope"><option value="representative">代表样例</option><option value="full">全部数据</option></select><button id="run-layer" class="button primary">▶ 运行本层</button><button id="run-pipeline" class="button" title="依次实际运行 TB L0–L2、EC L0–L3">运行代表闭环</button></div></div>
-          <div class="stage-meta"><div><span class="meta-label">输入</span><span id="stage-input"></span></div><div><span class="meta-label">输出</span><span id="stage-output"></span></div><div><span class="meta-label">依赖</span><span id="stage-dependency"></span></div><div><span class="meta-label">本次状态</span><span id="stage-status" class="badge neutral">未运行</span></div></div>
-          <div class="stage-validation"><span>产物规范检查</span><span id="validation-status" class="badge neutral">尚未检查</span><span id="validation-detail">计算与校验分别记录</span></div>
-          <div class="provenance-line"><span id="stage-counts"></span><span>历史文件存在 ≠ 本次计算成功</span></div>
+          <div class="stage-title-row">
+            <div class="stage-title"><span id="stage-number" class="stage-number">L2</span><h2 id="stage-title">TB 温度–偏压曲面</h2></div>
+            <div class="stage-actions"><label for="run-scope">计算范围</label><select id="run-scope"><option value="representative">代表样例</option><option value="full">全部数据</option></select><button id="run-layer" class="button primary">运行本层</button><button id="run-pipeline" class="button" title="依次实际运行 TB L0—L2、EC L0—L3">运行代表闭环</button></div>
+          </div>
+          <div class="stage-status-row">
+            <span class="status-pair"><span class="meta-label">计算</span><span id="stage-status" class="badge neutral">未运行</span></span>
+            <span class="status-pair"><span class="meta-label">规范</span><span id="validation-status" class="badge neutral">尚未检查</span></span>
+            <span id="validation-detail" class="validation-detail">计算与校验分别记录</span>
+            <span id="stage-counts" class="stage-counts"></span>
+            <span id="run-state" class="badge neutral">尚未创建试算</span>
+          </div>
+          <details class="stage-contract"><summary>输入、输出与依赖 <span id="stage-description"></span></summary><div class="stage-meta"><div><span class="meta-label">输入</span><span id="stage-input"></span></div><div><span class="meta-label">输出</span><span id="stage-output"></span></div><div><span class="meta-label">依赖</span><span id="stage-dependency"></span></div></div></details>
         </section>
 
         <div id="dependency-banner" class="dependency-banner" hidden></div>
         <section id="tb-analysis" class="analysis-grid">
           <div class="main-analysis">
-            <article class="panel surface-panel"><div class="panel-heading"><div><h3>温度–偏压响应曲面</h3><p id="surface-caption">点击测量点，下钻到对应工况的 L1 能谱</p></div><span id="point-count" class="badge neutral">— 个工况</span></div><div id="surface-chart" class="chart surface-chart" aria-label="温度偏压响应三维图"></div><div class="chart-legend"><span><i class="legend-dot teal"></i>参与拟合</span><span><i class="legend-dot amber"></i>已屏蔽</span><span title="沿用原 TB L2 处理器的 R² ≥ 0.5 质量阈值；不等于人工屏蔽"><i class="legend-dot grey"></i>质量筛除</span><span><i class="legend-line"></i>当前曲面</span><span id="tb-version" class="version-label"></span></div></article>
-            <article class="panel residual-panel"><div class="panel-heading"><div><h3>拟合残差</h3><p>相对偏差 · 点击任一点查看原始谱</p></div><span id="residual-metric" class="metric-inline">—</span></div><div id="residual-chart" class="chart residual-chart" aria-label="各工况相对拟合残差"></div></article>
-            <article class="panel comparison-panel"><div class="panel-heading"><div><h3>参数与结果比较</h3><p>初始历史基线 / 当前试算结果</p></div><button id="refit-tb" class="button small">重新拟合 TB</button></div><div id="parameter-table" class="table-wrap"></div><div id="fit-diagnostics" class="diagnostics"></div></article>
+            <article class="panel surface-panel">
+              <div class="panel-heading"><div><h3>温度–偏压响应</h3><p id="surface-caption">选择测量点，查看对应工况能谱</p></div><span id="point-count" class="badge neutral">— 个工况</span></div>
+              <div id="surface-chart" class="chart surface-chart" aria-label="温度偏压响应三维图"></div>
+              <div class="chart-legend"><span><i class="legend-dot blue"></i>参与拟合</span><span><i class="legend-cross"></i>已屏蔽</span><span title="沿用原 TB L2 处理器的 R² ≥ 0.5 质量阈值"><i class="legend-dot grey"></i>质量筛除</span><span><i class="legend-ring"></i>选中点</span><span id="tb-version" class="version-label"></span></div>
+            </article>
+            <section class="panel secondary-analysis" aria-label="残差与参数比较">
+              <div class="analysis-tabs" role="tablist" aria-label="分析视图"><button id="analysis-tab-residual" role="tab" aria-selected="true" class="analysis-tab active" data-analysis-view="residual">拟合残差 <span id="residual-metric" class="metric-inline">—</span></button><button id="analysis-tab-comparison" role="tab" aria-selected="false" class="analysis-tab" data-analysis-view="comparison">参数比较</button><button id="refit-tb" class="button small">重新拟合 TB</button></div>
+              <div id="residual-panel"><div id="residual-chart" class="chart residual-chart" aria-label="各工况相对拟合残差"></div><div class="plot-caption">相对曲面的偏差 · 点击测量点定位工况</div></div>
+              <div id="comparison-panel" hidden><div id="parameter-table" class="table-wrap"></div><div id="fit-diagnostics" class="diagnostics"></div><div class="plot-caption">初始历史基线与当前试算结果</div></div>
+            </section>
           </div>
 
           <aside class="panel spectrum-panel" aria-label="工况详情与谱拟合">
-            <div class="panel-heading"><div><div class="eyebrow">POINT INSPECTOR</div><h3>L1 能谱复核</h3></div><span id="selected-channel" class="badge teal-badge">CH 0</span></div>
-            <label class="field-label" for="point-select">工况文件</label><select id="point-select" class="full-width"><option value="">选择一个真实工况</option></select>
-            <div id="point-condition" class="condition-row"></div>
-            <div id="spectrum-chart" class="chart spectrum-chart" aria-label="真实 L1 能谱及拟合曲线"></div>
-            <div class="spectrum-legend"><span><i class="legend-dot slate"></i>计数谱</span><span><i class="legend-line"></i>拟合</span><span><i class="legend-line muted"></i>背景</span></div>
-            <div class="window-section"><div class="section-line"><h4>拟合窗口 <span>ADC</span></h4><span id="window-status" class="tiny-text">读取中</span></div><div class="window-fields"><label for="window-lo">下限<input id="window-lo" type="number" step="1" min="0" inputmode="numeric" disabled></label><span>—</span><label for="window-hi">上限<input id="window-hi" type="number" step="1" min="0" inputmode="numeric" disabled></label></div><div class="point-actions"><button id="fit-spectrum" class="button primary" disabled>保存窗口并拟合</button><button id="toggle-excluded" class="button" disabled>屏蔽此点</button></div><p class="help-text">改窗调用原有 L1 处理器，重拟合此工况（四通道）；当前通道使用修订窗口。屏蔽仅影响 TB 曲面拟合。</p></div>
-            <div id="spectrum-params" class="spectrum-params"></div>
-            <div class="note-field"><label for="revision-note">修订说明</label><textarea id="revision-note" rows="2" placeholder="记录改窗或屏蔽原因（可选）"></textarea></div>
+            <div class="panel-heading inspector-heading"><h3>工况能谱</h3><span id="selected-channel" class="badge neutral">CH 0</span></div>
+            <div class="inspector-body">
+              <label class="field-label" for="point-select">工况文件</label><select id="point-select" class="full-width"><option value="">选择一个真实工况</option></select>
+              <div id="point-condition" class="condition-row"></div>
+              <div id="spectrum-chart" class="chart spectrum-chart" aria-label="真实 L1 能谱及拟合曲线"></div>
+              <div class="spectrum-legend"><span><i class="legend-line raw"></i>计数谱</span><span><i class="legend-line fit"></i>峰拟合</span><span><i class="legend-line background"></i>背景</span></div>
+              <div class="window-section"><div class="section-line"><h4>拟合窗口 <span>ADC</span></h4><span id="window-status">读取中</span></div><div class="window-fields"><label for="window-lo">下限<input id="window-lo" type="number" step="1" min="0" inputmode="numeric" disabled></label><span class="range-divider">—</span><label for="window-hi">上限<input id="window-hi" type="number" step="1" min="0" inputmode="numeric" disabled></label></div><div class="point-actions"><button id="fit-spectrum" class="button primary" disabled>保存窗口并拟合</button><button id="toggle-excluded" class="button" disabled>屏蔽此点</button></div><details class="context-help"><summary>拟合与屏蔽说明</summary><p>改窗重拟合此工况的四通道，当前通道使用修订窗口。屏蔽只影响 TB 曲面拟合。</p></details></div>
+              <div id="spectrum-params" class="spectrum-params"></div>
+              <div class="note-field"><label for="revision-note">修订说明</label><textarea id="revision-note" rows="2" placeholder="记录改窗或屏蔽的依据"></textarea></div>
+            </div>
           </aside>
         </section>
 
-        <section id="stage-analysis" class="stage-analysis" hidden><article class="panel stage-overview"><div class="panel-heading"><div><h3 id="stage-overview-title">层级产物</h3><p id="stage-overview-caption"></p></div><span id="ec-version" class="badge neutral"></span></div><div id="stage-flow" class="stage-flow"></div><details id="ec-coverage-details" class="coverage-details"><summary>能峰文件的 TB 依赖与来源</summary><div id="ec-coverage-list" class="table-wrap"></div></details><div id="artifact-preview" class="artifact-preview"><p>选择下方图表产物查看预览。</p></div></article></section>
+        <section id="stage-analysis" class="stage-analysis" hidden><article class="panel stage-overview"><div class="panel-heading"><div><h3 id="stage-overview-title">层级产物</h3><p id="stage-overview-caption"></p></div><span id="ec-version" class="badge neutral"></span></div><div id="stage-flow" class="stage-flow"></div><div id="artifact-preview" class="artifact-preview"><p>选择图表产物查看预览。</p></div><details id="ec-coverage-details" class="coverage-details"><summary>能峰文件的 TB 依赖与来源</summary><div id="ec-coverage-list" class="table-wrap"></div></details></article></section>
 
-        <section class="panel records-panel"><div class="records-tabs" role="tablist"><button id="tab-artifacts" role="tab" aria-selected="true" class="tab active">产物与文件 <span id="artifact-count">0</span></button><button id="tab-jobs" role="tab" aria-selected="false" class="tab">运行记录 <span id="job-count">0</span></button><div class="tabs-tail"><span id="saved-at"></span><button id="refresh-run" class="text-button">刷新</button></div></div><div id="artifacts-content"><div class="artifact-filter"><span>当前层级</span><span class="tiny-text">新产物与历史参考分别标记 · 点击文件名查看</span></div><div id="artifact-list" class="artifact-list"></div></div><div id="jobs-content" hidden><div id="job-list" class="job-list"></div></div></section>
-        <details class="scientific-notes"><summary>算法与校验说明</summary><div id="scientific-notes"></div></details>
+        <details id="records-drawer" class="records-drawer"><summary><span>产物与运行记录</span><span class="drawer-hint">文件、校验详情与处理器日志</span></summary><section id="records-panel" class="records-panel"><div class="records-tabs" role="tablist" aria-label="运行产物"><button id="tab-artifacts" role="tab" aria-selected="true" class="tab active">产物文件 <span id="artifact-count">0</span></button><button id="tab-jobs" role="tab" aria-selected="false" class="tab">运行记录 <span id="job-count">0</span></button><div class="tabs-tail"><span id="saved-at"></span><button id="refresh-run" class="text-button">刷新</button></div></div><div id="artifacts-content"><div class="artifact-filter"><span>当前层级</span><span>历史文件与本次产物分别标记</span></div><div id="artifact-list" class="artifact-list"></div></div><div id="jobs-content" hidden><div id="job-list" class="job-list"></div></div></section></details>
+        <details class="scientific-notes"><summary>算法约定与数据质量说明</summary><div id="scientific-notes"></div></details>
       </div>
     </main>
-    <footer class="page-footer"><span>GRID Calibration Lib</span><span>本地科研工作台 · 计算复用现有处理器 · cali_format 分层产物</span></footer>
+    <footer class="page-footer"><span>GRID Calibration Lib</span><span>历史产物、处理结果与规范检查分别记录</span></footer>
   </div>
 
-  <dialog id="new-run-dialog"><form id="new-run-form"><div class="dialog-title"><h2>新建独立试算</h2><button type="button" id="close-dialog" class="icon-button" aria-label="关闭">×</button></div><p class="muted-text">保留历史结果作为基线；所有修订写入 runs/。</p><label for="new-run-payload">载荷</label><select id="new-run-payload"><option value="14B">14B · GRID-02</option><option value="15B">15B · GRID-03</option></select><label for="new-run-name">试算名称</label><input id="new-run-name" maxlength="80" placeholder="例如：CH0 峰位复核"><div class="dialog-actions"><button type="button" id="cancel-new-run" class="button">取消</button><button type="submit" class="button primary">创建并打开</button></div></form></dialog>
+  <dialog id="new-run-dialog"><form id="new-run-form"><div class="dialog-title"><h2>新建试算</h2><button type="button" id="close-dialog" class="icon-button" aria-label="关闭">×</button></div><p class="muted-text">以历史结果建立基线，修订与计算记录独立保存。</p><label for="new-run-payload">载荷</label><select id="new-run-payload"><option value="14B">14B · GRID-02</option><option value="15B">15B · GRID-03</option></select><label for="new-run-name">试算名称</label><input id="new-run-name" maxlength="80" placeholder="例如：CH0 峰位复核"><div class="dialog-actions"><button type="button" id="cancel-new-run" class="button">取消</button><button type="submit" class="button primary">创建并打开</button></div></form></dialog>
 </body>
 </html>
