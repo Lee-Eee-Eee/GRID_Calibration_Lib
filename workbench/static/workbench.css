@@ -402,3 +402,57 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
   .page-footer > span:last-child { display: none; }
   dialog { width: calc(100% - 32px); padding: 20px; }
 }
+
+/* Dataset inputs and layer-specific scientific inspection. */
+.chart-controls { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+.chart-controls select { font-size: 12px; padding: 4px 24px 4px 7px; max-width: 175px; }
+#ec-detail-mode { padding: 3px 21px 3px 6px; font-size: 12px; margin-left: 7px; max-width: 135px; }
+.dependency-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; background: #fff; border: 1px solid var(--line); border-radius: 3px; padding: 10px 13px; margin-bottom: 12px; font-size: 12px; }
+.dependency-toolbar > label { color: #354653; font-weight: 600; white-space: nowrap; }
+.dependency-toolbar > select { flex: 1; min-width: 160px; max-width: 720px; font: 12px/1.5 Consolas, "Microsoft YaHei", monospace; padding-top: 5px; padding-bottom: 5px; }
+#tb-binding-state { color: var(--secondary); font: 12px/1.5 Consolas, "Microsoft YaHei", monospace; }
+.tb-import { width: 100%; color: var(--secondary); }
+.tb-import summary { cursor: pointer; width: max-content; }
+.tb-import .path-input { margin-top: 9px; max-width: 850px; }
+.tb-import input { flex: 1; font: 12px/1.5 Consolas, "Microsoft YaHei", monospace; }
+.drag-help { font-size: 12px; color: var(--secondary); margin-bottom: 9px; line-height: 1.6; }
+.window-handle { position: absolute; z-index: 12; width: 14px; border: 0; padding: 0; background: transparent; cursor: ew-resize; touch-action: none; }
+.window-handle::after { content: ""; position: absolute; left: 6px; top: 18px; bottom: 0; width: 2px; background: #3968a6; opacity: .5; }
+.window-handle:hover::after, .window-handle.dragging::after { opacity: 1; width: 3px; }
+.window-handle-cap { position: absolute; left: -7px; top: 0; display: block; color: #fff; background: #3968a6; border-radius: 2px; font-size: 10px; line-height: 16px; height: 16px; padding: 0 3px; white-space: nowrap; }
+.window-handle-cap::after { content: ""; position: absolute; left: 10px; bottom: -4px; border: 4px solid transparent; border-top-color: #3968a6; border-bottom: 0; }
+.window-handle:hover .window-handle-cap, .window-handle.dragging .window-handle-cap { background: #204b89; }
+.metadata-chart { height: 155px; padding: 10px 0; overflow: auto; }
+.metadata-chart td { white-space: normal; overflow-wrap: anywhere; font-size: 12px; }
+.metadata-chart th { min-width: 115px; background: #fff; }
+.input-dependency { font-size: 12px; margin: 9px 14px; overflow-wrap: anywhere; color: var(--secondary); }
+.coverage-details { margin-top: 12px; font-size: 12px; color: var(--secondary); }
+.coverage-details summary { padding: 7px 0; cursor: pointer; }
+.dataset-dialog { width: min(670px, calc(100vw - 40px)); max-height: calc(100vh - 50px); overflow-y: auto; }
+.path-input { display: flex; gap: 7px; min-width: 0; }
+.path-input input { flex: 1; min-width: 0; font: 13px/1.5 Consolas, "Microsoft YaHei", monospace; }
+.path-input button { flex: 0 0 auto; }
+.scan-row { display: flex; align-items: center; gap: 12px; margin-top: 13px; font-size: 12px; color: var(--secondary); }
+.dataset-paths { display: grid; gap: 4px; font: 12px/1.6 Consolas, "Microsoft YaHei", monospace; overflow-wrap: anywhere; color: var(--secondary); background: #f6f8fa; margin-top: 9px; padding: 8px 10px; border: 1px solid var(--line-light); }
+.dataset-paths:empty { display: none; }
+.scan-error { color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
+.spectrum-evidence-status { margin: 12px 16px 0; padding: 9px 10px; border: 1px solid var(--line); background: #f8fafb; font-size: 12px; line-height: 1.6; }
+.spectrum-evidence-status p { margin: 0; }
+.spectrum-evidence-status p + p, .spectrum-evidence-status .badge + p, .spectrum-evidence-status p + .badge { margin-top: 6px; }
+.evidence-warning { color: #805719; }
+.spectrum-evidence-status:has(.evidence-warning) { background: #fcf8ed; border-color: #dfcda7; }
+.evidence-unknown, .evidence-selection { color: var(--secondary); overflow-wrap: anywhere; }
+.spectrum-provenance { margin: 8px 16px 0; font-size: 12px; color: var(--secondary); }
+.spectrum-provenance summary { cursor: pointer; }
+.evidence-file { display: grid; gap: 4px; margin: 9px 0; padding: 8px 0; border-top: 1px solid var(--line-light); overflow-wrap: anywhere; }
+.evidence-file > span { font: 12px/1.6 Consolas, "Microsoft YaHei", monospace; }
+.evidence-file-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.directory-dialog { width: min(720px, calc(100vw - 40px)); }
+.directory-location { display: flex; gap: 7px; margin: 18px 0 12px; }
+.directory-location input { flex: 1; min-width: 0; font: 12px/1.5 Consolas, monospace; }
+.directory-list { height: min(370px, 45vh); overflow: auto; border: 1px solid var(--line); padding: 3px; }
+.directory-entry { display: block; width: 100%; text-align: left; padding: 8px 9px; border: 0; background: #fff; color: #344958; font-size: 13px; }
+.directory-entry:hover { background: var(--blue-tint); color: var(--blue); }
+@media (max-width: 1250px) { .run-controls select { width: 225px; } .run-controls { gap: 6px; } .chart-controls { gap: 5px; } .chart-controls select { max-width: 155px; } .panel-heading { gap: 8px; } }
+@media (max-width: 850px) { .dependency-toolbar > select { max-width: none; } .run-controls select { width: min(230px, 30vw); } }
+@media (max-width: 700px) { .chart-controls { justify-content: flex-start; } .surface-panel .panel-heading { flex-wrap: wrap; } .run-controls select { width: 100%; } #dataset-settings { font-size: 12px; padding: 5px 7px; } .dependency-toolbar { align-items: stretch; } .dependency-toolbar > label { width: 100%; } }

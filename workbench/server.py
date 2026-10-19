@@ -91,26 +91,54 @@ def make_handler(workbench):
                     return self._json(200, workbench.bootstrap())
                 if path == "/api/health":
                     return self._json(200, {"status": "ok"})
+                if path == "/api/directories":
+                    return self._json(200, workbench.directories(query.get("path", [None])[0]))
                 if path.startswith("/api/history/"):
                     return self._file(workbench.workspace / "products", path[len("/api/history/") :])
                 if len(parts) >= 3 and parts[:2] == ["api", "runs"]:
                     run_id = parts[2]
                     if len(parts) == 3:
                         return self._json(200, workbench.view(run_id))
+                    if len(parts) == 4 and parts[3] == "tb-versions":
+                        return self._json(200, workbench.tb_versions(run_id))
+                    if len(parts) >= 6 and parts[3] == "history":
+                        from .service import LAYERS
+
+                        if parts[4] not in LAYERS:
+                            raise ValueError("未知处理层")
+                        state = workbench.read(run_id)
+                        return self._file(
+                            workbench.adapter_for(state).historical_layer(state["payload"], parts[4]),
+                            "/".join(parts[5:]),
+                        )
                     if len(parts) == 4 and parts[3] == "surface":
                         return self._json(200, workbench.surface(run_id, int(query.get("channel", [0])[0])))
                     if len(parts) == 4 and parts[3] == "spectrum":
                         return self._json(
                             200,
                             workbench.spectrum(
-                                run_id, query.get("stem", [""])[0], int(query.get("channel", [0])[0])
+                                run_id,
+                                query.get("stem", [""])[0],
+                                int(query.get("channel", [0])[0]),
+                                query.get("layer", ["TB_L1"])[0],
                             ),
                         )
                     if len(parts) == 4 and parts[3] == "ec-spectrum":
                         return self._json(
                             200,
                             workbench.ec_spectrum(
-                                run_id, query.get("layer", ["EC_L0"])[0], int(query.get("channel", [0])[0])
+                                run_id,
+                                query.get("layer", ["EC_L0"])[0],
+                                int(query.get("channel", [0])[0]),
+                                stem=query.get("stem", [None])[0],
+                                point_id=query.get("point_id", [None])[0],
+                            ),
+                        )
+                    if len(parts) == 4 and parts[3] == "ec-overview":
+                        return self._json(
+                            200,
+                            workbench.ec_overview(
+                                run_id, int(query.get("channel", [0])[0]), query.get("layer", ["EC_L2"])[0]
                             ),
                         )
                     if len(parts) == 5 and parts[3] == "jobs":
@@ -120,7 +148,16 @@ def make_handler(workbench):
             if self.command == "POST":
                 body = self._body()
                 if path == "/api/runs":
-                    return self._json(201, workbench.create(body.get("payload"), body.get("name")))
+                    return self._json(
+                        201, workbench.create(body.get("payload"), body.get("name"), body.get("dataset_id"))
+                    )
+                if path == "/api/datasets/scan":
+                    return self._json(
+                        200,
+                        workbench.scan_datasets(
+                            **{key: body.get(key) for key in ("raw_dir", "product_dir", "payload")}
+                        ),
+                    )
                 if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "jobs":
                     return self._json(202, workbench.submit(parts[2], body))
             if (
@@ -130,6 +167,16 @@ def make_handler(workbench):
                 and parts[3] == "config"
             ):
                 return self._json(200, workbench.patch(parts[2], self._body()))
+            if (
+                self.command == "PATCH"
+                and len(parts) == 4
+                and parts[:2] == ["api", "runs"]
+                and parts[3] == "dependency"
+            ):
+                body = self._body()
+                return self._json(
+                    200, workbench.select_tb(parts[2], body.get("tb_version_id"), body.get("path"))
+                )
             raise FileNotFoundError("接口不存在")
 
         def _request(self):

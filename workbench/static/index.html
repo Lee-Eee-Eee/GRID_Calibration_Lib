@@ -15,6 +15,7 @@
     <div class="run-controls">
       <label for="run-select" class="sr-only">已保存的试算</label>
       <select id="run-select"><option value="">选择已保存试算</option></select>
+      <button id="dataset-settings" class="button">数据与产品</button>
       <button id="new-run" class="button">新建试算</button>
       <button id="save-run" class="button" disabled>保存修订</button>
     </div>
@@ -53,29 +54,32 @@
         </section>
 
         <div id="dependency-banner" class="dependency-banner" hidden></div>
+        <div id="dependency-toolbar" class="dependency-toolbar" hidden><label for="tb-version-select">EC 校正依据 · TB L2</label><select id="tb-version-select"><option value="">正在读取参数包…</option></select><button id="apply-tb-version" class="button small">采用此版本</button><span id="tb-binding-state"></span><details class="tb-import"><summary>导入其他参数包</summary><div class="path-input"><input id="tb-import-path" aria-label="TB L2 JSON 完整路径" placeholder="其他时间 TB L2 JSON 的完整路径"><button id="import-tb-version" class="button small">导入并采用</button></div></details></div>
         <section id="tb-analysis" class="analysis-grid">
           <div class="main-analysis">
             <article class="panel surface-panel">
-              <div class="panel-heading"><div><h3>温度–偏压响应</h3><p id="surface-caption">选择测量点，查看对应工况能谱</p></div><span id="point-count" class="badge neutral">— 个工况</span></div>
+              <div class="panel-heading"><div><h3 id="main-chart-title">温度–偏压响应</h3><p id="surface-caption">选择测量点，查看对应工况能谱</p></div><div class="chart-controls"><select id="surface-mode" aria-label="三维图显示量"><option value="response">峰位 + 残差连线</option><option value="residual">三维残差</option></select><span id="point-count" class="badge neutral">— 个工况</span></div></div>
               <div id="surface-chart" class="chart surface-chart" aria-label="温度偏压响应三维图"></div>
-              <div class="chart-legend"><span><i class="legend-dot blue"></i>参与拟合</span><span><i class="legend-cross"></i>已屏蔽</span><span title="沿用原 TB L2 处理器的 R² ≥ 0.5 质量阈值"><i class="legend-dot grey"></i>质量筛除</span><span><i class="legend-ring"></i>选中点</span><span id="tb-version" class="version-label"></span></div>
+              <div id="main-chart-legend" class="chart-legend"><span><i class="legend-dot blue"></i>参与拟合</span><span><i class="legend-cross"></i>已屏蔽</span><span title="沿用原 TB L2 处理器的 R² ≥ 0.5 质量阈值"><i class="legend-dot grey"></i>质量筛除</span><span><i class="legend-ring"></i>选中点</span><span id="tb-version" class="version-label"></span></div>
             </article>
             <section class="panel secondary-analysis" aria-label="残差与参数比较">
-              <div class="analysis-tabs" role="tablist" aria-label="分析视图"><button id="analysis-tab-residual" role="tab" aria-selected="true" class="analysis-tab active" data-analysis-view="residual">拟合残差 <span id="residual-metric" class="metric-inline">—</span></button><button id="analysis-tab-comparison" role="tab" aria-selected="false" class="analysis-tab" data-analysis-view="comparison">参数比较</button><button id="refit-tb" class="button small">重新拟合 TB</button></div>
-              <div id="residual-panel"><div id="residual-chart" class="chart residual-chart" aria-label="各工况相对拟合残差"></div><div class="plot-caption">相对曲面的偏差 · 点击测量点定位工况</div></div>
+              <div class="analysis-tabs" role="tablist" aria-label="分析视图"><button id="analysis-tab-residual" role="tab" aria-selected="true" class="analysis-tab active" data-analysis-view="residual">拟合残差 <span id="residual-metric" class="metric-inline">—</span></button><button id="analysis-tab-comparison" role="tab" aria-selected="false" class="analysis-tab" data-analysis-view="comparison">参数比较</button><select id="ec-detail-mode" aria-label="EC 诊断量" hidden><option value="residual">刻度残差</option><option value="resolution">能量分辨率</option></select><button id="refit-tb" class="button small">重新拟合 TB</button></div>
+              <div id="residual-panel"><div id="residual-chart" class="chart residual-chart" aria-label="各工况相对拟合残差"></div><div id="residual-caption" class="plot-caption">相对曲面的偏差 · 点击测量点定位工况</div></div>
               <div id="comparison-panel" hidden><div id="parameter-table" class="table-wrap"></div><div id="fit-diagnostics" class="diagnostics"></div><div class="plot-caption">初始历史基线与当前试算结果</div></div>
             </section>
           </div>
 
           <aside class="panel spectrum-panel" aria-label="工况详情与谱拟合">
-            <div class="panel-heading inspector-heading"><h3>工况能谱</h3><span id="selected-channel" class="badge neutral">CH 0</span></div>
+            <div class="panel-heading inspector-heading"><h3 id="inspector-title">工况能谱</h3><span id="selected-channel" class="badge neutral">CH 0</span></div>
             <div class="inspector-body">
-              <label class="field-label" for="point-select">工况文件</label><select id="point-select" class="full-width"><option value="">选择一个真实工况</option></select>
+              <label id="point-field-label" class="field-label" for="point-select">工况文件</label><select id="point-select" class="full-width"><option value="">选择一个真实工况</option></select>
               <div id="point-condition" class="condition-row"></div>
               <div id="spectrum-chart" class="chart spectrum-chart" aria-label="真实 L1 能谱及拟合曲线"></div>
               <div class="spectrum-legend"><span><i class="legend-line raw"></i>计数谱</span><span><i class="legend-line fit"></i>峰拟合</span><span><i class="legend-line background"></i>背景</span></div>
-              <div class="window-section"><div class="section-line"><h4>拟合窗口 <span>ADC</span></h4><span id="window-status">读取中</span></div><div class="window-fields"><label for="window-lo">下限<input id="window-lo" type="number" step="1" min="0" inputmode="numeric" disabled></label><span class="range-divider">—</span><label for="window-hi">上限<input id="window-hi" type="number" step="1" min="0" inputmode="numeric" disabled></label></div><div class="point-actions"><button id="fit-spectrum" class="button primary" disabled>保存窗口并拟合</button><button id="toggle-excluded" class="button" disabled>屏蔽此点</button></div><details class="context-help"><summary>拟合与屏蔽说明</summary><p>改窗重拟合此工况的四通道，当前通道使用修订窗口。屏蔽只影响 TB 曲面拟合。</p></details></div>
+              <div id="window-section" class="window-section"><div class="section-line"><h4>拟合窗口 <span>ADC</span></h4><span id="window-status">读取中</span></div><div class="drag-help">直接拖动谱图上的两条蓝色边界，或输入精确数值。</div><div class="window-fields"><label for="window-lo">下限<input id="window-lo" type="number" step="0.1" min="0" inputmode="decimal" disabled></label><span class="range-divider">—</span><label for="window-hi">上限<input id="window-hi" type="number" step="0.1" min="0" inputmode="decimal" disabled></label></div><div class="point-actions"><button id="fit-spectrum" class="button primary" disabled>保存窗口并拟合</button><button id="toggle-excluded" class="button" disabled>屏蔽此点</button></div><details class="context-help"><summary>拟合与屏蔽说明</summary><p id="fitting-help">改窗重拟合此工况的四通道，当前通道使用修订窗口。屏蔽只影响 TB 曲面拟合。</p></details></div>
               <div id="spectrum-params" class="spectrum-params"></div>
+              <div id="spectrum-evidence-status" class="spectrum-evidence-status" hidden></div>
+              <details id="spectrum-provenance" class="spectrum-provenance" hidden><summary>谱文件与 TB 依赖溯源</summary><div id="spectrum-provenance-files"></div></details>
               <div class="note-field"><label for="revision-note">修订说明</label><textarea id="revision-note" rows="2" placeholder="记录改窗或屏蔽的依据"></textarea></div>
             </div>
           </aside>
@@ -90,6 +94,7 @@
     <footer class="page-footer"><span>GRID Calibration Lib</span><span>历史产物、处理结果与规范检查分别记录</span></footer>
   </div>
 
-  <dialog id="new-run-dialog"><form id="new-run-form"><div class="dialog-title"><h2>新建试算</h2><button type="button" id="close-dialog" class="icon-button" aria-label="关闭">×</button></div><p class="muted-text">以历史结果建立基线，修订与计算记录独立保存。</p><label for="new-run-payload">载荷</label><select id="new-run-payload"><option value="14B">14B · GRID-02</option><option value="15B">15B · GRID-03</option></select><label for="new-run-name">试算名称</label><input id="new-run-name" maxlength="80" placeholder="例如：CH0 峰位复核"><div class="dialog-actions"><button type="button" id="cancel-new-run" class="button">取消</button><button type="submit" class="button primary">创建并打开</button></div></form></dialog>
+  <dialog id="new-run-dialog" class="dataset-dialog"><form id="new-run-form"><div class="dialog-title"><h2>数据与产品</h2><button type="button" id="close-dialog" class="icon-button" aria-label="关闭">×</button></div><p class="muted-text">选择原始数据及已有产品目录，自动载入可用层级。输入留空时扫描工作区默认目录。新计算始终保存到独立 runs 目录。</p><label for="dataset-raw-dir">原始数据目录</label><div class="path-input"><input id="dataset-raw-dir" placeholder="留空使用默认数据目录"><button type="button" data-browse-target="dataset-raw-dir" class="button">浏览</button></div><label for="dataset-product-dir">产品目录</label><div class="path-input"><input id="dataset-product-dir" placeholder="留空使用默认 products 目录"><button type="button" data-browse-target="dataset-product-dir" class="button">浏览</button></div><div class="scan-row"><button id="scan-datasets" type="button" class="button">扫描目录</button><span id="dataset-scan-state" role="status"></span></div><label for="dataset-select">扫描结果</label><select id="dataset-select"><option value="">正在读取数据集…</option></select><div id="dataset-paths" class="dataset-paths"></div><label for="new-run-payload">载荷编号（可编辑）</label><input id="new-run-payload" maxlength="40" placeholder="例如：14B"><label for="new-run-name">试算名称</label><input id="new-run-name" maxlength="80" placeholder="例如：CH0 峰位复核"><div class="dialog-actions"><button type="button" id="cancel-new-run" class="button">取消</button><button type="submit" class="button primary">载入并创建试算</button></div></form></dialog>
+  <dialog id="directory-dialog" class="directory-dialog"><div class="dialog-title"><h2>选择目录</h2><button id="close-directory-dialog" class="icon-button" aria-label="关闭">×</button></div><div class="directory-location"><button id="directory-up" class="button small">上一级</button><input id="directory-location" aria-label="当前目录"><button id="directory-go" class="button small">转到</button></div><div id="directory-list" class="directory-list"></div><div class="dialog-actions"><button id="choose-directory" class="button primary">选择此目录</button></div></dialog>
 </body>
 </html>

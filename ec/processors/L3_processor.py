@@ -50,10 +50,13 @@ class ECL3Processor:
             "output_json": None,
             "output_figures": [],
             "errors": [],
+            "excluded_points": sorted(set(cfg.get("ec_excluded", []))),
         }
 
         try:
             fit_data_all = self._collect_l2_results(ec_l2_dir)
+            excluded = set(cfg.get("ec_excluded", []))
+            fit_data_all = [row for row in fit_data_all if self._point_id(row) not in excluded]
             if not fit_data_all:
                 raise ValueError("No L2 fit data collected")
 
@@ -185,6 +188,10 @@ class ECL3Processor:
     # ------------------------------------------------------------------ #
     # Data collection & quality filtering
     # ------------------------------------------------------------------ #
+
+    def _point_id(self, row: dict[str, Any]) -> str:
+        stem = str(row.get("file", "")).removesuffix(".l2").removesuffix("_fit_results")
+        return f"{self.payload_name}:ec:{stem}:{int(row['channel'])}:{float(row['E']):g}"
 
     def _collect_l2_results(self, ec_l2_dir: Path) -> List[Dict[str, Any]]:
         json_dir = ec_l2_dir / "json"

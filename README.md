@@ -66,7 +66,7 @@ uv pip install --python calibration_lib/.venv/Scripts/python.exe -r calibration_
 calibration_lib/.venv/Scripts/python.exe -X utf8 -m calibration_lib.workbench.server --workspace . --port 8765
 ```
 
-打开 <http://127.0.0.1:8765>。支持两载荷/四通道、七层真实处理、曲面/残差点选下钻、改窗拟合、屏蔽与恢复、TB 新旧对比、试算恢复及显式 EC 依赖。所有新产物和失败尝试保存在 `runs/<run_id>/`，原始数据和历史 products 只读。图表资源由本地 Plotly 提供，无 CDN。
+打开 <http://127.0.0.1:8765>。通过“数据与产品”选择原始数据/产品目录，默认扫描现有14B/15B，输出载荷编号可编辑。支持四通道、七层真实处理、TB三维残差及谱下钻、直接拖窗拟合、TB/EC屏蔽恢复和参数比较。EC可独立选择不同时间的TB L2 JSON包，逐文件核验信号/本底及拟合输入哈希。所有新产物和失败尝试保存在 `runs/<run_id>/`，原始数据和历史 products 只读；保存的试算可重开恢复。图表资源由本地 Plotly 提供，无 CDN。
 
 默认“代表样例”会结合历史快照完成操作闭环，**不等于全量重新标定**。计算状态与规范/CRC 检查分开显示。当前 L0 样例 CRC 未通过；现行 EC L3 的拟合方向与 wiki 尚有差异，界面会明确提示。详细操作、数据范围及验收见 [workbench/README.md](workbench/README.md)。
 

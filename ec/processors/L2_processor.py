@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,6 +25,16 @@ class ECL2Processor:
     def __init__(self, payload_name: str, product_root: Path):
         self.payload_name = payload_name
         self.layout = DataLayout(product_root, payload_name)
+
+    @staticmethod
+    def input_evidence(path: Path) -> dict[str, Any]:
+        """Identify the exact corrected input bytes and their TB metadata."""
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {"sha256": digest.hexdigest(),
+                "tb_correction": read_parquet_metadata(path, meta_key="tb_correction") or {}}
 
     def process(self, ec_l1_dir: Path, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         cfg = config or {}
@@ -49,10 +60,12 @@ class ECL2Processor:
         src_re = re.compile(r"^src_(?P<name>[A-Za-z]+\d*)_(?P<min>\d+)m_corr\.l1\.parquet$")
 
         bkg_df_global: Optional[Any] = None
+        bkg_file_global: str | None = None
         bkg_exposure: Optional[int] = None
         for pf in sorted(parquet_dir.glob("src_bkg_*_corr.l1.parquet")):
             try:
                 bkg_df_global = read_parquet(pf)
+                bkg_file_global = pf.name
                 bkg_min_match = re.search(r"src_bkg_(\d+)m_corr", pf.name)
                 if bkg_min_match:
                     bkg_exposure = int(bkg_min_match.group(1))
@@ -60,6 +73,7 @@ class ECL2Processor:
                 pass
 
         grouped_by_energy: Dict[str, Dict[int, Dict[str, Any]]] = {}
+        input_evidence: dict[str, dict[str, Any]] = {}
         for parquet_file in sorted(parquet_dir.glob("*_corr.l1.parquet")):
             if "src_bkg_" in parquet_file.name:
                 continue
@@ -172,7 +186,17 @@ class ECL2Processor:
                             if xw is not None:
                                 peak_window = [xw["lo"], xw["hi"]]
                             else:
-                                continue
+                                # A workbench window can also enable an energy
+                                # absent from the packaged legacy configuration.
+                                if f"{self.payload_name}:ec:{energy_key}:{ch}:{float(peak_E):g}" not in cfg.get("ec_windows", {}):
+                                    continue
+                        point_id = f"{self.payload_name}:ec:{energy_key}:{ch}:{float(peak_E):g}"
+                        manual_override = cfg.get("ec_windows", {}).get(point_id)
+                        if manual_override is not None:
+                            lo, hi = float(manual_override["lo"]), float(manual_override["hi"])
+                            if not np.isfinite([lo, hi]).all() or hi - lo < 2 * bin_width:
+                                raise ValueError(f"Invalid manual EC window for {point_id}: [{lo}, {hi}]")
+                            peak_window = [lo, hi]
                         if peak_window is None and prev_center is not None and prev_energy is not None:
                             center_guess = prev_center * (peak_E / prev_energy)
                             half_span = max(80.0, center_guess * 0.06)
@@ -220,6 +244,10 @@ class ECL2Processor:
                             "rsquared": float(fit["rsquared"]),
                             "n_events": int(fit["n_events"]),
                             "background_channel": int(fit["background_channel"]),
+                            "model_parameters": fit["model_parameters"],
+                            "window_manual": manual_override is not None,
+                            "signal_file": signal["parquet"],
+                            "background_file": bkg_file_global if data_type == "src" and bkg_df_global is not None else ch_map[bkg_ch]["parquet"],
                         }
                         records.append(rec)
                         plot_rows.append({"record": rec, "plot": plot_data})
@@ -232,6 +260,10 @@ class ECL2Processor:
                     if consensus is not None:
                         for rec in list(records):
                             ch = rec["channel"]
+                            if rec.get("window_manual"):
+                                # A user-selected window must survive automatic
+                                # cross-channel consensus recovery unchanged.
+                                continue
                             r2 = rec["rsquared"]
                             center = rec["center"]
                             if r2 >= 0.7 and abs(center - consensus) / max(consensus, 1.0) < 0.18:
@@ -269,6 +301,10 @@ class ECL2Processor:
                                     "lo": float(fit2["lo"]), "hi": float(fit2["hi"]),
                                     "rsquared": float(fit2["rsquared"]), "n_events": int(fit2["n_events"]),
                                     "background_channel": int(fit2["background_channel"]),
+                                    "model_parameters": fit2["model_parameters"],
+                                    "window_manual": False,
+                                    "signal_file": signal["parquet"],
+                                    "background_file": refit_bkg["parquet"] if bkg_df_global is None else None,
                                 }
                                 records.append(new_rec)
                                 plot_rows[:] = [pr for pr in plot_rows if pr.get("record", {}).get("channel") != ch]
@@ -280,6 +316,19 @@ class ECL2Processor:
                     print(f"⚠ EC L2: {energy_key} - no successful fits")
                     results["errors"].append({"energy": energy_key, "error": "No successful peak fits"})
                     continue
+
+                # Persist the inputs used by these specific peak fits. A later
+                # EC L1 rerun can overwrite a same-name parquet; its new bytes
+                # must never silently be paired with this older fit curve.
+                for rec in records:
+                    rec["bin_width"] = bin_width
+                    for role in ("signal", "background"):
+                        filename = rec.get(f"{role}_file")
+                        if filename and filename not in input_evidence:
+                            input_evidence[filename] = self.input_evidence(parquet_dir / filename)
+                        evidence = input_evidence[filename] if filename else {}
+                        rec[f"{role}_sha256"] = evidence.get("sha256")
+                        rec[f"{role}_tb_correction"] = evidence.get("tb_correction", {})
 
                 json_name = f"{energy_key}_fit_results.l2.json"
                 fig_name = f"{energy_key}_fit.l2.png"
@@ -573,6 +622,29 @@ class ECL2Processor:
         candidates.sort(key=lambda item: (-item[2], item[3]))
         return candidates[0]
 
+    def _prepare_spectrum(
+        self, signal_df, background_df, bin_width: float,
+    ) -> dict[str, np.ndarray]:
+        """Shared rate histogram for fitting and interactive inspection.
+
+        Duration normalization intentionally follows the existing processor's
+        UTC-axis rule. Keeping one implementation prevents UI spectra from
+        using counts or exposure scaling inconsistent with the actual fit.
+        """
+        signal_amp = signal_df["amp_corr"].to_numpy(dtype=float)
+        signal_time = signal_df["utc"].to_numpy(dtype=float)
+        bkg_amp = background_df["amp_corr"].to_numpy(dtype=float)
+        bkg_time = background_df["utc"].to_numpy(dtype=float)
+        upper = max(
+            float(np.percentile(signal_amp, 99.9)) if signal_amp.size else 160.0,
+            float(np.percentile(bkg_amp, 99.5)) if bkg_amp.size else 160.0,
+        ) + 50.0
+        edges = np.arange(0.0, max(upper, 160.0) + bin_width, bin_width)
+        spec, spec_err, mids = self._build_rate_spectrum(signal_amp, signal_time, edges)
+        bkg_spec, bkg_err, _ = self._build_rate_spectrum(bkg_amp, bkg_time, edges)
+        return {"mids": mids, "spec": spec, "bkg_spec": bkg_spec,
+                "net": spec - bkg_spec, "net_err": np.sqrt(spec_err**2 + bkg_err**2)}
+
     def _fit_energy_spectrum(
         self,
         energy_key: str,
@@ -584,22 +656,10 @@ class ECL2Processor:
         forced_window: Optional[List[float]] = None,
         forced_peak_energy: Optional[float] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, np.ndarray]]:
-        signal_amp = signal_df["amp_corr"].to_numpy(dtype=float)
-        signal_time = signal_df["utc"].to_numpy(dtype=float)
-        bkg_amp = background_df["amp_corr"].to_numpy(dtype=float)
-        bkg_time = background_df["utc"].to_numpy(dtype=float)
-
-        upper = max(
-            float(np.percentile(signal_amp, 99.9)) if signal_amp.size else 160.0,
-            float(np.percentile(bkg_amp, 99.5)) if bkg_amp.size else 160.0,
-        ) + 50.0
-        upper = max(upper, 160.0)
-        edges = np.arange(0.0, upper + bin_width, bin_width)
-
-        spec, spec_err, mids = self._build_rate_spectrum(signal_amp, signal_time, edges)
-        bkg_spec, bkg_err, _ = self._build_rate_spectrum(bkg_amp, bkg_time, edges)
-        net = spec - bkg_spec
-        net_err = np.sqrt(spec_err**2 + bkg_err**2)
+        prepared = self._prepare_spectrum(signal_df, background_df, bin_width)
+        mids, spec, bkg_spec, net, net_err = (
+            prepared[key] for key in ("mids", "spec", "bkg_spec", "net", "net_err")
+        )
 
         if forced_window is not None and len(forced_window) == 2:
             lo = float(forced_window[0]); hi = float(forced_window[1])
@@ -639,9 +699,9 @@ class ECL2Processor:
         )
 
         background_fit = np.zeros_like(x_fit)
-        if "b_" in result.params:
+        if "b_" in comps:
             background_fit += comps.get("b_", 0)
-        if "e_" in result.params:
+        if "e_" in comps:
             background_fit += comps.get("e_", 0)
 
         nominal_energy = float(forced_peak_energy) if forced_peak_energy is not None else self._energy_sort_key(energy_key)
@@ -666,6 +726,7 @@ class ECL2Processor:
             "background_channel": background_channel,
             "background_rate_mean": float(np.mean(bkg_spec)),
             "channel": channel,
+            "model_parameters": {name: float(param.value) for name, param in result.params.items()},
         }
         plot_data = {
             "mids": mids,

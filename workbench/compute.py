@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -22,7 +23,13 @@ import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 
 from ..common.utils import DataLayout, read_json, read_parquet, read_parquet_metadata, write_json
-from ..config.payload_config import EC_PROCESS_PARAMS, TB_PROCESS_PARAMS, get_payload_config
+from ..config.payload_config import (
+    EC_PROCESS_PARAMS,
+    TB_PROCESS_PARAMS,
+    PayloadConfig,
+    SourceSpec,
+    get_payload_config,
+)
 from ..ec.processors.L0_processor import ECL0Processor
 from ..ec.processors.L1_processor import ECL1Processor
 from ..ec.processors.L2_processor import ECL2Processor
@@ -30,12 +37,14 @@ from ..ec.processors.L3_processor import ECL3Processor
 from ..tb.processors.L0_processor import TBL0Processor
 from ..tb.processors.L1_processor import TBL1Processor
 from ..tb.processors.L2_processor import TBL2Processor
+from .datasets import DatasetCatalog, validate_payload
+from .dependencies import tb_package
 
 LAYERS = ("TB_L0", "TB_L1", "TB_L2", "EC_L0", "EC_L1", "EC_L2", "EC_L3")
 
 
 def _stem(value: str) -> str:
-    return str(value).removesuffix(".parquet").removesuffix(".l0")
+    return str(value).removesuffix(".parquet").removesuffix("_corr.l1").removesuffix(".l0")
 
 
 def _clean(value: Any) -> Any:
@@ -54,20 +63,112 @@ def _clean(value: Any) -> Any:
 
 
 class ComputeAdapter:
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, dataset: dict | None = None):
         self.workspace = Path(workspace).resolve()
-        self.history = self.workspace / "products"
+        self.dataset = DatasetCatalog(self.workspace).resolve(dataset) if dataset is not None else None
+        self.source_payload = self.dataset["source_payload"] if self.dataset else None
+        self.history = (
+            Path(self.dataset["product_dir"]).parent
+            if self.dataset and self.dataset.get("product_dir")
+            else self.workspace / "products"
+        )
         self.resources = Path(__file__).resolve().parents[1] / "resources"
 
+    def historical_layer(self, payload: str, layer: str) -> Path:
+        """Read-only source layer; an edited output label never renames its input."""
+        if self.dataset:
+            if self.dataset.get("product_dir"):
+                kind, level = layer.split("_")
+                return Path(self.dataset["product_dir"]) / kind.lower() / level
+            # A raw-only dataset must not silently inherit an unrelated default.
+            return self.workspace / "runs" / "_no_historical_products" / payload / layer
+        return self._layer_dir(self.history, payload, layer)
+
+    @staticmethod
+    def _source_config(raw: Path):
+        """Infer known isotope metadata from filenames, keeping fitting in lib."""
+        directory = raw / "source"
+        peaks = {}
+        for label in ("14B", "15B"):
+            for spec in get_payload_config(label).source_specs:
+                peaks[spec.name.lower()] = (spec.name, list(spec.peak_energies_keV))
+        specs, background, issues = [], {}, []
+        for event in sorted(directory.glob("*.event.dat")):
+            prefix = re.split(r"[_-]", event.name, maxsplit=1)[0].lower()
+            if prefix not in peaks and prefix not in ("bkg", "background"):
+                issues.append(f"不能从源文件 {event.name} 识别能线；请提供 Na22/Cs137/Co60 名称或显式源规格")
+                continue
+            exposure = re.search(r"(?:_|-)(\d+)\s*([mh])(?:_|-)", event.name, re.I)
+            if not exposure:
+                issues.append(f"源文件 {event.name} 缺少曝光时间；请用 _5m_ / _1h_ 命名并配置曝光时间")
+                continue
+            minutes = int(exposure.group(1)) * (60 if exposure.group(2).lower() == "h" else 1)
+
+            def signature(name):
+                stem = re.sub(r"(?:[_-]ecu)?[_-]\d+\.(?:event\.dat|hk)$", "", name, flags=re.I)
+                return re.sub(r"[^a-z0-9]", "", stem.lower())
+
+            matching = [
+                path for path in directory.glob("*.hk") if signature(path.name) == signature(event.name)
+            ]
+            if len(matching) != 1:
+                issues.append(f"源文件 {event.name} 未能唯一匹配 hk 文件")
+                continue
+            if prefix in ("bkg", "background"):
+                background = {
+                    "bkg_event_file": event.name,
+                    "bkg_hk_file": matching[0].name,
+                    "bkg_exposure_minutes": minutes,
+                }
+            else:
+                name, energies = peaks[prefix]
+                specs.append(SourceSpec(name, event.name, matching[0].name, minutes, energies))
+        return specs, background, issues
+
     def _config(self, payload: str):
-        cfg = get_payload_config(payload)
-        raw = self.workspace / "14、15B标定数据" / cfg.payload_id
+        validate_payload(payload)
+        profile = self.dataset.get("profile") if self.dataset else payload
+        try:
+            cfg = get_payload_config(profile)
+        except ValueError:
+            cfg = PayloadConfig(payload, payload, Path("."), Path("."), Path("."), Path("."))
+        raw = (
+            Path(self.dataset["raw_dir"])
+            if self.dataset and self.dataset.get("raw_dir")
+            else self.workspace / "runs" / "_no_raw_data"
+            if self.dataset
+            else self.workspace / "14、15B标定数据" / cfg.payload_id
+        )
+        xray = raw / (cfg.ec_xray_dir.name if cfg.ec_xray_dir.name in ("X", "X_new") else "X_new")
+        if not xray.is_dir():
+            xray = next((raw / folder for folder in ("X_new", "X") if (raw / folder).is_dir()), raw / "X")
+        specs, background, _issues = self._source_config(raw)
+        # A product-only dataset can still apply TB to already parsed source
+        # spectra. Their recorded exposure/energies are authoritative inputs.
+        manifest_path = self.historical_layer(payload, "EC_L0") / "json" / "L0_manifest.json"
+        if not specs and manifest_path.is_file():
+            manifest = read_json(manifest_path)
+            for record in manifest.get("outputs", []):
+                if record.get("data_type") == "source" and record.get("peak_energies_keV"):
+                    specs.append(
+                        SourceSpec(
+                            record["source_name"],
+                            "",
+                            "",
+                            int(record.get("exposure_minutes", 0)),
+                            list(record["peak_energies_keV"]),
+                        )
+                    )
         return replace(
             cfg,
+            payload_name=payload,
             raw_root=raw,
             tb_raw_dir=raw / "Temp_Vbias",
-            ec_xray_dir=raw / cfg.ec_xray_dir.name,
+            ec_xray_dir=xray,
             ec_source_dir=raw / "source",
+            source_specs=specs
+            or (copy.deepcopy(cfg.source_specs) if not self.dataset or profile in ("14B", "15B") else []),
+            **background,
         )
 
     def _layer_dir(self, product_root: Path, payload: str, layer: str) -> Path:
@@ -125,11 +226,7 @@ class ComputeAdapter:
         chosen = min(complete, key=lambda items: sum(item["bytes"] for item in items)) if complete else []
         quality_stems = set()
         for item in tb_samples:
-            l1_path = (
-                self._layer_dir(self.history, payload, "TB_L1")
-                / "json"
-                / f"{item['stem']}_fit_results.l1.json"
-            )
+            l1_path = self.historical_layer(payload, "TB_L1") / "json" / f"{item['stem']}_fit_results.l1.json"
             if l1_path.exists():
                 records = read_json(l1_path)
                 if (
@@ -142,7 +239,7 @@ class ComputeAdapter:
         representative_tb = min(candidates, key=lambda item: item["bytes"])["stem"] if candidates else None
         historical = {}
         for layer in LAYERS:
-            directory = self._layer_dir(self.history, payload, layer)
+            directory = self.historical_layer(payload, layer)
             historical[layer] = {
                 "files": len([path for path in directory.rglob("*") if path.is_file()]),
                 **{
@@ -153,12 +250,14 @@ class ComputeAdapter:
             }
         return {
             "payload": payload,
+            "dataset": self.dataset,
             "raw": {
                 "tb_pairs": len(tb_pairs),
                 "ec_xray_pairs": len(ec_pairs),
                 "source_files": len(cfg.source_specs),
                 "tb_samples": tb_samples,
                 "ec_samples": ec_samples,
+                "issues": self._source_config(cfg.raw_root)[2],
             },
             "historical": historical,
             "representative": {
@@ -197,17 +296,31 @@ class ComputeAdapter:
         return _clean(rows)
 
     def _find_l0(self, payload: str, product_root: Path, stem: str) -> Path | None:
-        for root in (Path(product_root), self.history):
-            directory = self._layer_dir(root, payload, "TB_L0") / "parquet"
+        for directory in (
+            self._layer_dir(product_root, payload, "TB_L0") / "parquet",
+            self.historical_layer(payload, "TB_L0") / "parquet",
+        ):
             for name in (f"{stem}.l0.parquet", f"{stem}.parquet"):
                 path = directory / name
                 if path.is_file():
                     return path
         return None
 
-    def spectrum(self, payload: str, product_root: Path, stem: str, channel: int) -> dict:
+    def spectrum(
+        self, payload: str, product_root: Path, stem: str, channel: int | None = None, layer: str = "TB_L1"
+    ) -> dict:
+        # Both stable point IDs and the original stem/channel API are accepted.
+        if channel in ("TB_L0", "TB_L1"):
+            layer, channel = channel, None
+        if ":" in stem:
+            point_payload, stem, point_channel = stem.rsplit(":", 2)
+            if point_payload != payload:
+                raise ValueError("工况点不属于当前载荷")
+            channel = int(point_channel)
         if channel not in range(4):
             raise ValueError("Channel must be 0, 1, 2 or 3")
+        if layer not in ("TB_L0", "TB_L1"):
+            raise ValueError("TB spectrum layer must be TB_L0 or TB_L1")
         record = next(
             (
                 row
@@ -216,7 +329,7 @@ class ComputeAdapter:
             ),
             None,
         )
-        if record is None:
+        if record is None and layer != "TB_L0":
             raise FileNotFoundError(f"No TB L1 record for {stem} ch{channel}")
         path = self._find_l0(payload, product_root, stem)
         if path is None:
@@ -229,6 +342,29 @@ class ComputeAdapter:
         upper = min(1200, int(max(420, np.percentile(amp, 99.8) + 40)))
         hist, edges = np.histogram(amp, bins=np.arange(0, upper + 1, 1))
         x = (edges[:-1] + edges[1:]) / 2
+        available = {}
+        for directory, source in (
+            (self._layer_dir(product_root, payload, "TB_L0") / "parquet", "run"),
+            (self.historical_layer(payload, "TB_L0") / "parquet", "historical"),
+        ):
+            for item in sorted(directory.glob("*.parquet")):
+                item_stem = _stem(item.name)
+                available.setdefault(item_stem, {"stem": item_stem, "source": source, "path": str(item)})
+        common = {
+            "id": f"{payload}:{stem}:{channel}",
+            "stem": stem,
+            "channel": channel,
+            "x": x,
+            "y": hist,
+            "n_events": len(amp),
+            "source_path": str(path),
+            "source": "run" if Path(product_root).resolve() in path.resolve().parents else "historical",
+            "files": list(available.values()),
+            "layer": layer,
+            "hk_data": read_parquet_metadata(path, "hk_data"),
+        }
+        if layer == "TB_L0":
+            return _clean({**common, "fit": record, "curve": None})
         fit_x = x[(x >= record["window_lo"]) & (x <= record["window_hi"])]
         gaussian = GaussianModel().eval(
             x=fit_x, amplitude=record["amplitude"], center=record["center"], sigma=record["sigma"]
@@ -247,11 +383,7 @@ class ComputeAdapter:
             )
         return _clean(
             {
-                "id": record["id"],
-                "stem": stem,
-                "channel": channel,
-                "x": x,
-                "y": hist,
+                **common,
                 "fit": record,
                 "curve": {
                     "x": fit_x,
@@ -259,28 +391,29 @@ class ComputeAdapter:
                     "gaussian": gaussian,
                     "background": background,
                 },
-                "n_events": len(amp),
-                "source_path": str(path),
-                "source": "run" if Path(product_root).resolve() in path.resolve().parents else "historical",
             }
         )
 
     def surface(self, payload: str, product_root: Path, channel: int) -> dict:
         if channel not in range(4):
             raise ValueError("Channel must be 0, 1, 2 or 3")
-        paths = sorted((self._layer_dir(product_root, payload, "TB_L2") / "json").glob("*_TB.l2.json"))
+        paths = sorted((self._layer_dir(product_root, payload, "TB_L2") / "json").glob("*_TB*.json"))
         rows = [point for point in self.points(payload, product_root) if point["channel"] == channel]
-        if not paths:
+        selected_path, params = None, None
+        for path in reversed(paths):
+            try:
+                tb_package(path)
+                records = read_json(path)
+                if isinstance(records, dict):
+                    records = records["fit_params"]
+                params = next(record for index, record in enumerate(records)
+                              if int(record.get("channel", index)) == channel)
+                selected_path = path
+                break
+            except (ValueError, KeyError, TypeError, OSError, OverflowError):
+                continue
+        if selected_path is None:
             return {"params": None, "points": rows, "grid": None, "diagnostics": {}, "version": None}
-        params = read_json(paths[-1])[channel]
-        if not params or not params.get("G0"):
-            return {
-                "params": params,
-                "points": rows,
-                "grid": None,
-                "diagnostics": {},
-                "version": paths[-1].name,
-            }
         evaluator = ECL1Processor(payload, product_root)._gain_temp_bias_model
         manifest_path = self._layer_dir(product_root, payload, "TB_L2") / "json" / "L2_manifest.json"
         manifest = read_json(manifest_path) if manifest_path.exists() else {}
@@ -303,7 +436,7 @@ class ComputeAdapter:
                 "points": rows,
                 "grid": None,
                 "diagnostics": {},
-                "version": paths[-1].name,
+                "version": selected_path.name,
             }
         temperatures = np.linspace(min(row["temp"] for row in finite), max(row["temp"] for row in finite), 24)
         biases = np.linspace(min(row["bias"] for row in finite), max(row["bias"] for row in finite), 24)
@@ -316,7 +449,7 @@ class ComputeAdapter:
             {
                 "params": params,
                 "points": rows,
-                "version": paths[-1].name,
+                "version": selected_path.name,
                 "grid": {"temp": temperatures, "bias": biases, "gain": gain},
                 "diagnostics": {
                     "n_points": len(used),
@@ -330,26 +463,38 @@ class ComputeAdapter:
             }
         )
 
-    def ec_spectrum(self, payload: str, product_root: Path, layer: str, channel: int) -> dict:
+    def ec_spectrum(
+        self, payload: str, product_root: Path, layer: str | int, channel: int | str, stem: str | None = None
+    ) -> dict:
         """Read an actual raw/corrected EC spectrum without triggering a fit."""
+        if isinstance(layer, int) and isinstance(channel, str):
+            layer, channel = channel, layer
         if layer not in ("EC_L0", "EC_L1") or channel not in range(4):
             raise ValueError("EC spectrum requires EC_L0/EC_L1 and channel 0..3")
         representative = self.inventory(payload)["representative"]["ec_stems"]
-        preferred = next((stem for stem in representative if stem.endswith(f"_ch{channel}")), None)
-        filename = f"{preferred}.l0.parquet" if layer == "EC_L0" else f"{preferred}_corr.l1.parquet"
-        found = None
-        for root in (Path(product_root), self.history):
-            directory = self._layer_dir(root, payload, layer) / "parquet"
-            candidate = directory / filename
-            if not candidate.is_file():
-                candidates = sorted(directory.glob(f"*keV_ch{channel}*.parquet"))
-                candidate = candidates[0] if candidates else None
-            if candidate is not None and candidate.is_file():
-                found = (candidate, "run" if root != self.history else "historical")
-                break
-        if found is None:
+        preferred = stem or next((item for item in representative if item.endswith(f"_ch{channel}")), None)
+        files = {}
+        for directory, source in (
+            (self._layer_dir(product_root, payload, layer) / "parquet", "run"),
+            (self.historical_layer(payload, layer) / "parquet", "historical"),
+        ):
+            for candidate in sorted(directory.glob("*.parquet")):
+                item_stem = candidate.name.removesuffix(".l0.parquet").removesuffix("_corr.l1.parquet")
+                match = re.search(r"_ch(\d+)", item_stem)
+                if match and int(match.group(1)) != channel:
+                    continue
+                files.setdefault(
+                    item_stem,
+                    {"stem": item_stem, "path": str(candidate), "source": source, "channel": channel},
+                )
+        if stem and stem not in files:
+            raise FileNotFoundError(f"No real {layer} spectrum for {stem} ch{channel}")
+        if not files:
             raise FileNotFoundError(f"No real {layer} spectrum for {payload} ch{channel}")
-        path, source = found
+        selected = files.get(preferred) or next(
+            (item for item in files.values() if "bkg" not in item["stem"]), next(iter(files.values()))
+        )
+        path, source = Path(selected["path"]), selected["source"]
         frame = read_parquet(path)
         field = "amp" if layer == "EC_L0" else "amp_corr"
         values = frame.loc[frame["channel"] == channel, field].to_numpy(dtype=float)
@@ -359,7 +504,13 @@ class ComputeAdapter:
         lo = min(0.0, float(np.percentile(values, 0.2)))
         hi = max(lo + 4.0, float(np.percentile(values, 99.8)))
         energy = path.name.split("_ch", 1)[0]
-        window = ECL2Processor(payload, product_root)._load_xray_windows().get(energy, {}).get(str(channel))
+        profile = self.dataset.get("profile") if self.dataset else payload
+        window = (
+            ECL2Processor(profile or payload, product_root)
+            ._load_xray_windows()
+            .get(energy, {})
+            .get(str(channel))
+        )
         if window:
             # Focus the display on the existing scientific review window;
             # overflow events remain counted and explicitly reported below.
@@ -374,6 +525,8 @@ class ComputeAdapter:
                 "y": counts,
                 "stem": path.name.removesuffix(".l0.parquet").removesuffix("_corr.l1.parquet"),
                 "channel": channel,
+                "files": list(files.values()),
+                "layer": layer,
                 "n_events": len(values),
                 "source": source,
                 "source_path": str(path),
@@ -390,7 +543,7 @@ class ComputeAdapter:
     def _hydrate(
         self, payload: str, product_root: Path, layer: str, stems: list[str] | None = None
     ) -> list[str]:
-        source = self._layer_dir(self.history, payload, layer) / "parquet"
+        source = self.historical_layer(payload, layer) / "parquet"
         target = self._layer_dir(product_root, payload, layer) / "parquet"
         target.mkdir(parents=True, exist_ok=True)
         copied = []
@@ -404,7 +557,8 @@ class ComputeAdapter:
         return copied
 
     def _windows(self, payload: str, config: dict, target: Path) -> Path:
-        path = self.resources / f"legacy_fit_windows_config_{payload}.json"
+        profile = self.dataset.get("profile") if self.dataset else payload
+        path = self.resources / f"legacy_fit_windows_config_{profile}.json"
         windows = copy.deepcopy(read_json(path)) if path.exists() else {}
         # Older hand-picked windows used '-' while 14B raw files use '_'.
         for key, value in list(windows.items()):
@@ -443,6 +597,8 @@ class ComputeAdapter:
         self._assert_output_root(product_root)
         product_root = Path(product_root)
         cfg = self._config(payload)
+        if layer in ("TB_L0", "EC_L0") and self.dataset and not self.dataset.get("raw_dir"):
+            raise ValueError("当前数据集只载入了产品目录；请先选择对应原始数据目录，再执行 L0 解析")
         layout = DataLayout(product_root, payload)
         representative = bool(config.get("representative", True))
         inventory = self.inventory(payload)
@@ -451,6 +607,28 @@ class ComputeAdapter:
             selection = [_stem(item) for item in selection]
         elif representative:
             selection = inventory["representative"]["tb_stems" if layer.startswith("TB_") else "ec_stems"]
+        if config.get("ec_point_id") and layer in ("EC_L1", "EC_L2"):
+            pieces = str(config["ec_point_id"]).split(":")
+            if len(pieces) != 5 or pieces[0] != payload or pieces[1] != "ec":
+                raise ValueError("EC 能峰点不属于当前载荷")
+            energy_key = pieces[2]
+            input_layer = "EC_L0" if layer == "EC_L1" else "EC_L1"
+            sources = (
+                self._layer_dir(product_root, payload, input_layer) / "parquet",
+                self.historical_layer(payload, input_layer) / "parquet",
+            )
+            selection = sorted(
+                {
+                    _stem(path.name)
+                    for directory in sources
+                    for path in directory.glob("*.parquet")
+                    if _stem(path.name).startswith(
+                        energy_key + ("_" if energy_key.startswith("src_") else "_ch")
+                    )
+                }
+            )
+            if not selection:
+                raise ValueError(f"选中能峰 {energy_key} 没有真实 {input_layer} 输入，请先生成或载入相应产品")
         hydrated = []
         warnings = []
         if layer == "TB_L0":
@@ -472,17 +650,77 @@ class ComputeAdapter:
             )
             selection = None  # A surface always uses the full current L1 snapshot.
         elif layer == "EC_L0":
+            issues = self._source_config(cfg.raw_root)[2]
+            if issues and not representative and selection is None:
+                raise ValueError("源谱输入配置不完整: " + "; ".join(issues))
             processor = ECL0Processor(payload, product_root)
             processor.root_dir = self.workspace
-            result = processor.process(cfg, only_stems=selection)
+            if selection is not None and any(item.startswith("src_") for item in selection):
+                source_stems = {f"src_{spec.name}_{spec.exposure_minutes}m" for spec in cfg.source_specs}
+                if cfg.bkg_event_file and cfg.bkg_exposure_minutes:
+                    source_stems.add(f"src_bkg_{cfg.bkg_exposure_minutes}m")
+                unknown_sources = [
+                    item for item in selection if item.startswith("src_") and item not in source_stems
+                ]
+                if unknown_sources:
+                    raise ValueError(
+                        "所选源谱缺少匹配的原始文件/曝光/能线规格: " + ", ".join(unknown_sources)
+                    )
+                # The existing public processor selects X files, while its
+                # source handler owns the actual source/background parsing.
+                # Reuse both, with an explicit source subset, for a chosen file.
+                result = processor.process(
+                    cfg, only_stems=[item for item in selection if not item.startswith("src_")]
+                )
+                source_names = {
+                    match.group(1)
+                    for item in selection
+                    if (match := re.match(r"^src_([A-Za-z]+\d*)_\d+m$", item))
+                }
+                processor._process_sources(
+                    replace(
+                        cfg, source_specs=[spec for spec in cfg.source_specs if spec.name in source_names]
+                    ),
+                    result,
+                )
+                write_json(layout.get_ec_l0_json("L0_manifest.json"), result)
+            else:
+                result = processor.process(cfg, only_stems=selection)
         elif layer == "EC_L1":
             if tb_path is None or not Path(tb_path).is_file():
-                raise ValueError("EC L1 requires an explicitly selected TB L2 version; run TB L2 first")
+                raise ValueError(
+                    "EC L1 requires an explicitly selected TB L2 JSON version; select an existing package or compute TB L2"
+                )
+            if selection is not None and any(
+                item.startswith("src_") and not item.startswith("src_bkg_") for item in selection
+            ):
+                backgrounds = {
+                    _stem(path.name)
+                    for directory in (
+                        self._layer_dir(product_root, payload, "EC_L0") / "parquet",
+                        self.historical_layer(payload, "EC_L0") / "parquet",
+                    )
+                    for path in directory.glob("src_bkg_*.l0.parquet")
+                }
+                selection = sorted(set(selection) | backgrounds)
             hydrated = self._hydrate(payload, product_root, "EC_L0", selection)
             result = ECL1Processor(payload, product_root).process(cfg, Path(tb_path), only_stems=selection)
         elif layer == "EC_L2":
             if tb_path is None or not Path(tb_path).is_file():
                 raise ValueError("EC L2 requires the explicitly selected TB L2 dependency")
+            if selection is not None and any(
+                item.startswith("src_") and not item.startswith("src_bkg_") for item in selection
+            ):
+                backgrounds = {
+                    _stem(path.name)
+                    for directory in (
+                        self._layer_dir(product_root, payload, "EC_L1") / "parquet",
+                        self.historical_layer(payload, "EC_L1") / "parquet",
+                    )
+                    for path in directory.glob("src_bkg_*_corr.l1.parquet")
+                }
+                selection = sorted(set(selection) | backgrounds)
+            hydrated = self._hydrate(payload, product_root, "EC_L1", selection)
             selected_files = [
                 path
                 for path in (layout.get_ec_l1_dir() / "parquet").glob("*_corr.l1.parquet")
@@ -498,13 +736,29 @@ class ComputeAdapter:
                 if any(actual.get(str(ch)) != params for ch, params in expected.items()):
                     raise ValueError(f"Stale TB dependency in {path.name}; rerun EC L1 before EC L2")
             energies = (
-                sorted({stem.rsplit("_ch", 1)[0] for stem in selection}) if selection is not None else None
+                sorted(
+                    {
+                        re.sub(r"^(src_[A-Za-z]+\d*)_\d+m$", r"\1", stem.rsplit("_ch", 1)[0])
+                        for stem in selection
+                    }
+                )
+                if selection is not None
+                else None
             )
-            result = ECL2Processor(payload, product_root).process(
-                layout.get_ec_l1_dir(), {**EC_PROCESS_PARAMS, "only_energies": energies}
+            processor = ECL2Processor(payload, product_root)
+            profile = self.dataset.get("profile") if self.dataset else payload
+            if profile and profile != payload:
+                window_source = ECL2Processor(profile, product_root)
+                processor._load_xray_windows = window_source._load_xray_windows
+                processor._load_source_windows = window_source._load_source_windows
+            result = processor.process(
+                layout.get_ec_l1_dir(),
+                {**EC_PROCESS_PARAMS, "only_energies": energies, "ec_windows": config.get("ec_windows", {})},
             )
         else:
-            result = ECL3Processor(payload, product_root).process(layout.get_ec_l2_dir(), EC_PROCESS_PARAMS)
+            result = ECL3Processor(payload, product_root).process(
+                layout.get_ec_l2_dir(), {**EC_PROCESS_PARAMS, "ec_excluded": config.get("ec_excluded", [])}
+            )
             selection = None
             if representative:
                 warnings.append(
