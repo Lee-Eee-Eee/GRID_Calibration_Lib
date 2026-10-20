@@ -18,7 +18,11 @@ def presets():
     directory = Path(__file__).resolve().parents[1] / "resources" / "legacy"
     return [
         {"id": name, "label": label, "path": str(directory / (name + ".xml"))}
-        for name, label in (("hnu_packet", "HNU / 当前默认协议"), ("grid_packet", "GRID / 另一内置协议"))
+        for name, label in (
+            ("hnu_packet", "HNU / 当前默认协议"),
+            ("grid_packet", "GRID / 另一内置协议"),
+            ("grid10_packet", "GRID-10B / 波形与 106-byte HK"),
+        )
     ]
 
 
@@ -132,14 +136,51 @@ def prepare_profile(workspace, profile=None, payload_profile=None):
         fields = prepared["parser"]["fields"]
         required = [fields[key] for key in ("channel", "max", "base")] if role == "event" else []
         if role == "hk" and prepared["parser"]["conditions"]["mode"] == "hk":
-            required = [
-                fields[key].format(channel=channel) for key in ("temp", "bias") for channel in range(4)
-            ]
+            required_keys = ["temp", "bias"]
+            if prepared["parser"]["transform"]["bias_mode"] != "affine":
+                required_keys.append("current")
+            required = [fields[key].format(channel=channel) for key in required_keys for channel in range(4)]
         names = {field.tag for field in packet}
         missing = [field for field in required if field not in names]
         if missing:
             raise ValueError(f"{role} 包 {tag} 缺少映射字段: {', '.join(missing)}")
+    # Existing complete profiles are immutable descriptions. New optional
+    # defaults belong to the runtime view and must not change an old preset's
+    # identity when it is validated or copied into another run.
+    if _complete_profile(profile):
+        result = copy.deepcopy(profile)
+        result["xml"] = prepared["xml"]
+        return result
     return prepared
+
+
+def _complete_profile(profile):
+    if not isinstance(profile, dict) or not all(
+        isinstance(profile.get(key), dict) for key in ("xml", "parser", "discovery")
+    ):
+        return False
+    parser = profile["parser"]
+    if not {"event_tag", "hk_tag", "endian", "fields", "transform", "conditions"} <= parser.keys():
+        return False
+    if not all(isinstance(parser.get(key), dict) for key in ("fields", "transform", "conditions")):
+        return False
+    return (
+        profile.get("version") == 1
+        and {"channel", "max", "base", "utc", "crc", "ccm", "temp", "bias"} <= parser["fields"].keys()
+        and {
+            "base_divisor",
+            "ccm_divisor",
+            "temp_scale",
+            "temp_offset",
+            "bias_scale",
+            "bias_offset",
+            "tail_samples",
+            "stable_bias_min",
+        }
+        <= parser["transform"].keys()
+        and {"mode", "temp", "bias", "temp_scale", "bias_scale"} <= parser["conditions"].keys()
+        and {"mode", "rules", "manifest", "sources"} <= profile["discovery"].keys()
+    )
 
 
 def profile_digest(profile):
@@ -196,7 +237,8 @@ def load_profile(reference):
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != reference["file_sha256"]:
             raise ValueError("读取配置快照 SHA-256 已变化，请重新保存配置")
-        profile = validate_profile(json.loads(data))
+        profile = json.loads(data)
+        validate_profile(profile)
         if profile_digest(profile) != reference["sha256"]:
             raise ValueError("采集配置内容 SHA-256 与引用不一致，请重新保存配置")
         items = reference["xml"]

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 
-from ..common.utils import read_json, read_parquet, read_parquet_metadata
+from ..common.utils import read_json, read_parquet, read_parquet_metadata, validated_events
 from ..ec.processors.L2_processor import BIN_WIDTH, ECL2Processor
 from ..ec.processors.L3_processor import (
     MAX_CENTER_RELERR,
@@ -234,6 +234,7 @@ class ECInspector:
         if path is None:
             raise FileNotFoundError(f"No corrected EC L1 spectrum for {stem} ch{ch}")
         frame = read_parquet(path)
+        frame, signal_quality = validated_events(frame)
         signal = frame.loc[frame["channel"] == ch].copy()
         if signal.empty:
             raise ValueError(f"No events in {path.name} ch{ch}")
@@ -264,6 +265,8 @@ class ECInspector:
             if background_path == path
             else read_parquet(background_path)
         )
+        if not background_frame.empty:
+            background_frame, _ = validated_events(background_frame)
         background = background_frame.loc[background_frame["channel"] == background_ch].copy()
         processor = ECL2Processor(payload, product_root)
         bin_width = float(point.get("bin_width", BIN_WIDTH))
@@ -353,6 +356,7 @@ class ECInspector:
                 "input_evidence": input_evidence,
                 "source": "run" if Path(product_root).resolve() in path.resolve().parents else "historical",
                 "n_events": len(signal),
+                "input_quality": signal_quality,
                 "tb_correction": metadata,
                 "tb_corrfile": metadata.get("tb_corrfile"),
                 "lo": lo,

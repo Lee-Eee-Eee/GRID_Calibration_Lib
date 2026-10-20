@@ -22,7 +22,14 @@ matplotlib.use("Agg")
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 
-from ..common.utils import DataLayout, read_json, read_parquet, read_parquet_metadata, write_json
+from ..common.utils import (
+    DataLayout,
+    read_json,
+    read_parquet,
+    read_parquet_metadata,
+    validated_events,
+    write_json,
+)
 from ..config.payload_config import (
     EC_PROCESS_PARAMS,
     TB_PROCESS_PARAMS,
@@ -37,7 +44,7 @@ from ..ec.processors.L3_processor import ECL3Processor
 from ..tb.processors.L0_processor import TBL0Processor
 from ..tb.processors.L1_processor import TBL1Processor
 from ..tb.processors.L2_processor import TBL2Processor
-from .acquisition import discover, validate_profile
+from .acquisition import discover, tb_histogram_config, validate_profile
 from .datasets import DatasetCatalog, validate_payload
 from .dependencies import tb_package
 
@@ -75,6 +82,18 @@ class ComputeAdapter:
         )
         self.resources = Path(__file__).resolve().parents[1] / "resources"
         self.acquisition = validate_profile(acquisition) if acquisition is not None else None
+
+    def unavailable_reason(self, layer):
+        capabilities = (self.acquisition or {}).get("processing_capabilities", {})
+        capability = capabilities.get(layer, {}) if isinstance(capabilities, dict) else {}
+        if isinstance(capability, dict) and capability.get("supported") is False:
+            reason = capability.get("reason")
+            return (
+                reason.strip()
+                if isinstance(reason, str) and reason.strip()
+                else f"当前读取预设不支持 {layer}"
+            )
+        return None
 
     def observations(self, payload):
         return discover(self._config(payload).raw_root, self.acquisition) if self.acquisition else None
@@ -346,9 +365,63 @@ class ComputeAdapter:
                         "gain": record.get("center"),
                         "l1_path": str(path),
                         "l0_path": str(l0_path) if l0_path else None,
+                        "fit_status": "rejected"
+                        if record.get("fit_quality", {}).get("accepted") is False
+                        else "fitted",
+                    }
+                )
+        existing = {(row["stem"], row["channel"]) for row in rows}
+        l0_files = {}
+        for source in (
+            self._layer_dir(product_root, payload, "TB_L0") / "parquet",
+            self.historical_layer(payload, "TB_L0") / "parquet",
+        ):
+            for path in sorted(source.glob("*.parquet")):
+                stem = _stem(path.name)
+                l0_files.setdefault(stem, self._find_l0(payload, product_root, stem))
+        for stem, path in l0_files.items():
+            if path is None or all((stem, channel) in existing for channel in range(4)):
+                continue
+            metadata = read_parquet_metadata(path, "hk_data") or {}
+            acquisition = read_parquet_metadata(path, "acquisition") or {}
+            histogram = self._tb_histogram(None, acquisition)
+            for channel in range(4):
+                if (stem, channel) in existing:
+                    continue
+                values = {}
+                for key in ("temp", "temp_err", "bias", "bias_err"):
+                    value = metadata.get(key)
+                    if isinstance(value, list):
+                        value = value[channel] if channel < len(value) else None
+                    elif isinstance(value, dict):
+                        value = value.get(str(channel))
+                    values[key] = value
+                rows.append(
+                    {
+                        **values,
+                        "id": f"{payload}:{stem}:{channel}",
+                        "stem": stem,
+                        "payload": payload,
+                        "channel": channel,
+                        "center": None,
+                        "gain": None,
+                        "center_err": None,
+                        "fit_status": "not_fitted",
+                        "used": False,
+                        "fit_quality": {"accepted": False, "status": "not_fitted"},
+                        "l1_path": None,
+                        "l0_path": str(path),
+                        "window_lo": histogram["min"],
+                        "window_hi": histogram["max"],
+                        "histogram_config": histogram,
                     }
                 )
         return _clean(rows)
+
+    def _tb_histogram(self, record, acquisition):
+        return (record or {}).get("histogram_config") or tb_histogram_config(
+            acquisition if acquisition.get("fitting") else self.acquisition
+        )
 
     def _find_l0(self, payload: str, product_root: Path, stem: str) -> Path | None:
         for directory in (
@@ -384,18 +457,30 @@ class ComputeAdapter:
             ),
             None,
         )
-        if record is None and layer != "TB_L0":
-            raise FileNotFoundError(f"No TB L1 record for {stem} ch{channel}")
+        if record and record.get("fit_status") == "not_fitted":
+            record = None
         path = self._find_l0(payload, product_root, stem)
         if path is None:
             raise FileNotFoundError(f"No real L0 spectrum available for {stem}")
         frame = read_parquet(path)
+        input_quality = {"crc_available": "crc_check" in frame, "input_events": len(frame)}
+        if layer != "TB_L0":
+            frame, input_quality = validated_events(frame)
         amp = frame.loc[frame["channel"] == channel, "amp"].to_numpy(dtype=float)
         if not amp.size:
             raise ValueError(f"L0 has no events for {stem} ch{channel}")
-        # One-ADC display bins are the same bins used by the existing L1 fitter.
-        upper = min(1200, int(max(420, np.percentile(amp, 99.8) + 40)))
-        hist, edges = np.histogram(amp, bins=np.arange(0, upper + 1, 1))
+        acquisition = read_parquet_metadata(path, "acquisition") or {}
+        histogram = self._tb_histogram(record, acquisition)
+        # Use the same binning as the saved fit. Historical one-ADC displays
+        # retain their compact viewport while configured spectra keep all bins.
+        lo, upper, width = histogram["min"], histogram["max"], histogram["bin_width"]
+        if (
+            not (record or {}).get("histogram_config")
+            and not acquisition.get("fitting")
+            and not (self.acquisition or {}).get("fitting")
+        ):
+            upper = min(upper, int(max(420, np.percentile(amp, 99.8) + 40)))
+        hist, edges = np.histogram(amp, bins=np.arange(lo, upper + width, width))
         x = (edges[:-1] + edges[1:]) / 2
         available = {}
         for directory, source in (
@@ -417,9 +502,25 @@ class ComputeAdapter:
             "files": list(available.values()),
             "layer": layer,
             "hk_data": read_parquet_metadata(path, "hk_data"),
+            "histogram_config": histogram,
+            "input_quality": input_quality,
+            "window_bounds": {"min": histogram["min"], "max": histogram["max"], "minimum_width": 8},
+            "default_window": {
+                "lo": (record or {}).get("window_lo", histogram["min"]),
+                "hi": (record or {}).get("window_hi", histogram["max"]),
+            },
         }
-        if layer == "TB_L0":
+        if layer == "TB_L0" or record is None:
             return _clean({**common, "fit": record, "curve": None})
+        if input_quality.get("excluded_crc_count", 0) and not record.get("input_quality"):
+            return _clean(
+                {
+                    **common,
+                    "fit": record,
+                    "curve": None,
+                    "input_note": "CRC 失败事件已排除；历史拟合未记录 CRC 输入筛选，请重拟合以建立对应关系。",
+                }
+            )
         fit_x = x[(x >= record["window_lo"]) & (x <= record["window_hi"])]
         gaussian = GaussianModel().eval(
             x=fit_x, amplitude=record["amplitude"], center=record["center"], sigma=record["sigma"]
@@ -485,7 +586,9 @@ class ComputeAdapter:
             point["residual"] = point["center"] - prediction
             point["excluded"] = point["id"] in excluded
             point["used"] = (
-                not point["excluded"] and (point.get("rsquared") or 0) >= TBL2Processor.MIN_RSQUARED
+                not point["excluded"]
+                and (point.get("rsquared") or 0) >= TBL2Processor.MIN_RSQUARED
+                and point.get("fit_quality", {}).get("accepted") is not False
             )
             finite.append(point)
         if not finite:
@@ -615,6 +718,7 @@ class ComputeAdapter:
         return copied
 
     def _windows(self, payload: str, config: dict, target: Path) -> Path:
+        histogram = tb_histogram_config(self.acquisition)
         profile = self.dataset.get("profile") if self.dataset else payload
         path = self.resources / f"legacy_fit_windows_config_{profile}.json"
         windows = copy.deepcopy(read_json(path)) if path.exists() else {}
@@ -624,6 +728,8 @@ class ComputeAdapter:
             windows.setdefault(key.replace("_", "-"), copy.deepcopy(value))
         # A run starts from the exact saved historical windows wherever present.
         for point in self.points(payload, target):
+            if point.get("fit_status") == "not_fitted":
+                continue
             windows.setdefault(point["stem"], {})[str(point["channel"])] = {
                 "lo": point["window_lo"],
                 "hi": point["window_hi"],
@@ -635,12 +741,12 @@ class ComputeAdapter:
                 if (
                     int(channel) not in range(4)
                     or not all(map(math.isfinite, (lo, hi)))
-                    or lo < 0
-                    or hi > 1200
+                    or lo < histogram["min"]
+                    or hi > histogram["max"]
                     or hi - lo < 8
                 ):
                     raise ValueError(
-                        f"Invalid fit window for {stem} ch{channel}: require 0 <= lo < hi <= 1200 and width >= 8"
+                        f"Invalid fit window for {stem} ch{channel}: require {histogram['min']} <= lo < hi <= {histogram['max']} and width >= 8"
                     )
                 windows.setdefault(_stem(stem), {})[str(channel)] = {"lo": lo, "hi": hi, "manual": True}
         output = target.parent / "workbench-fit-windows.json"
@@ -667,6 +773,9 @@ class ComputeAdapter:
     ) -> dict:
         if layer not in LAYERS:
             raise ValueError(f"Unknown layer: {layer}")
+        reason = self.unavailable_reason(layer)
+        if reason:
+            raise ValueError(reason)
         self._assert_output_root(product_root)
         product_root = Path(product_root)
         cfg = self._config(payload)
@@ -722,7 +831,12 @@ class ComputeAdapter:
             windows = self._windows(payload, config, product_root)
             result = TBL1Processor(payload, product_root).process(
                 layout.get_tb_l0_dir(),
-                {**TB_PROCESS_PARAMS, "fit_windows_config": str(windows)},
+                {
+                    **TB_PROCESS_PARAMS,
+                    "fit_windows_config": str(windows),
+                    "automatic_window": config.get("automatic_window", False),
+                    "peak_detection": config.get("peak_detection", {}),
+                },
                 only_stems=[f"{stem}.l0" for stem in selection] if selection is not None else None,
             )
         elif layer == "TB_L2":
@@ -865,6 +979,8 @@ class ComputeAdapter:
                     "only_energies": energies,
                     "only_stems": selection,
                     "ec_windows": config.get("ec_windows", {}),
+                    "automatic_window": config.get("automatic_window", False),
+                    "peak_detection": config.get("peak_detection", {}),
                     "background_stem": f"src_bkg_{float(cfg.bkg_exposure_minutes):g}m"
                     if cfg.bkg_exposure_minutes
                     else None,

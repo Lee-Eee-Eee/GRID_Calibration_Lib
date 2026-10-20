@@ -24,6 +24,7 @@ from .compute import ComputeAdapter
 from .datasets import DatasetCatalog, validate_payload
 from .dependencies import snapshot, tb_package
 from .ec_interactive import ECInspector
+from .presets import PresetRegistry
 
 LAYERS = ("TB_L0", "TB_L1", "TB_L2", "EC_L0", "EC_L1", "EC_L2", "EC_L3")
 DEPENDENCIES = {
@@ -81,6 +82,48 @@ def layer_dir(root, payload, layer):
     return root / payload / pipeline.lower() / level
 
 
+def peak_job_settings(layer, spec):
+    """Validate scientific peak-search options before creating any job files."""
+    supplied = set(spec) & {"automatic_window", "peak_detection"}
+    if supplied and layer not in ("TB_L1", "EC_L2"):
+        raise ValueError("自动寻峰配置只适用于 TB L1 / EC L2")
+    result = {}
+    if "automatic_window" in supplied:
+        if not isinstance(spec["automatic_window"], bool):
+            raise ValueError("automatic_window 必须为布尔值")
+        result["automatic_window"] = spec["automatic_window"]
+    if "peak_detection" not in supplied:
+        return result
+    options = spec["peak_detection"]
+    allowed = {
+        "min_significance",
+        "min_sigma_bins",
+        "max_resolution",
+        "noise_ceiling",
+        "expected_center",
+        "expected_energy_keV",
+        "expected_tolerance",
+    }
+    if not isinstance(options, dict) or set(options) - allowed:
+        raise ValueError("自动寻峰参数名称无效")
+    checked = {}
+    for key, value in options.items():
+        if value is None and key in ("noise_ceiling", "expected_center"):
+            checked[key] = None
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"自动寻峰参数 {key} 必须为有限数值")
+        if value < 0 or (value == 0 and key != "noise_ceiling"):
+            raise ValueError(f"自动寻峰参数 {key} 必须为正数")
+        if key == "expected_tolerance" and value > 1:
+            raise ValueError("expected_tolerance 必须在 (0, 1] 内")
+        checked[key] = float(value)
+    if "expected_energy_keV" in checked and (layer != "EC_L2" or checked.get("expected_center") is None):
+        raise ValueError("能线锚点需要 EC L2 的期望 ADC 峰位")
+    result["peak_detection"] = checked
+    return result
+
+
 class Workbench:
     def __init__(self, workspace: Path):
         self.workspace = Path(workspace).resolve()
@@ -88,6 +131,7 @@ class Workbench:
         self.runs.mkdir(exist_ok=True)
         self.adapter = ComputeAdapter(self.workspace)
         self.catalog = DatasetCatalog(self.workspace)
+        self.preset_registry = PresetRegistry(self.workspace)
         self.lock = threading.RLock()
         # Matplotlib and the legacy parser have process-global state.
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="calibration")
@@ -165,6 +209,7 @@ class Workbench:
             "revision": reference["revision"] if reference else 0,
             "sha256": reference["sha256"] if reference else profile_digest(profile),
             "presets": presets(),
+            "acquisition_preset": state.get("acquisition_preset"),
         }
 
     def preview_acquisition(self, run_id, profile):
@@ -181,7 +226,7 @@ class Workbench:
         )
         return result
 
-    def save_acquisition(self, run_id, profile, reason=None):
+    def save_acquisition(self, run_id, profile, reason=None, *, preset_reference=None):
         with self.lock:
             state = self.read(run_id)
             if any(job["status"] in ("queued", "running") for job in state["jobs"]):
@@ -192,6 +237,9 @@ class Workbench:
                 raise ValueError("读取配置校验失败: " + "; ".join(preview["errors"]))
             previous = state.get("acquisition")
             if previous and previous["sha256"] == preview["sha256"]:
+                if preset_reference and state.get("acquisition_preset") != preset_reference:
+                    state["acquisition_preset"] = copy.deepcopy(preset_reference)
+                    self._record_preset_revision(state, reason)
                 return self.view(run_id)
             inventory = ComputeAdapter(self.workspace, state.get("dataset"), prepared).inventory(
                 state["payload"]
@@ -210,6 +258,10 @@ class Workbench:
                 ec_dependency=None,
                 ec_scope=None,
             )
+            if preset_reference:
+                state["acquisition_preset"] = copy.deepcopy(preset_reference)
+            elif state.get("acquisition_preset"):
+                state["acquisition_preset"]["modified"] = True
             state["dirty_layers"] = sorted(set(state["dirty_layers"]) | set(LAYERS))
             state["config_revision"] += 1
             revision = {
@@ -217,6 +269,7 @@ class Workbench:
                 "saved_at": now(),
                 "reason": str(reason or "载荷读取配置修订")[:1000],
                 "acquisition": reference,
+                "acquisition_preset": state.get("acquisition_preset"),
                 "config": copy.deepcopy(state["config"]),
             }
             state["revisions"].append(revision)
@@ -224,6 +277,153 @@ class Workbench:
             write(self.root(run_id) / "revisions" / f"{state['config_revision']:04d}.json", revision)
             self.save(state)
         return self.view(run_id)
+
+    def _record_preset_revision(self, state, reason):
+        state["config_revision"] += 1
+        state["updated_at"] = now()
+        revision = {
+            "revision": state["config_revision"],
+            "saved_at": now(),
+            "reason": str(reason or "切换载荷读取预设版本")[:1000],
+            "acquisition": state.get("acquisition"),
+            "acquisition_preset": state.get("acquisition_preset"),
+            "config": copy.deepcopy(state["config"]),
+        }
+        state["revisions"].append(revision)
+        write(self.root(state["id"]) / "revisions" / f"{state['config_revision']:04d}.json", revision)
+        self.save(state)
+
+    def acquisition_presets(self, payload=None):
+        with self.lock:
+            return self.preset_registry.list(payload)
+
+    def acquisition_preset(self, preset_id, version=None):
+        with self.lock:
+            return self.preset_registry.get(preset_id, version)
+
+    def register_acquisition_preset(self, body):
+        with self.lock:
+            return self.preset_registry.save(
+                **{
+                    key: body.get(key)
+                    for key in ("profile", "name", "payload", "preset_id", "reason", "bindings")
+                }
+            )
+
+    def _run_preset_bindings(self, state):
+        dataset = state.get("dataset")
+        if not dataset:
+            cfg = self.adapter_for(state)._config(state["payload"])
+            dataset = {
+                "raw_dir": str(cfg.raw_root) if cfg.raw_root.is_dir() else None,
+                "product_dir": str(self.workspace / "products" / state["payload"]),
+            }
+        result = []
+        for role, key in (("raw", "raw_dir"), ("product", "product_dir")):
+            path = dataset.get(key)
+            if path and Path(path).is_dir():
+                result.append({"role": role, "path": path})
+        return result
+
+    def save_acquisition_preset(self, run_id, body):
+        with self.lock, self._preset_transaction(run_id):
+            state = self.read(run_id)
+            if any(job["status"] in ("queued", "running") for job in state["jobs"]):
+                raise ValueError("计算运行中，无法发布读取预设")
+            profile = body["profile"] if "profile" in body else self.acquisition(run_id)["profile"]
+            if not isinstance(profile, dict):
+                raise ValueError("profile 必须为读取配置对象；省略时使用当前试算配置")
+            prepared = prepare_profile(self.workspace, profile)
+            preview = self.preview_acquisition(run_id, prepared)
+            if preview["errors"]:
+                raise ValueError("读取配置校验失败: " + "; ".join(preview["errors"]))
+            # Resolve all inputs before publishing a directory association.
+            ComputeAdapter(self.workspace, state.get("dataset"), prepared).inventory(state["payload"])
+            bindings = self._run_preset_bindings(state) if body.get("bind_directories", True) else []
+            selected = self.preset_registry.save(
+                profile=prepared,
+                name=body.get("name"),
+                payload=body.get("payload") or (None if body.get("preset_id") else state["payload"]),
+                preset_id=body.get("preset_id"),
+                reason=body.get("reason"),
+                bindings=bindings,
+            )
+            reference = {**selected["reference"], "origin": "published", "modified": False}
+            run = self.save_acquisition(
+                run_id, prepared, body.get("reason") or "保存载荷读取预设", preset_reference=reference
+            )
+            self._bind_run_products(run, reference)
+            return {"preset": selected["preset"], "reference": reference, "run": run}
+
+    def apply_acquisition_preset(self, run_id, preset_id, version=None, reason=None):
+        with self.lock, self._preset_transaction(run_id):
+            selected = self.preset_registry.get(preset_id, version)
+            reference = {**selected["reference"], "origin": "manual", "modified": False}
+            run = self.save_acquisition(
+                run_id, selected["profile"], reason or "切换载荷读取预设版本", preset_reference=reference
+            )
+            self._bind_run_products(run, reference)
+            return run
+
+    @contextlib.contextmanager
+    def _preset_transaction(self, run_id):
+        """Keep registry associations and the run synchronized on failed saves."""
+        root = self.root(run_id)
+        state_path = root / "state.json"
+        registry_path = self.preset_registry.path
+        original_state = state_path.read_bytes()
+        original_registry = registry_path.read_bytes() if registry_path.exists() else None
+        run_snapshots = set((root / "acquisition").glob("*"))
+        registry_snapshots = set(self.preset_registry.root.glob("*/acquisition/*"))
+        revisions = set((root / "revisions").glob("*.json"))
+        try:
+            yield
+        except Exception:
+            for path, content in ((registry_path, original_registry), (state_path, original_state)):
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    temporary = path.with_suffix(path.suffix + ".rollback")
+                    temporary.write_bytes(content)
+                    temporary.replace(path)
+            # Delete only snapshots created by this failed operation; all
+            # published/previous run snapshots retain their original bytes.
+            for base, candidates in (
+                (root / "acquisition", set((root / "acquisition").glob("*")) - run_snapshots),
+                (
+                    self.preset_registry.root,
+                    set(self.preset_registry.root.glob("*/acquisition/*")) - registry_snapshots,
+                ),
+            ):
+                base = base.resolve()
+                for path in candidates:
+                    target = path.resolve()
+                    if (
+                        target.is_relative_to(base)
+                        and target != base
+                        and path.is_dir()
+                        and not path.is_symlink()
+                    ):
+                        shutil.rmtree(target)
+            for path in set((root / "revisions").glob("*.json")) - revisions:
+                if path.resolve().parent == (root / "revisions").resolve():
+                    path.unlink()
+            raise
+
+    def _bind_run_products(self, state, reference):
+        product = self.root(state["id"]) / "products" / state["payload"]
+        product.mkdir(parents=True, exist_ok=True)
+        self.preset_registry.bind(
+            reference["id"],
+            reference["version"],
+            [{"role": "product", "path": str(product)}],
+            "固定试算产品的读取预设来源",
+        )
+
+    def _annotate_datasets(self, catalog):
+        for dataset in catalog["datasets"]:
+            dataset["acquisition_preset_match"] = self.preset_registry.match(dataset)
+        return catalog
 
     def acquisition_coverage(self, state, layer):
         if not state.get("acquisition"):
@@ -252,7 +452,7 @@ class Workbench:
 
     def scan_datasets(self, **paths):
         with self.lock:
-            return self.catalog.scan(**paths)
+            return self._annotate_datasets(self.catalog.scan(**paths))
 
     def directories(self, path=None):
         folder = Path(path or self.workspace).expanduser().resolve()
@@ -268,6 +468,10 @@ class Workbench:
         return {"path": str(folder), "parent": str(folder.parent), "directories": children}
 
     def bootstrap(self):
+        with self.lock:
+            return self._bootstrap()
+
+    def _bootstrap(self):
         runs = []
         with self.lock:
             for path in sorted(self.runs.glob("*/state.json"), reverse=True):
@@ -277,15 +481,23 @@ class Workbench:
         if self.catalog.path.exists():
             saved = json.loads(self.catalog.path.read_text(encoding="utf-8"))
             catalog["datasets"] = saved.get("datasets", catalog["datasets"])
+        self._annotate_datasets(catalog)
         return {
             **catalog,
             "payloads": list(dict.fromkeys(item["payload"] for item in catalog["datasets"])),
             "runs": runs,
             "active_run": runs[0]["id"] if runs else None,
             "workspace": str(self.workspace),
+            "acquisition_presets": self.acquisition_presets()["presets"],
         }
 
-    def create(self, payload=None, name=None, dataset_id=None):
+    def create(self, payload=None, name=None, dataset_id=None, preset_id=None, preset_version=None):
+        with self.lock:
+            return self._create(payload, name, dataset_id, preset_id, preset_version)
+
+    def _create(self, payload=None, name=None, dataset_id=None, preset_id=None, preset_version=None):
+        if preset_version is not None and not preset_id:
+            raise ValueError("指定预设版本时必须同时选择预设")
         dataset = None
         if dataset_id:
             self.catalog.scan()
@@ -301,6 +513,27 @@ class Workbench:
             inventory = self.inventory(payload)
             adapter = self.adapter
         payload = validate_payload(payload)
+        match_dataset = dataset or {
+            "payload": payload,
+            "source_payload": payload,
+            "raw_dir": str(adapter._config(payload).raw_root),
+            "product_dir": str(self.workspace / "products" / payload),
+        }
+        match = self.preset_registry.match(match_dataset)
+        if not preset_id and match["status"] == "conflict":
+            raise ValueError(match["warnings"][0])
+        selected_preset = None
+        if preset_id:
+            selected_preset = self.preset_registry.get(preset_id, preset_version)
+            preset_origin = "manual"
+        elif match["reference"]:
+            selected_preset = self.preset_registry.get(
+                match["reference"]["id"], match["reference"]["version"]
+            )
+            preset_origin = match["reference"]["origin"]
+        if selected_preset:
+            adapter = ComputeAdapter(self.workspace, dataset, selected_preset["profile"])
+            inventory = adapter.inventory(payload)
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
         root = self.runs / run_id
         root.mkdir()
@@ -352,6 +585,7 @@ class Workbench:
             "pending_ec_l0": [],
             "generated": {},
             "acquisition": None,
+            "acquisition_preset": None,
             "acquisition_pending_layers": [],
             "acquisition_products": {},
             "inventory": inventory,
@@ -376,6 +610,18 @@ class Workbench:
             state["ec_dependency"] = {**state["selected_tb"], "input_origin": "imported_metadata_verified"}
             state["ec_scope"] = "all"
         write(root / "state.json", state)
+        if selected_preset:
+            reference = {**selected_preset["reference"], "origin": preset_origin, "modified": False}
+            state.update(
+                acquisition=freeze_profile(root, selected_preset["profile"], 1),
+                acquisition_preset=reference,
+                acquisition_pending_layers=list(LAYERS),
+                dirty_layers=list(LAYERS),
+                ec_dependency=None,
+                ec_scope=None,
+            )
+            self.save(state)
+            self._bind_run_products(state, reference)
         return self.view(run_id)
 
     def _imported_ec_matches(self, state, adapter):
@@ -409,6 +655,9 @@ class Workbench:
             changed = set()
             tb_ec_dependents = () if state.get("tb_binding") == "pinned" else ("EC_L1", "EC_L2", "EC_L3")
             if "windows" in patch:
+                from .acquisition import tb_histogram_config
+
+                histogram = tb_histogram_config(adapter.acquisition)
                 windows = patch["windows"]
                 if not isinstance(windows, dict):
                     raise ValueError("windows 必须为对象")
@@ -420,9 +669,14 @@ class Workbench:
                             raise ValueError("通道不存在")
                         lo, hi = float(bounds["lo"]), float(bounds["hi"])
                         if not (
-                            math.isfinite(lo) and math.isfinite(hi) and 0 <= lo < hi <= 1200 and hi - lo >= 8
+                            math.isfinite(lo)
+                            and math.isfinite(hi)
+                            and histogram["min"] <= lo < hi <= histogram["max"]
+                            and hi - lo >= 8
                         ):
-                            raise ValueError("窗口须满足 0 ≤ lo < hi ≤ 1200，宽度至少 8 ADC")
+                            raise ValueError(
+                                f"窗口须满足 {histogram['min']} ≤ lo < hi ≤ {histogram['max']}，宽度至少 8 ADC"
+                            )
                         new = {"lo": lo, "hi": hi}
                         old = state["config"]["windows"].setdefault(stem, {}).get(str(ch))
                         if old != new:
@@ -636,6 +890,9 @@ class Workbench:
             layer = spec.get("layer")
             if layer not in LAYERS:
                 raise ValueError("未知处理层")
+            unavailable_reason = self.adapter_for(state).unavailable_reason(layer)
+            if unavailable_reason:
+                raise ValueError(unavailable_reason)
             if any(j["status"] in ("queued", "running") for j in state["jobs"]):
                 raise ValueError("此试算已有计算任务")
             required_layer = {"TB_L2": "TB_L1", "EC_L3": "EC_L2"}.get(layer)
@@ -664,6 +921,7 @@ class Workbench:
             if layer == "EC_L3" and "EC_L2" in state["dirty_layers"]:
                 raise ValueError("请先运行 EC L2 更新能峰拟合")
             config = copy.deepcopy(state["config"])
+            config.update(peak_job_settings(layer, spec))
             config["representative"] = bool(spec.get("representative", True))
             if (
                 layer == "EC_L2"
@@ -750,6 +1008,7 @@ class Workbench:
                 else "all",
                 "tb_version": copy.deepcopy(selected if layer.startswith("EC_") else state["tb_version"]),
                 "acquisition": copy.deepcopy(state.get("acquisition")),
+                "acquisition_preset": copy.deepcopy(state.get("acquisition_preset")),
                 "error": None,
             }
             if layer == "EC_L3":
@@ -1039,12 +1298,12 @@ class Workbench:
             {"stem": stem}
             for stem in sorted(
                 {
-                    path.name.removesuffix(".l0.parquet")
+                    path.name.removesuffix(".parquet").removesuffix(".l0")
                     for directory in (
                         layer_dir(root / "products", state["payload"], "TB_L0"),
                         adapter.historical_layer(state["payload"], "TB_L0"),
                     )
-                    for path in directory.glob("parquet/*.l0.parquet")
+                    for path in directory.glob("parquet/*.parquet")
                 }
             )
         ]
@@ -1068,12 +1327,35 @@ class Workbench:
         result["draft_window"] = state["config"]["windows"].get(stem, {}).get(str(channel))
         result["excluded"] = f"{state['payload']}:{stem}:{channel}" in state["config"]["excluded"]
         result["fit_source"] = (
-            "computed"
+            "not_fitted"
+            if result["fit"] is None
+            else "computed"
             if any(
                 a["path"].endswith(f"/{stem}_fit_results.l1.json")
                 for a in state["generated"].get("TB_L1", [])
             )
             else "historical"
+        )
+        attempt = next(
+            (
+                job
+                for job in reversed(state["jobs"])
+                if job["layer"] == "TB_L1"
+                and (
+                    stem in job["config"].get("only", [])
+                    or job.get("scope") == "all"
+                    or (
+                        job.get("scope") == "representative"
+                        and stem in state["inventory"]["representative"]["tb_stems"]
+                    )
+                )
+            ),
+            None,
+        )
+        result["last_fit_attempt"] = (
+            {key: attempt.get(key) for key in ("id", "status", "error", "scope", "created_at", "finished_at")}
+            if attempt
+            else None
         )
         return clean(result)
 
@@ -1185,6 +1467,7 @@ class Workbench:
                 "output": output_text,
                 "dependencies": DEPENDENCIES[layer],
                 "acquisition_coverage": self.acquisition_coverage(state, layer),
+                "unavailable_reason": adapter.unavailable_reason(layer),
             }
             if layer == "EC_L1":
                 stages[layer]["tb_dependency"] = self.selected_tb(state)

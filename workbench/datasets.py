@@ -13,7 +13,7 @@ import os
 import re
 from pathlib import Path
 
-RAW_FOLDERS = ("Temp_Vbias", "X", "X_new", "source")
+RAW_FOLDERS = ("Temp_Vbias", "X", "X_new", "source", "tb_data", "x_data", "src_data")
 
 
 def validate_payload(value: str) -> str:
@@ -40,11 +40,12 @@ def _key(value: str) -> str:
         "03": "15b",
         "grid03": "15b",
         "grid15b": "15b",
+        "grid10brawdata": "10b",
     }.get(normalized, normalized)
 
 
 def _label(path: Path) -> str:
-    return {"14b": "14B", "15b": "15B"}.get(_key(path.name), path.name)
+    return {"10b": "10B", "14b": "14B", "15b": "15B"}.get(_key(path.name), path.name)
 
 
 class DatasetCatalog:
@@ -149,12 +150,12 @@ class DatasetCatalog:
         payload = validate_payload(dataset.get("payload") or _label(raw or product))
         source_payload = product.name if product else str(dataset.get("source_payload") or payload)
         profile = dataset.get("profile")
-        if profile not in ("14B", "15B"):
+        if profile not in ("10B", "14B", "15B"):
             profile = next(
                 (
-                    {"14b": "14B", "15b": "15B"}[_key(value)]
+                    {"10b": "10B", "14b": "14B", "15b": "15B"}[_key(value)]
                     for value in ((raw.name if raw else ""), source_payload, payload)
-                    if _key(value) in ("14b", "15b")
+                    if _key(value) in ("10b", "14b", "15b")
                 ),
                 None,
             )
@@ -166,6 +167,17 @@ class DatasetCatalog:
             "source_payload": source_payload,
             "profile": profile,
         }
+        # Preset selection follows the directory the user explicitly selected;
+        # an automatically paired default directory must not override it.
+        roles = dataset.get("selection_roles")
+        if roles is not None:
+            if (
+                not isinstance(roles, list)
+                or not roles
+                or any(role not in ("raw", "product") for role in roles)
+            ):
+                raise ValueError("目录选择来源无效")
+            record["selection_roles"] = sorted(set(roles))
         identity = json.dumps(record, sort_keys=True, ensure_ascii=False).encode("utf-8")
         return {"id": hashlib.sha256(identity).hexdigest()[:16], **record}
 
@@ -209,6 +221,11 @@ class DatasetCatalog:
                     "raw_dir": str(raw) if raw else None,
                     "product_dir": str(product) if product else None,
                     "payload": payload or _label(raw or product),
+                    **(
+                        {"selection_roles": ["raw" if raw_dir else "product"]}
+                        if bool(raw_dir) != bool(product_dir)
+                        else {}
+                    ),
                 }
             )
             for raw, product in pairs

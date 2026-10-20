@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import io
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,61 @@ def _tail_stats(arr: np.ndarray, n: int = 60) -> dict[str, float]:
     }
 
 
+def convert_hk_temperature(values: np.ndarray, transform: dict[str, Any]) -> np.ndarray:
+    """Decode named telemetry conversions; never evaluate user expressions."""
+    values = np.asarray(values, dtype=float)
+    mode = transform.get("temp_mode", "affine")
+    if mode == "affine":
+        return values * float(transform.get("temp_scale", 0.01)) + float(transform.get("temp_offset", -273.15))
+    if mode == "grid10_signed":
+        rebuilt = values / 256.0
+        return rebuilt - (rebuilt > 128) * 255.0
+    raise ValueError(f"未知温度转换模式 {mode!r}")
+
+
+def convert_hk_bias(voltage: np.ndarray, current: np.ndarray, transform: dict[str, Any]) -> np.ndarray:
+    """Apply the documented voltage-divider and series-resistance corrections."""
+    voltage, current = np.asarray(voltage, dtype=float), np.asarray(current, dtype=float)
+    mode = transform.get("bias_mode", "affine")
+    if mode == "affine":
+        return voltage * float(transform.get("bias_scale", 0.001)) + float(transform.get("bias_offset", 0))
+    if mode not in ("grid10_current_drop", "grid11_current_drop"):
+        raise ValueError(f"未知偏压转换模式 {mode!r}")
+    if current.shape != voltage.shape or not current.size:
+        raise ValueError("偏压电流压降修正需要与电压同长度的 HK 电流字段")
+    if mode == "grid10_current_drop":
+        return 20.57 * 2.5 * voltage / 4096.0 - 499 * 2.5 * current / (4096.0 * 548.88)
+    return voltage / 1000.0 - 499 * current * 1e-6
+
+
+def packet_repeat_options(xml_path: Path, tag: str) -> dict[str, int]:
+    """Infer the repeated body from its XML fields and fixed trailer geometry.
+
+    HNU 584-byte packets have a 44-byte prefix, 38 * 14-byte events and an
+    eight-byte trailer. The older GRID 516-byte variant has 40 * 12 bytes.
+    Explicit profile options always take precedence over this inference.
+    """
+    packet = ET.parse(xml_path).getroot().find(tag)
+    if packet is None:
+        raise ValueError(f"XML 中没有包标签 {tag}")
+    repeated = [field for field in packet if "repeat" in field.attrib]
+    if not repeated:
+        return {}
+    starts = [int(field.findtext("start")) for field in repeated]
+    base = min(starts)
+    stride = max(int(field.findtext("start")) + int(field.findtext("size")) * int(field.findtext("len"))
+                 for field in repeated) - base
+    tail = packet.find("tail")
+    tail_start = tail.find("start") if tail is not None else None
+    if (tail is None or tail_start is None or "vary_repeat" not in tail_start.attrib
+            or int(tail_start.attrib.get("base_start", -1)) != base or stride <= 0):
+        raise ValueError("重复事件 XML 布局无法自动推断；请指定 multi_evt/multi_step")
+    body_size = int(packet.attrib["packet_len"]) - base - int(tail_start.text) - int(tail.findtext("size")) * int(tail.findtext("len"))
+    if body_size <= 0 or body_size % stride:
+        raise ValueError("重复事件 XML 包长度与字段布局不整除；请核对 XML 或指定重复参数")
+    return {"multi_evt": body_size // stride, "multi_step": stride}
+
+
 def parse_event_hk_to_dataframe(
     event_path: Path,
     hk_path: Path,
@@ -116,6 +172,12 @@ def parse_event_hk_to_dataframe(
     settings = profile.get("parser", {})
     fields = settings.get("fields", {})
     transform = settings.get("transform", {})
+    if transform.get("temp_mode", "affine") not in ("affine", "grid10_signed"):
+        raise ValueError("未知温度转换模式")
+    if transform.get("bias_mode", "affine") not in ("affine", "grid10_current_drop", "grid11_current_drop"):
+        raise ValueError("未知偏压转换模式")
+    if transform.get("hk_selection", "legacy_tail") not in ("legacy_tail", "stable_plateau"):
+        raise ValueError("未知 HK 稳态选择模式")
     conditions = settings.get("conditions", {})
     observation = observation or {}
     event_tag = settings.get("event_tag", event_tag)
@@ -129,18 +191,33 @@ def parse_event_hk_to_dataframe(
         if not xml_files[kind].is_file():
             raise FileNotFoundError(f"{kind} XML 文件不存在: {xml_files[kind]}")
 
+    effective_options = {}
+
     def parse(path: Path, kind: str, tag: str):
-        options = {
+        explicit = {
             name: settings[f"{kind}_{name}"]
             for name in ("multi_evt", "multi_step")
             if settings.get(f"{kind}_{name}") is not None
         }
+        options = packet_repeat_options(xml_files[kind], tag) if len(explicit) < 2 else {}
+        options.update(explicit)
         if endian != "MSB":
             options["endian"] = endian
+        effective_options[kind] = dict(options)
         return _parse_silent(parse_grid_data_new, path, tag, xml_files[kind], **options)
 
     event_data = parse(event_path, "event", event_tag)
     hk_data = parse(hk_path, "hk", hk_tag)
+    hk_crc = hk_data.get("crc_check")
+    hk_crc_quality = {"available": hk_crc is not None, "checked_packets": 0, "failed_packets": 0}
+    if hk_crc is not None:
+        valid_hk = np.asarray(hk_crc, dtype=bool).reshape(-1)
+        hk_crc_quality.update(checked_packets=int(valid_hk.size), failed_packets=int(np.count_nonzero(~valid_hk)))
+        if conditions.get("mode", "hk") == "hk":
+            if not valid_hk.size or not valid_hk.any():
+                raise ValueError("全部 HK CRC 校验失败；拒绝使用无效温度/偏压，请核对 HK XML 和字节序")
+            hk_data = {key: np.asarray(value)[valid_hk] if np.asarray(value).ndim > 0
+                       and np.asarray(value).shape[0] == valid_hk.size else value for key, value in hk_data.items()}
 
     required = {key: fields.get(key, default) for key, default in (
         ("channel", "channel_n"), ("max", "data_max"), ("base", "data_base"),
@@ -172,12 +249,10 @@ def parse_event_hk_to_dataframe(
     crc_raw = event_data.get(fields.get("crc", "crc_check"))
     if crc_raw is not None:
         crc_check = np.asarray(crc_raw, dtype=bool).reshape(-1)
-        if crc_check.size >= n_evt:
-            crc_check = crc_check[:n_evt]
-        else:
-            tmp = np.ones(n_evt, dtype=bool)
-            tmp[: crc_check.size] = crc_check
-            crc_check = tmp
+        if crc_check.size != n_evt:
+            raise ValueError("CRC 数量与事件数量不一致；拒绝将缺失 CRC 当作校验通过")
+        if crc_check.size and not np.any(crc_check):
+            raise ValueError("全部事件 CRC 校验失败；拒绝生成科学输入，请核对 XML、重复事件数/步长和字节序")
     else:
         crc_check = np.ones(n_evt, dtype=bool)
 
@@ -221,10 +296,24 @@ def parse_event_hk_to_dataframe(
         t_raw = np.asarray(hk_data.get(t_name, []), dtype=float).reshape(-1)
         v_raw = np.asarray(hk_data.get(v_name, []), dtype=float).reshape(-1)
         if condition_mode == "hk":
-            t_c = t_raw * float(transform.get("temp_scale", 0.01)) + float(transform.get("temp_offset", -273.15))
-            v_c = v_raw * float(transform.get("bias_scale", 0.001)) + float(transform.get("bias_offset", 0.0))
+            current_name = (fields.get("current") or "sipm_current{channel}").format(channel=c, ch=c)
+            current_raw = np.asarray(hk_data.get(current_name, []), dtype=float).reshape(-1)
+            t_c = convert_hk_temperature(t_raw, transform)
+            v_c = convert_hk_bias(v_raw, current_raw, transform)
             if np.any(ch == c) and (not t_c.size or not v_c.size):
                 raise ValueError(f"HK 缺少通道 {c} 的温度/偏压字段 {t_name!r}/{v_name!r}；请核对字段映射")
+            if transform.get("hk_selection", "legacy_tail") == "stable_plateau":
+                target = float(np.nanmedian(v_c[-tail_samples:]))
+                tolerance = float(transform.get("stable_bias_tolerance", 0.2))
+                selected = np.isfinite(v_c) & (np.abs(v_c - target) <= tolerance)
+                indices = np.flatnonzero(selected)
+                if not indices.size or not np.isfinite(target) or target <= float(transform.get("stable_bias_min", 20)):
+                    raise ValueError(f"HK 通道 {c} 没有有效稳态偏压；请核对电流修正和稳态阈值")
+                groups = np.split(indices, np.flatnonzero(np.diff(indices) != 1) + 1)
+                steady = max(groups, key=len)
+                v_c = v_c[steady]
+                if t_c.size == v_raw.size:
+                    t_c = t_c[steady]
         else:
             t_c = np.asarray([condition_value("temp", c)])
             v_c = np.asarray([condition_value("bias", c)])
@@ -323,6 +412,7 @@ def parse_event_hk_to_dataframe(
             "checked_events": min(int(np.asarray(crc_raw).size), n_evt) if crc_raw is not None else 0,
             "failed_events": int(np.count_nonzero(~crc_check)) if crc_raw is not None else 0,
         },
+        "hk_crc": hk_crc_quality,
         "acquisition": {
             "profile_version": profile.get("version", 1),
             "profile_sha256": profile.get("_sha256"),
@@ -332,6 +422,8 @@ def parse_event_hk_to_dataframe(
                 for kind, path in xml_files.items()
             },
             "parser": settings,
+            "effective_packet_options": effective_options,
+            "fitting": profile.get("fitting", {}),
             "observation": observation,
         },
     }

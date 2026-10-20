@@ -15,6 +15,7 @@ from ...common.utils import (
     read_json,
     read_parquet,
     read_parquet_metadata,
+    validated_events,
     write_json,
     write_parquet,
 )
@@ -87,7 +88,7 @@ class ECL1Processor:
         if bkg_stem:
             bkg_path = parquet_dir / f"{bkg_stem}.l0.parquet"
             try:
-                df_bkg = read_parquet(bkg_path)
+                df_bkg, input_quality = validated_events(read_parquet(bkg_path))
                 bkg_df_corrected = self._apply_correction(df_bkg, tb_params)
                 acquisition = self._l0_acquisition(bkg_path)
                 duration = float(bkg_re.fullmatch(bkg_path.name).group("min"))
@@ -100,9 +101,11 @@ class ECL1Processor:
                                         "tb_params_used": tb_params_used,
                                         "exposure_minutes": duration,
                                         "acquisition": acquisition},
-                              meta_key="tb_correction", schema_metadata={"acquisition": acquisition})
+                              meta_key="tb_correction", schema_metadata={"acquisition": acquisition,
+                                                                          "input_quality": input_quality})
                 results["outputs"].append({"stem": bkg_stem, "data_type": "source_bkg",
                                            "n_pulses": int(len(bkg_df_corrected)),
+                                           "input_quality": input_quality,
                                            "parquet": bkg_out_path.name, "acquisition": acquisition})
                 results["n_processed"] += 1
                 print(f"EC L1: bkg {bkg_stem}_corr ({len(bkg_df_corrected)} pulses)")
@@ -138,7 +141,7 @@ class ECL1Processor:
                 spec = None
 
             try:
-                df_l0 = read_parquet(parquet_file)
+                df_l0, input_quality = validated_events(read_parquet(parquet_file))
                 df_l1 = self._apply_correction(df_l0, tb_params)
                 acquisition = self._l0_acquisition(parquet_file)
 
@@ -146,6 +149,7 @@ class ECL1Processor:
                     "tb_corrfile": str(tb_l2_json_path.name),
                     "tb_params_used": tb_params_used,
                     "acquisition": acquisition,
+                    "input_quality": input_quality,
                 }
                 if spec is not None:
                     file_metadata["source_name"] = spec.name
@@ -159,7 +163,7 @@ class ECL1Processor:
 
                 parquet_out = self.layout.get_ec_l1_parquet(f"{stem}_corr.l1.parquet")
                 write_parquet(parquet_out, df_l1, metadata=file_metadata, meta_key="tb_correction",
-                              schema_metadata={"acquisition": acquisition})
+                              schema_metadata={"acquisition": acquisition, "input_quality": input_quality})
 
                 results["outputs"].append({
                     "stem": stem,
@@ -167,6 +171,7 @@ class ECL1Processor:
                     "n_pulses": int(len(df_l1)),
                     "parquet": parquet_out.name,
                     "acquisition": acquisition,
+                    "input_quality": input_quality,
                 })
                 results["n_processed"] += 1
                 print(f"EC L1: {stem} ({len(df_l1)} pulses, type={data_type})")

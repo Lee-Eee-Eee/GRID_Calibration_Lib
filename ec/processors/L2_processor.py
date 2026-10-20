@@ -10,14 +10,16 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import savgol_filter
 
+from ...common.peak_finding import detect_photopeak, fit_quality
 from ...common.utils import (
     DataLayout,
     get_timestamp,
     read_json,
     read_parquet,
     read_parquet_metadata,
+    validated_events,
     write_json,
 )
 
@@ -52,6 +54,8 @@ class ECL2Processor:
             "layer": "EC_L2",
             "timestamp": get_timestamp(),
             "bin_width": bin_width,
+            "automatic_window": bool(cfg.get("automatic_window")),
+            "peak_detection_config": cfg.get("peak_detection") or {},
             "n_processed": 0,
             "outputs": [],
             "errors": [],
@@ -84,7 +88,8 @@ class ECL2Processor:
                 raise ValueError("Multiple EC backgrounds found; choose background_stem before peak fitting")
             if candidates:
                 pf = candidates[0]
-                bkg_df_global = read_parquet(pf)
+                bkg_df_global, input_quality = validated_events(read_parquet(pf))
+                bkg_df_global.attrs["crc_input_quality"] = input_quality
                 bkg_file_global = pf.name
                 bkg_exposure = read_parquet_metadata(pf, "tb_correction").get(
                     "exposure_minutes", float(bkg_re.fullmatch(pf.name).group("min")),
@@ -99,7 +104,8 @@ class ECL2Processor:
             if selected_stems is not None and parquet_file.name.removesuffix("_corr.l1.parquet") not in selected_stems:
                 continue
             try:
-                df = read_parquet(parquet_file)
+                df, input_quality = validated_events(read_parquet(parquet_file))
+                df.attrs["crc_input_quality"] = input_quality
                 meta = read_parquet_metadata(parquet_file, meta_key="tb_correction") or {}
 
                 src_match = src_re.match(parquet_file.name)
@@ -231,7 +237,25 @@ class ECL2Processor:
                             half_span = max(80.0, center_guess * 0.06)
                             peak_window = [center_guess - half_span, center_guess + half_span]
                             window_source = "energy_ratio"
+                        detection_config = dict(cfg.get("peak_detection") or {})
+                        if data_type == "src":
+                            detection_config.setdefault("infer_noise", False)
+                        if cfg.get("automatic_window"):
+                            peak_window = None
+                            window_source = "auto"
+                            manual_override = None
+                        if data_type == "src" and detection_config.get("expected_center") is not None:
+                            anchor_energy = float(detection_config.pop("expected_energy_keV", min(peaks_to_fit)))
+                            detection_config["expected_center"] *= peak_E / anchor_energy
+                        elif prev_center is not None and prev_energy is not None:
+                            detection_config["expected_center"] = prev_center * (peak_E / prev_energy)
                         try:
+                            if (data_type == "src" and len(peaks_to_fit) > 1 and peak_window is None
+                                    and detection_config.get("expected_center") is None):
+                                raise RuntimeError(
+                                    "Multiple source lines require a first-line window or an independently calibrated "
+                                    "expected center and anchor energy; a strongest peak cannot identify its energy",
+                                )
                             fit, plot_data = self._fit_energy_spectrum(
                                 energy_key=energy_key,
                                 signal_df=signal["df"],
@@ -241,13 +265,16 @@ class ECL2Processor:
                                 bin_width=bin_width,
                                 forced_window=peak_window,
                                 forced_peak_energy=peak_E,
+                                peak_config=detection_config,
                             )
-                            prev_center = float(fit["center"])
-                            prev_energy = float(peak_E)
+                            if fit["fit_quality"]["accepted"]:
+                                prev_center = float(fit["center"])
+                                prev_energy = float(peak_E)
                         except Exception as exc:
                             print(f"⚠ EC L2: {energy_key} ch{ch} peak={peak_E}keV failed: {exc}")
                             results["errors"].append({"energy": energy_key, "channel": ch,
-                                                       "peak_keV": peak_E, "error": str(exc)})
+                                                       "peak_keV": peak_E, "error": str(exc),
+                                                       "peak_detection": getattr(exc, "diagnostics", None)})
                             continue
 
                         rec = {
@@ -275,6 +302,10 @@ class ECL2Processor:
                             "n_events": int(fit["n_events"]),
                             "background_channel": int(fit["background_channel"]),
                             "model_parameters": fit["model_parameters"],
+                            "peak_detection": fit["peak_detection"],
+                            "fit_quality": fit["fit_quality"],
+                            "signal_input_quality": fit["signal_input_quality"],
+                            "background_input_quality": fit["background_input_quality"],
                             "window_manual": manual_override is not None,
                             "window_source": window_source,
                             "normalization": "utc_duration",
@@ -319,6 +350,7 @@ class ECL2Processor:
                                     bin_width=bin_width,
                                     forced_window=cw,
                                     forced_peak_energy=float(rec["E"]),
+                                    peak_config={**(cfg.get("peak_detection") or {}), "expected_center": consensus},
                                 )
                                 records.remove(rec)
                                 new_rec = {
@@ -335,6 +367,10 @@ class ECL2Processor:
                                     "rsquared": float(fit2["rsquared"]), "n_events": int(fit2["n_events"]),
                                     "background_channel": int(fit2["background_channel"]),
                                     "model_parameters": fit2["model_parameters"],
+                                    "peak_detection": fit2["peak_detection"],
+                                    "fit_quality": fit2["fit_quality"],
+                                    "signal_input_quality": fit2["signal_input_quality"],
+                                    "background_input_quality": fit2["background_input_quality"],
                                     "window_manual": False,
                                     "window_source": "consensus",
                                     "normalization": "utc_duration",
@@ -440,10 +476,12 @@ class ECL2Processor:
     def _xray_consensus_center(self, channel_fits: dict[int, dict[str, Any]]) -> float | None:
         centers = []
         for _, fit in channel_fits.items():
+            if fit.get("fit_quality", {}).get("accepted") is False:
+                continue
             r2 = float(fit.get("rsquared", 0.0))
             center = float(fit.get("center", 0.0))
             center_err = float(abs(fit.get("center_err", float("nan"))))
-            if r2 >= 0.6 and center > 150 and np.isfinite(center_err) and center_err < center * 0.5:
+            if r2 >= 0.6 and center > 0 and np.isfinite(center_err) and center_err < center * 0.5:
                 centers.append(center)
         if len(centers) >= 2:
             return float(np.median(centers))
@@ -559,38 +597,11 @@ class ECL2Processor:
         x: np.ndarray,
         y: np.ndarray,
         bin_width: float,
-        min_adc: float = 150.0,
+        min_adc: float | None = None,
     ) -> tuple[float, float, float]:
-        smooth = self._smooth_hist(np.clip(y, a_min=0.0, a_max=None))
-        if not np.any(np.isfinite(smooth)) or np.nanmax(smooth) <= 0:
-            raise RuntimeError("empty spectrum after background subtraction")
-
-        peaks, props = find_peaks(
-            smooth,
-            prominence=max(float(np.nanmax(smooth)) * 0.06, np.nanmax(smooth) * 0.02 + 1e-9),
-            distance=max(4, int(18 / max(bin_width, 1e-6))),
-        )
-        valid = [p for p in peaks if x[p] >= min_adc]
-        if valid:
-            peak_idx = int(max(valid, key=lambda p: props["prominences"][list(peaks).index(p)]))
-        elif len(peaks):
-            peak_idx = int(peaks[np.argmax(props["prominences"])])
-        else:
-            peak_idx = int(np.nanargmax(smooth))
-
-        threshold = smooth[peak_idx] * 0.18
-        left = peak_idx
-        right = peak_idx
-        while left > 1 and smooth[left] > threshold:
-            left -= 1
-        while right < len(smooth) - 2 and smooth[right] > threshold:
-            right += 1
-        left = max(0, left - 4)
-        right = min(len(smooth) - 1, right + 6)
-        if right - left < 10:
-            left = max(0, peak_idx - 8)
-            right = min(len(x) - 1, peak_idx + 10)
-        return float(x[left]), float(x[right]), float(x[peak_idx])
+        settings = {"noise_ceiling": min_adc} if min_adc is not None else {}
+        candidate, _ = detect_photopeak(x, y, config=settings)
+        return *candidate.window, candidate.center
 
     def _calculate_rsquared(self, y_data: np.ndarray, y_fit: np.ndarray) -> float:
         ss_res = float(np.sum((y_data - y_fit) ** 2))
@@ -609,6 +620,7 @@ class ECL2Processor:
         lo: float,
         hi: float,
         bin_width: float,
+        sigma_guess: float | None = None,
     ):
         if mode == "gaus":
             model = GaussianModel(prefix="g_")
@@ -621,20 +633,20 @@ class ECL2Processor:
 
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=max((hi - lo) / 8.0, bin_width), min=0.5, max=max((hi - lo) / 2.0, 2.0))
+        sigma_guess = sigma_guess or max((hi - lo) / 8.0, bin_width)
+        params["g_sigma"].set(value=sigma_guess, min=max(0.5 * bin_width, sigma_guess / 3), max=3 * sigma_guess)
         params["g_amplitude"].set(
             value=float(np.max(y) * max((hi - lo) / 4.0, bin_width) * np.sqrt(2.0 * np.pi)),
             min=0.0,
         )
-        if "b_" in params:
+        if "b_intercept" in params:
             params["b_intercept"].set(value=float(max(np.percentile(y, 20), 0.0)), min=0.0)
             params["b_slope"].set(value=0.0)
-        if "e_" in params:
+        if "e_amplitude" in params:
             params["e_amplitude"].set(value=float(max(np.percentile(y, 25), 1e-9)), min=0.0)
             params["e_decay"].set(value=max((hi - lo) / 3.0, 5.0), min=1.0, max=2000.0)
 
-        floor = np.nanmedian(err[err > 0]) if np.any(err > 0) else 1.0
-        weights = 1.0 / np.maximum(err, floor)
+        weights = 1.0 / np.maximum(err, np.finfo(float).eps)
         result = model.fit(y, params, x=x, weights=weights)
         if not result.success:
             raise RuntimeError(f"{mode} fit failed")
@@ -649,28 +661,38 @@ class ECL2Processor:
         lo: float,
         hi: float,
         bin_width: float,
+        sigma_guess: float | None = None,
     ):
         candidates = []
-        for mode in ("lin + gaus", "exp + gaus"):
+        for mode in ("gaus", "lin + gaus", "exp + gaus"):
             try:
-                result, rsq = self._fit_with_mode(mode, x, y, err, peak_x, lo, hi, bin_width)
-                candidates.append((mode, result, rsq, float(result.aic)))
+                result, rsq = self._fit_with_mode(mode, x, y, err, peak_x, lo, hi, bin_width, sigma_guess)
+                criterion = float(np.sum(((y - result.best_fit) / err) ** 2)) + 2 * result.nvarys
+                candidates.append((mode, result, rsq, criterion))
             except Exception:
                 continue
         if not candidates:
             raise RuntimeError("all fit modes failed")
-        candidates.sort(key=lambda item: (-item[2], item[3]))
+        candidates.sort(key=lambda item: (
+            not all(item[1].params[name].stderr is not None and np.isfinite(item[1].params[name].stderr)
+                    and item[1].params[name].stderr > 0 for name in ("g_center", "g_sigma", "g_amplitude")),
+            item[3],
+        ))
         return candidates[0]
 
     def _prepare_spectrum(
         self, signal_df, background_df, bin_width: float,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, Any]:
         """Shared rate histogram for fitting and interactive inspection.
 
         Duration normalization intentionally follows the existing processor's
         UTC-axis rule. Keeping one implementation prevents UI spectra from
         using counts or exposure scaling inconsistent with the actual fit.
         """
+        signal_df, signal_quality = validated_events(signal_df)
+        background_df, background_quality = validated_events(background_df)
+        signal_quality = signal_df.attrs.get("crc_input_quality", signal_quality)
+        background_quality = background_df.attrs.get("crc_input_quality", background_quality)
         signal_amp = signal_df["amp_corr"].to_numpy(dtype=float)
         signal_time = signal_df["utc"].to_numpy(dtype=float)
         bkg_amp = background_df["amp_corr"].to_numpy(dtype=float)
@@ -683,7 +705,8 @@ class ECL2Processor:
         spec, spec_err, mids = self._build_rate_spectrum(signal_amp, signal_time, edges)
         bkg_spec, bkg_err, _ = self._build_rate_spectrum(bkg_amp, bkg_time, edges)
         return {"mids": mids, "spec": spec, "bkg_spec": bkg_spec,
-                "net": spec - bkg_spec, "net_err": np.sqrt(spec_err**2 + bkg_err**2)}
+                "net": spec - bkg_spec, "net_err": np.sqrt(spec_err**2 + bkg_err**2),
+                "signal_input_quality": signal_quality, "background_input_quality": background_quality}
 
     def _fit_energy_spectrum(
         self,
@@ -695,28 +718,33 @@ class ECL2Processor:
         bin_width: float,
         forced_window: list[float] | None = None,
         forced_peak_energy: float | None = None,
+        peak_config: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         prepared = self._prepare_spectrum(signal_df, background_df, bin_width)
         mids, spec, bkg_spec, net, net_err = (
             prepared[key] for key in ("mids", "spec", "bkg_spec", "net", "net_err")
         )
 
-        if forced_window is not None and len(forced_window) == 2:
-            lo = float(forced_window[0])
-            hi = float(forced_window[1])
-            mask_w = (mids >= lo) & (mids <= hi)
-            if not np.any(mask_w):
-                raise RuntimeError(f"forced window [{lo},{hi}] empty")
-            sub_smooth = self._smooth_hist(np.clip(net[mask_w], a_min=0.0, a_max=None))
-            peak_x = float(mids[mask_w][int(np.nanargmax(sub_smooth))])
+        candidate, detection = detect_photopeak(mids, net, net_err, window=forced_window, config=peak_config)
+        peak_x = candidate.center
+        if forced_window is not None:
+            lo, hi = map(float, forced_window)
         else:
-            lo, hi, peak_x = self._auto_fit_window(mids, net, bin_width)
+            lo, hi = candidate.window
+            if detection["noise_boundary"] is not None:
+                lo = max(lo, detection["noise_boundary"])
         mask = (mids >= lo) & (mids <= hi)
         x_fit = mids[mask]
         y_fit = net[mask]
-        err_fit = np.maximum(net_err[mask], np.nanmedian(net_err[mask][net_err[mask] > 0]) if np.any(net_err[mask] > 0) else 1.0)
+        err_fit = np.maximum(net_err[mask], np.finfo(float).eps)
 
-        mode, result, rsquared, _ = self._select_best_fit(x_fit, y_fit, err_fit, peak_x, lo, hi, bin_width)
+        if len(x_fit) < 8:
+            raise RuntimeError("Resolved peak has too few fit bins; reduce bin_width or select a wider window")
+        mode, result, rsquared, _ = self._select_best_fit(
+            x_fit, y_fit, err_fit, peak_x, max(lo, peak_x - 1.5 * candidate.sigma),
+            min(hi, peak_x + 1.5 * candidate.sigma), bin_width, candidate.sigma,
+        )
+        quality = fit_quality(result, x_fit, y_fit, err_fit)
         comps = result.eval_components(x=x_fit)
 
         center = float(result.params["g_center"].value)
@@ -768,6 +796,10 @@ class ECL2Processor:
             "background_rate_mean": float(np.mean(bkg_spec)),
             "channel": channel,
             "model_parameters": {name: float(param.value) for name, param in result.params.items()},
+            "peak_detection": detection,
+            "fit_quality": quality,
+            "signal_input_quality": prepared["signal_input_quality"],
+            "background_input_quality": prepared["background_input_quality"],
         }
         plot_data = {
             "mids": mids,

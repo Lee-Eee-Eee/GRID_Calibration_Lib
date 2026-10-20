@@ -8,6 +8,20 @@ from typing import Any
 import pandas as pd
 
 
+def validated_events(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Select CRC-passing events consistently for fitting, correction and UI."""
+    quality = {"crc_available": "crc_check" in frame.columns, "input_events": int(len(frame)),
+               "used_events": int(len(frame)), "excluded_crc_count": 0}
+    if "crc_check" not in frame.columns:
+        return frame.copy(), quality
+    valid = frame["crc_check"].eq(True).fillna(False)
+    quality["used_events"] = int(valid.sum())
+    quality["excluded_crc_count"] = int(len(frame) - valid.sum())
+    if len(frame) and not valid.any():
+        raise ValueError("全部事件 CRC 失败；拒绝将历史无效输入用于拟合/矫正，请以正确协议重新解析 L0")
+    return frame.loc[valid].copy(), quality
+
+
 def ensure_dir(path: Path) -> Path:
     """确保目录存在"""
     path.mkdir(parents=True, exist_ok=True)

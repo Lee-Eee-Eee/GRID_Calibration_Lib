@@ -17,12 +17,12 @@ GRID（Gamma-Ray Integrated Detectors）是一组小型 SiPM 伽马射线探测�
 ## 主要特性
 
 - **L0 → L3 分层产物。** 每层都生成 parquet/JSON + PNG 校验图，问题在哪一层一眼能看出来。
-- **TB L1 单峰单背景拟合。** 高斯峰 + 4 选 1 背景（无 / 线性 / 指数 / 二次），按 R²、AIC 自动挑最佳，与上游 `calibration_process.fitting.peak_fit` 对齐。
+- **TB L1 单峰单背景拟合。** 高斯峰 + 4 选 1 背景（无 / 线性 / 指数 / 二次），基于计数方差选择模型，保存 R²、参数误差及相对纯背景的质量诊断。
 - **TB L2 自由 k 曲面拟合。** 用 `1/center_err` 加权，参数边界对齐 `calibration_process.util_lib.temp_bias_lmfit`。
-- **手选拟合窗口编辑器。** 自动峰检测找错的极少数情况，交互修一次终生不再被覆盖。
+- **共同自动寻峰与手选窗口。** TB L1、EC L2结合连续背景、多尺度候选和计数误差定位峰；保留精确手窗，暗区歧义可加入实测噪声上界或独立中心锚。
 - **单文件部分重跑。** 改完一个手选窗，只重画那个文件的 L1，再重跑 L2；其他文件原样保留。
 - **每层独立校验脚本。** 内置 `calibration_lib.checks.*` 做 schema / sanity 校验。
-- **试算独立的载荷读取标准。** 工作台可选择 / 编辑事件与 HK XML、字段换算、文件名规则、逐文件映射和源能线，保存协议快照与输入溯源。
+- **按载荷复用读取预设。** 工作台可选择 / 编辑事件与 HK XML、字段换算、文件规则、逐文件映射和源能线，另存为预设、发布不可变版本并关联目录；试算保存完整快照与输入溯源。
 
 ---
 
@@ -71,9 +71,23 @@ calibration_lib/.venv/Scripts/python.exe -X utf8 -m calibration_lib.workbench.se
 
 不同载荷可在顶栏“载荷读取配置”中分别选择事件 / HK XML 预设或外部路径、编辑 XML 内容，并修改包标签、字节序、字段映射与物理量换算。文件命名变化时可编辑正则规则，也可直接填写事件 / HK 映射表或导入 CSV / TSV；能量、通道、发射源、源能线、曝光和标称工况均可配置。先预览真实配对及提取值，校验后保存；每份 XML 上限为 1 MiB UTF-8 字节。
 
-温度 / 偏压默认使用 **HK 实测值**，文件名中的工况仅作标称参考；显式切换至文件名、映射表或固定工况模式后才采用相应数值。读取配置按试算冻结到 `runs/<run_id>/acquisition/<revision>-<hash>/`，L0 / L1 记录配置哈希与观测来源。保存新标准后需从对应 L0 重新解析，界面逐层显示更新覆盖率，禁止混用旧标准输入；旧试算在首次保存读取配置前继续使用原有入口。目前尚无自定义全局预设管理。源谱计数率归一化仍复用现有 UTC 时长算法；新增能量的自动窗口会提示人工复核。
+温度 / 偏压默认使用 **HK 实测值**，文件名中的工况仅作标称参考；显式切换至文件名、映射表或固定工况模式后才采用相应数值。预览校验后可“另存为新预设”或“保存为新版本”，同时关联当前数据与产品目录。选择目录时优先匹配明确关联；载荷唯一预设可作为后备，冲突时需显式选择。每个试算冻结完整 XML / 配置快照，发布新版不改变已有试算；旧产品目录仍引用其生成时的版本。保存新标准后需从对应 L0 重新解析，界面逐层显示更新覆盖率，禁止混用旧标准输入。源谱计数率归一化仍复用现有 UTC 时长算法。
 
-默认“代表样例”会结合历史快照完成操作闭环，**不等于全量重新标定**。计算状态与规范/CRC 检查分开显示。当前 L0 样例 CRC 未通过；现行 EC L3 的拟合方向与 wiki 尚有差异，界面会明确提示。详细操作、数据范围及验收见 [workbench/README.md](workbench/README.md)。
+TB L1、EC L2的“自动寻峰并拟合”实际调用原处理器，窗口由共享寻峰器重新推荐。图中保留候选与噪声边界，详情显示峰模型相对背景的统计证据；拒绝点仍可检查，但不参与新的TB L2 / EC L3拟合。手动拖窗继续使用精确边界。多能线源的首条线需要手窗或独立中心 / 能量锚，避免把最强峰误标为最低能线。算法依据与参数见 [docs/peak_finding.md](docs/peak_finding.md)。
+
+“参考能谱”支持读取 TKA 计数谱，默认目录为工作区 `data/imported/GRID-11B_HPGe_data/`。点击“分析寻峰候选”后，将来源 SHA-256、设置和候选证据保存到独立 `runs/<id>/analysis.json`。横轴保留 ADC 通道，文件名标称能量不替代能量刻度；CNF 二进制及采集表保留为参考输入。
+
+默认“代表样例”会结合历史快照完成操作闭环，计算状态与规范 / CRC 检查分开显示。14B / 15B 的旧40事件、12字节步长配置已修正为38事件、14字节步长；XML可推断重复布局，显式配置优先。旧快照及历史产物保留，需重新解析L0后再进行新的科学评估。全部事件CRC失败会阻断；HK实测模式下全部HK CRC失败也会阻断。部分CRC失败的事件保留检查记录，仅通过CRC的事件进入拟合 / 矫正。现行EC L3的拟合方向与wiki尚有差异。详细操作及验收见 [workbench/README.md](workbench/README.md)。
+
+工作台还提供只读目录索引：新建试算时展开“已索引的数据目录”，可复用保存的目录记录。读取索引不扫描源目录，重新索引由用户显式触发；索引记录大小 / 修改时间而非内容哈希。10B使用独立的560字节事件XML、106字节HK XML、温度折返与电流压降修正、稳态HK选择及0–16384 ADC /6 ADC分箱。默认10B源配对为Cs137观测073与本底075，其他源需要另存读取配置并指定对应本底。
+
+N5正式采集预设可从已复制的manifest注册48个TB工况及72份X射线文件：
+
+```powershell
+calibration_lib/.venv/Scripts/python.exe -X utf8 -m calibration_lib.tools.init_n5_preset --workspace . --raw-root "D:/GRID-calibration-data/Seafile/四天格"
+```
+
+TB使用HK实测温偏及独立182字节HK XML，已完成真实工况L0 /自动L1。N5的X射线本底需要另一次照射文件中的同一物理通道，当前EC L2 /L3及整条流水线禁用并显示原因，EC L0 /L1保留检查入口。详细规则见 [docs/n5_preset.md](docs/n5_preset.md)。
 
 库默认从 `14、15B标定数据/{02,03}/{Temp_Vbias,X,X_new,source}/` 读原始数据，向 `products/{14B,15B}/{tb,ec}/L{0..3}/` 写产物。两个根目录都可以在 [`config/payload_config.py`](config/payload_config.py) 里改。
 
@@ -150,7 +164,9 @@ calibration_lib/
 │
 ├── common/
 │   ├── utils.py                   # DataLayout（路径管理）、parquet/json I/O、时间戳
-│   └── legacy_parser.py           # GRID 包二进制解析器适配层
+│   ├── legacy_parser.py           # GRID 包二进制解析器适配层
+│   ├── peak_finding.py            # TB/EC 共用候选寻峰及质量诊断
+│   └── reference_spectra.py       # HPGe TKA参考谱读取
 │
 ├── tb/processors/                 # TB 流水线（3 层）
 │   ├── L0_processor.py            #   raw .dat/.hk → parquet + 每通道 T/V metadata
@@ -166,6 +182,8 @@ calibration_lib/
 ├── checks/                        # 各层 schema / sanity 校验脚本
 ├── tools/fit_window_editor.py     # 交互式 Tk 拟合窗口编辑器
 ├── tools/flow_overview.py         # 只读扫描 products/，生成自包含 HTML 全流程总览
+├── tools/migrate_calibration_data.py # 校验SHA-256并复制开发输入
+├── workbench/                    # 目录/预设管理、运行服务及可视化复核入口
 ├── integration/legacy_import.py   # 将历史结果导入新目录树
 └── resources/
     ├── legacy/                    # 内置 GRID 包解析器（parse_grid_data.py + XML）

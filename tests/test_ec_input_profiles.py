@@ -47,8 +47,8 @@ def test_l1_decimal_xray_scope_does_not_process_unrelated_background(tmp_path):
     assert [row["stem"] for row in result["outputs"]] == ["42.5keV_ch0"]
     output = root / "Custom/ec/L1/parquet/42.5keV_ch0_corr.l1.parquet"
     corrected = read_parquet(output)
-    np.testing.assert_allclose(corrected["amp_corr"], original["amp"])
-    assert corrected["crc_check"].tolist() == original["crc_check"].tolist()
+    np.testing.assert_allclose(corrected["amp_corr"], original.loc[original.crc_check, "amp"])
+    assert corrected["crc_check"].tolist() == [True] * int(original.crc_check.sum())
     provenance = read_parquet_metadata(output, "acquisition")
     assert provenance["profile_sha256"] == "run-profile" and provenance["revision"] == 4
     assert provenance["l0_file"] == input_path.name

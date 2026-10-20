@@ -225,6 +225,7 @@ class ECL3Processor:
                         "channel": int(rec.get("channel", 0)),
                         "source": str(rec.get("source", "x")) if rec.get("source") in ("x", "xray", "src") else "x",
                         "rsquared": float(rec.get("rsquared", 0.0)),
+                        "fit_quality": rec.get("fit_quality", {}),
                         "file": fp.stem,
                     })
                 continue
@@ -244,6 +245,7 @@ class ECL3Processor:
                     "channel": int(ch_str),
                     "source": "src" if is_source else "x",
                     "rsquared": float(ch_dict.get("rsquared", 0.0)),
+                    "fit_quality": ch_dict.get("fit_quality", {}),
                     "file": fp.stem,
                 })
 
@@ -255,6 +257,8 @@ class ECL3Processor:
     def _filter_quality(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         filtered = []
         for d in rows:
+            if d.get("fit_quality", {}).get("accepted") is False:
+                continue
             r2 = d.get("rsquared", 0.0)
             if r2 < MIN_RSQUARED:
                 continue

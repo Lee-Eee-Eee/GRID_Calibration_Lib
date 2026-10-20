@@ -529,6 +529,56 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
 .profile-preview-table th { white-space: nowrap; background: #f5f7f9; }
 .profile-preview-file { display: block; font: 11px/1.6 Consolas, monospace; max-width: 280px; }
 .profile-preview-file + .profile-preview-file { color: var(--secondary); margin-top: 4px; }
+.payload-preset-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:0 24px 13px; font-size:12px; }
+.payload-preset-row label { margin:0; white-space:nowrap; }
+#payload-preset-select { flex:1; min-width:190px; max-width:340px; }
+#payload-preset-version { width:115px; }
+#payload-preset-current { width:100%; line-height:1.5; }
+.preset-save-panel { margin:0 0 18px; padding:12px 14px; border:1px solid var(--line); background:#fafbfc; }
+.preset-save-fields { display:grid; grid-template-columns:1fr 130px 1fr; gap:14px; align-items:end; }
+.preset-save-fields label { margin:0; }
+.preset-save-fields input:not([type=checkbox]) { display:block; width:100%; margin-top:5px; }
+.preset-binding { display:flex; gap:7px; align-items:center; padding-bottom:8px; }
+.preset-save-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.dataset-preset-selection { padding:12px; border:1px solid var(--line); background:#f8fafc; margin-top:12px; }
+.dataset-preset-selection select { width:100%; }
+.automatic-peak-controls { padding:11px 0; border-bottom:1px solid var(--line-light); font-size:12px; }
+.automatic-peak-controls summary, .peak-diagnostics summary { cursor:pointer; color:var(--ink); }
+.automatic-peak-controls p { font-size:11px; line-height:1.6; }
+.peak-settings { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0; }
+.peak-settings label { font-size:11px; }
+.peak-settings input { display:block; margin-top:5px; width:100%; }
+#auto-fit-spectrum { width:100%; }
+.peak-diagnostics { font-size:12px; line-height:1.65; border-top:1px solid var(--line); margin-top:10px; padding-top:11px; }
+.peak-diagnostics .table-wrap { margin-top:8px; }
+.peak-diagnostics table { font-size:11px; width:100%; }
+.peak-diagnostics td, .peak-diagnostics th { padding:5px; text-align:left; }
+.peak-evidence-warning { color:#80601e; background:#fcf9f0; border-left:2px solid #c9af6f; padding:6px 9px; }
+.reference-dialog { width:min(1160px,calc(100vw - 40px)); max-height:calc(100dvh - 40px); padding:22px; }
+.reference-location { display:flex; gap:8px; margin:14px 0; }
+.reference-location input { flex:1; min-width:0; }
+.reference-layout { display:grid; grid-template-columns:220px minmax(0,1fr); gap:22px; }
+.reference-layout aside label { display:block; font-size:12px; margin-bottom:6px; }
+#reference-file { width:100%; height:320px; padding:4px; border-color:var(--line); }
+#reference-file option { padding:5px; font-size:12px; }
+.reference-chart { height:420px; }
+.reference-metadata, .reference-analysis { font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.reference-metadata p { margin:7px 0; }
+.reference-analysis-actions { display:flex; gap:12px; align-items:center; margin:8px 0; font-size:12px; }
+@media(max-width:850px) { .preset-save-fields { grid-template-columns:1fr 1fr; } .preset-binding { grid-column:1/-1; } .reference-layout { grid-template-columns:1fr; } #reference-file { height:120px; } .reference-chart { height:330px; } }
 @media (max-width: 1250px) { .run-controls { gap: 5px; } .run-controls .button { padding-left: 8px; padding-right: 8px; } .run-controls select { width: 200px; } .brand { gap: 10px; } }
 @media (max-width: 950px) { .brand > span:last-child, .brand-divider { display: none; } .run-controls select { width: 180px; } .acquisition-footer { grid-template-columns: 1fr auto; } #acquisition-status { grid-column: 1 / -1; grid-row: 2; padding-bottom: 0; } .field-map-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .acquisition-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); } .acquisition-header { padding: 15px 15px 12px; } .acquisition-preset-row { padding: 0 15px 12px; flex-wrap: wrap; } #acquisition-version { width: 100%; margin: 0; text-align: left; } .acquisition-tabs { padding: 0 5px; } .acquisition-tabs .analysis-tab { font-size: 12px; padding: 0 9px; } .acquisition-scroll { padding: 15px; } .xml-editor-grid { grid-template-columns: 1fr; gap: 0; } .xml-editor { height: 190px; } .profile-form-grid, .field-map-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } .profile-section-heading { align-items: flex-start; flex-wrap: wrap; gap: 7px; } .profile-section-heading > span { width: 100%; } .acquisition-footer { padding: 12px 15px; grid-template-columns: 1fr; gap: 9px; } .acquisition-actions { justify-content: flex-end; } #acquisition-status { grid-column: 1; grid-row: auto; } #acquisition-settings { font-size: 12px; padding: 5px 7px; } }
+
+.source-library { margin: 16px 0; padding: 12px; border: 1px solid var(--border, #d8dfe5); background: #fafbfc; }
+.source-library summary { cursor:pointer; font-weight:600; }
+.source-library-row { display:flex; gap:8px; align-items:center; margin:12px 0 8px; }
+.source-library-row select { flex:1; min-width:0; }
+.source-library .muted-text { overflow-wrap:anywhere; margin:8px 0; }
+
+.reference-dialog > .dialog-title { position:sticky; top:-22px; z-index:5; background:#fff; padding:12px 0; margin-top:-12px; border-bottom:1px solid var(--line); }
+.profile-transform-equations { font-family:"Times New Roman", "Microsoft YaHei", serif; }
+
+#tb-analysis[data-layer="TB_L1"] .secondary-analysis { flex-basis:160px; }
+#tb-analysis[data-layer="TB_L1"] .surface-panel { min-height:300px; }
+#tb-analysis[data-layer="TB_L1"] .residual-chart { height:100px; }

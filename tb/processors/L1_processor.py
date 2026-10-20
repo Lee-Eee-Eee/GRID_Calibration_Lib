@@ -9,14 +9,16 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import savgol_filter
 
+from ...common.peak_finding import detect_photopeak, fit_quality
 from ...common.utils import (
     DataLayout,
     get_timestamp,
     read_json,
     read_parquet,
     read_parquet_metadata,
+    validated_events,
     write_json,
 )
 
@@ -57,6 +59,9 @@ class FitResult:
     lo: float
     hi: float
     rsquared: float
+    peak_detection: dict[str, Any]
+    fit_quality: dict[str, Any]
+    histogram_config: dict[str, float]
 
 
 class TBL1Processor:
@@ -97,6 +102,8 @@ class TBL1Processor:
             "layer": "TB_L1",
             "timestamp": get_timestamp(),
             "auto_window": auto_window,
+            "automatic_window": bool(cfg.get("automatic_window")),
+            "peak_detection_config": cfg.get("peak_detection") or {},
             "fit_windows_config": str(win_path) if win_path else None,
             "n_processed": 0,
             "outputs": [],
@@ -125,11 +132,11 @@ class TBL1Processor:
 
         for parquet_file in parquet_files:
             try:
-                df = read_parquet(parquet_file)
+                df, input_quality = validated_events(read_parquet(parquet_file))
                 stem = parquet_file.stem.replace(".l0", "")
                 meta = read_parquet_metadata(parquet_file, meta_key="hk_data")
 
-                channel_records: List[Dict[str, Any]] = []
+                channel_records: list[dict[str, Any]] = []
                 used_windows.setdefault(stem, {})
 
                 fig, axes = plt.subplots(2, 2, figsize=(13, 9), constrained_layout=True)
@@ -140,8 +147,12 @@ class TBL1Processor:
                     if len(amp_data) < 10:
                         continue
 
-                    fit_res = self._fit_channel(stem, ch, amp_data, manual_windows, auto_window)
-                    is_manual = bool(self._is_manual_entry(manual_windows.get(stem, {}).get(str(ch), {})))
+                    windows = {} if cfg.get("automatic_window") else manual_windows
+                    acquisition = read_parquet_metadata(parquet_file, meta_key="acquisition") or {}
+                    histogram = cfg.get("histogram_config") or acquisition.get("fitting", {}).get("tb_histogram")
+                    fit_res = self._fit_channel(stem, ch, amp_data, windows, auto_window,
+                                                cfg.get("peak_detection"), histogram)
+                    is_manual = bool(self._is_manual_entry(windows.get(stem, {}).get(str(ch), {})))
 
                     temps = meta.get("temp", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
                     temp_errs = meta.get("temp_err", [0.0] * 4) if isinstance(meta, dict) else [0.0] * 4
@@ -184,6 +195,10 @@ class TBL1Processor:
                         "fit_mode": fit_res.fit_mode,
                         "rsquared": float(fit_res.rsquared),
                         "n_events": int(len(amp_data)),
+                        "peak_detection": fit_res.peak_detection,
+                        "fit_quality": fit_res.fit_quality,
+                        "histogram_config": fit_res.histogram_config,
+                        "input_quality": input_quality,
                     }
                     if fit_res.slope is not None:
                         record["slope"] = float(fit_res.slope)
@@ -225,12 +240,14 @@ class TBL1Processor:
                         "channels_fitted": len(channel_records),
                         "json": json_path.name,
                         "figure": fig_path.name,
+                        "input_quality": input_quality,
                     }
                 )
                 results["n_processed"] += 1
                 print(f"✓ L1: {stem} ({len(channel_records)} channels)")
             except Exception as exc:
-                results["errors"].append({"file": parquet_file.name, "error": str(exc)})
+                results["errors"].append({"file": parquet_file.name, "error": str(exc),
+                                          "peak_detection": getattr(exc, "diagnostics", None)})
                 print(f"✗ Error: {parquet_file.name} - {exc}")
 
         # partial run 时只合并更新本次涉及的 stem，避免清掉之前其他文件的快照/清单
@@ -298,11 +315,29 @@ class TBL1Processor:
         energy: np.ndarray,
         config: Dict[str, Any],
         auto_window: bool,
+        peak_config: dict[str, Any] | None = None,
+        histogram_config: dict[str, float] | None = None,
     ) -> FitResult:
-        bin_lo = 0
-        bin_hi = int(max(420, np.percentile(energy, 99.8) + 40))
-        bin_hi = min(1200, bin_hi)
-        bins = np.arange(bin_lo, bin_hi + 1, 1)
+        if histogram_config is not None:
+            from ...workbench.acquisition import tb_histogram_config
+
+            histogram = tb_histogram_config({"fitting": {"tb_histogram": histogram_config}})
+            bin_lo, bin_hi, bin_width = (histogram[key] for key in ("min", "max", "bin_width"))
+        else:
+            bin_lo, bin_width = 0, 1
+            bin_hi = int(max(420, np.percentile(energy, 99.8) + 40))
+            if self.payload_name in ("14B", "15B"):
+                bin_hi = min(1200, bin_hi)
+            else:
+                bin_hi = min(65536, bin_hi)
+            histogram = {"min": float(bin_lo), "max": float(bin_hi), "bin_width": float(bin_width)}
+        bins = np.arange(bin_lo, bin_hi + bin_width, bin_width)
+        if bins[-1] > bin_hi:
+            bins[-1] = bin_hi
+        if not np.allclose(np.diff(bins), bin_width):
+            # Keep equal bin widths required by candidate detection; the final
+            # edge may extend by less than one bin beyond the requested bound.
+            bins = np.arange(bin_lo, bin_hi + bin_width, bin_width)
         hist, edges = np.histogram(energy, bins=bins)
         mids = (edges[:-1] + edges[1:]) / 2.0
 
@@ -315,47 +350,19 @@ class TBL1Processor:
         item = config.get(stem, {}).get(str(ch), {}) if config else {}
         manual = self._is_manual_entry(item)
 
+        requested = [float(item["lo"]), float(item["hi"])] if manual else None
+        candidate, detection = detect_photopeak(mids, hist, window=requested, config=peak_config)
+        detection["histogram"] = histogram
+        peak_x = candidate.center
         if manual:
-            lo = float(item["lo"])
-            hi = float(item["hi"])
-
-            cut_mask = (mids >= lo) & (mids <= hi)
-            if not np.any(cut_mask):
-                raise RuntimeError("Manual window out of bounds")
-
-            y_cut_temp = hist_smooth[cut_mask]
-            x_cut_temp = mids[cut_mask]
-            peak_x = float(x_cut_temp[np.argmax(y_cut_temp)])
+            lo, hi = requested
         else:
-            peaks, props = find_peaks(
-                hist_smooth,
-                prominence=max(15, float(np.max(hist_smooth)) * 0.03),
-                distance=18,
-            )
-            if len(peaks) == 0:
-                raise RuntimeError("No peak found")
-
-            peak_floor = 70
-            valid = peaks[mids[peaks] >= peak_floor]
-            if len(valid) > 0:
-                valid_idx = [int(np.where(peaks == p)[0][0]) for p in valid]
-                pick = int(valid[np.argmax(props["prominences"][valid_idx])])
-            else:
-                pick = int(peaks[np.argmax(props["prominences"])])
-
-            peak_x = float(mids[pick])
-            center_idx = int(np.argmin(np.abs(mids - peak_x)))
-
-            left_idx = self._find_valley_left(hist_smooth, center_idx, span=85)
-            right_idx = self._find_valley_right(hist_smooth, center_idx, span=110)
-            if right_idx - left_idx < 22:
-                left_idx = max(0, center_idx - 45)
-                right_idx = min(len(mids) - 1, center_idx + 55)
-
-            auto_lo = float(mids[left_idx])
-            auto_hi = float(mids[right_idx])
-
-            lo, hi = self._get_fit_window(item, auto_lo, auto_hi, auto_window)
+            lo, hi = candidate.window
+            # A rejected leading noise component must remain outside the auto
+            # fit; an explicit user window is kept byte-for-byte above.
+            if detection["noise_boundary"] is not None:
+                lo = max(lo, detection["noise_boundary"])
+            lo, hi = self._get_fit_window(item, lo, hi, auto_window)
 
         cut_mask = (mids >= lo) & (mids <= hi)
         x_cut = mids[cut_mask]
@@ -363,7 +370,12 @@ class TBL1Processor:
         if x_cut.size < 8 or np.max(y_cut) <= 0:
             raise RuntimeError("Invalid fit window")
 
-        result, comps, fit_mode, rsquared = self._select_best_fit(x_cut, y_cut, peak_x, lo, hi)
+        center_lo = max(lo, peak_x - 1.5 * candidate.sigma)
+        center_hi = min(hi, peak_x + 1.5 * candidate.sigma)
+        result, comps, fit_mode, rsquared = self._select_best_fit(
+            x_cut, y_cut, peak_x, center_lo, center_hi, candidate.sigma,
+        )
+        quality = fit_quality(result, x_cut, y_cut, np.sqrt(np.maximum(y_cut, 1.0)))
 
         center = float(result.params["g_center"].value)
         center_err = float(result.params["g_center"].stderr or 0.0)
@@ -424,6 +436,9 @@ class TBL1Processor:
             lo=float(lo),
             hi=float(hi),
             rsquared=float(rsquared),
+            peak_detection=detection,
+            fit_quality=quality,
+            histogram_config=histogram,
         )
 
     def _get_fit_window(
@@ -460,12 +475,12 @@ class TBL1Processor:
             return 0.0
         return float(1.0 - ss_res / ss_tot)
 
-    def _fit_lin_gaus(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float):
+    def _fit_lin_gaus(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float, sigma_guess: float = 12.0):
         model = GaussianModel(prefix="g_") + LinearModel(prefix="b_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=12.0, min=1.0, max=90.0)
-        params["g_amplitude"].set(value=float(np.max(y_cut) * 12.0 * np.sqrt(2.0 * np.pi)), min=0.0)
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
         params["b_intercept"].set(value=float(max(np.percentile(y_cut, 20), 0.0)), min=0.0)
         params["b_slope"].set(value=0.0)
 
@@ -474,12 +489,12 @@ class TBL1Processor:
         comps = result.eval_components(x=x_cut)
         return result, comps
 
-    def _fit_exp_gaus(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float):
+    def _fit_exp_gaus(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float, sigma_guess: float = 12.0):
         model = GaussianModel(prefix="g_") + ExponentialModel(prefix="e_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=12.0, min=1.0, max=90.0)
-        params["g_amplitude"].set(value=float(np.max(y_cut) * 12.0 * np.sqrt(2.0 * np.pi)), min=0.0)
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
         params["e_amplitude"].set(value=float(max(np.percentile(y_cut, 20), 1.0)), min=0.0)
         params["e_decay"].set(value=100.0, min=1.0, max=1000.0)
 
@@ -488,12 +503,12 @@ class TBL1Processor:
         comps = result.eval_components(x=x_cut)
         return result, comps
 
-    def _fit_quad_gaus(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float):
+    def _fit_quad_gaus(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float, sigma_guess: float = 12.0):
         model = GaussianModel(prefix="g_") + QuadraticModel(prefix="q_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=12.0, min=1.0, max=90.0)
-        params["g_amplitude"].set(value=float(np.max(y_cut) * 12.0 * np.sqrt(2.0 * np.pi)), min=0.0)
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
         params["q_a"].set(value=0.0)
         params["q_b"].set(value=0.0)
         params["q_c"].set(value=float(max(np.percentile(y_cut, 20), 0.0)))
@@ -503,12 +518,12 @@ class TBL1Processor:
         comps = result.eval_components(x=x_cut)
         return result, comps
 
-    def _fit_gaus_only(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float):
+    def _fit_gaus_only(self, x_cut: np.ndarray, y_cut: np.ndarray, peak_x: float, lo: float, hi: float, sigma_guess: float = 12.0):
         model = GaussianModel(prefix="g_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=12.0, min=1.0, max=90.0)
-        params["g_amplitude"].set(value=float(np.max(y_cut) * 12.0 * np.sqrt(2.0 * np.pi)), min=0.0)
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
 
         weights = 1.0 / np.sqrt(np.maximum(y_cut, 1.0))
         result = model.fit(y_cut, params, x=x_cut, weights=weights)
@@ -522,11 +537,12 @@ class TBL1Processor:
         peak_x: float,
         lo: float,
         hi: float,
+        sigma_guess: float = 12.0,
     ):
         """对齐原古项目 calibration_process：单高斯峰 + 4 选 1 单背景。
 
         候选: gaus | gaus + lin | gaus + exp | gaus + quad
-        策略: 同时拟合，按 R² 降序、AIC 升序挑最佳。
+        策略: 同时拟合，使用已知计数方差的 χ² + 2k 挑选单背景模型。
         """
         candidates = [
             (self._fit_gaus_only,  FIT_MODE_GAUS),
@@ -537,9 +553,11 @@ class TBL1Processor:
         results = []
         for fit_fn, mode in candidates:
             try:
-                result, comps = fit_fn(x_cut, y_cut, peak_x, lo, hi)
+                result, comps = fit_fn(x_cut, y_cut, peak_x, lo, hi, sigma_guess)
                 rsq = self._calculate_rsquared(y_cut, result.best_fit)
-                aic = float(getattr(result, "aic", np.inf))
+                if not result.success or not np.isfinite(result.best_fit).all():
+                    continue
+                aic = float(np.sum(((y_cut - result.best_fit) / np.sqrt(np.maximum(y_cut, 1.0))) ** 2)) + 2 * result.nvarys
                 results.append((result, comps, mode, rsq, aic))
             except Exception:
                 continue
@@ -547,13 +565,21 @@ class TBL1Processor:
         if not results:
             raise RuntimeError("All fit modes failed")
 
-        results.sort(key=lambda x: (-x[3], x[4]))
+        results.sort(key=lambda item: (
+            not all(item[0].params[name].stderr is not None and np.isfinite(item[0].params[name].stderr)
+                    and item[0].params[name].stderr > 0 for name in ("g_center", "g_sigma", "g_amplitude")),
+            item[4],
+        ))
         best = results[0]
         return best[0], best[1], best[2], best[3]
 
     def _plot_channel(self, ax_spec, ch: int, fit_res: FitResult) -> None:
         from ...common.plotting import (
-            plot_spectrum_fit, style_axes, style_legend, style_title, adaptive_xlim,
+            adaptive_xlim,
+            plot_spectrum_fit,
+            style_axes,
+            style_legend,
+            style_title,
         )
         plot_spectrum_fit(
             ax_spec,

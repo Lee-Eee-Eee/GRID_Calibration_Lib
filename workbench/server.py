@@ -12,10 +12,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .service import Workbench, clean
+from .source_catalog import SourceCatalog
 
 
 def make_handler(workbench):
     static = Path(__file__).parent / "static"
+    source_catalog = SourceCatalog(workbench.workspace)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "GRIDWorkbench/0.1"
@@ -91,8 +93,28 @@ def make_handler(workbench):
                     return self._json(200, workbench.bootstrap())
                 if path == "/api/health":
                     return self._json(200, {"status": "ok"})
+                if path == "/api/sources":
+                    return self._json(200, source_catalog.list())
+                if len(parts) == 3 and parts[:2] == ["api", "sources"]:
+                    return self._json(200, source_catalog.get(parts[2]))
+                if path in ("/api/reference-spectra", "/api/reference-spectrum"):
+                    from .references import ReferenceLibrary
+
+                    library = ReferenceLibrary(workbench.workspace)
+                    return self._json(
+                        200,
+                        library.catalog(query.get("directory", [None])[0])
+                        if path == "/api/reference-spectra"
+                        else library.spectrum(query.get("path", [None])[0]),
+                    )
                 if path == "/api/acquisition/defaults":
                     return self._json(200, workbench.acquisition_defaults(query.get("profile", [None])[0]))
+                if path == "/api/acquisition/presets":
+                    return self._json(200, workbench.acquisition_presets(query.get("payload", [None])[0]))
+                if len(parts) == 4 and parts[:3] == ["api", "acquisition", "presets"]:
+                    return self._json(
+                        200, workbench.acquisition_preset(parts[3], query.get("version", [None])[0])
+                    )
                 if path == "/api/directories":
                     return self._json(200, workbench.directories(query.get("path", [None])[0]))
                 if path.startswith("/api/history/"):
@@ -151,6 +173,12 @@ def make_handler(workbench):
                         return self._file(workbench.root(run_id), "/".join(parts[4:]))
             if self.command == "POST":
                 body = self._body()
+                if path == "/api/sources/index":
+                    return self._json(201, source_catalog.index(body.get("root"), body.get("label")))
+                if path == "/api/reference-spectra/analyze":
+                    from .references import ReferenceLibrary
+
+                    return self._json(200, ReferenceLibrary(workbench.workspace).analyze(body.get("path")))
                 if path == "/api/xml/read":
                     from .acquisition_store import read_xml
 
@@ -165,7 +193,32 @@ def make_handler(workbench):
                     return self._json(200, workbench.preview_acquisition(parts[2], body["profile"]))
                 if path == "/api/runs":
                     return self._json(
-                        201, workbench.create(body.get("payload"), body.get("name"), body.get("dataset_id"))
+                        201,
+                        workbench.create(
+                            **{
+                                key: body.get(key)
+                                for key in ("payload", "name", "dataset_id", "preset_id", "preset_version")
+                            }
+                        ),
+                    )
+                if path == "/api/acquisition/presets":
+                    return self._json(201, workbench.register_acquisition_preset(body))
+                if (
+                    len(parts) == 5
+                    and parts[:2] == ["api", "runs"]
+                    and parts[3:] == ["acquisition", "presets"]
+                ):
+                    return self._json(201, workbench.save_acquisition_preset(parts[2], body))
+                if (
+                    len(parts) == 5
+                    and parts[:2] == ["api", "runs"]
+                    and parts[3:] == ["acquisition", "preset"]
+                ):
+                    return self._json(
+                        200,
+                        workbench.apply_acquisition_preset(
+                            parts[2], body["preset_id"], body.get("version"), body.get("reason")
+                        ),
                     )
                 if path == "/api/datasets/scan":
                     return self._json(

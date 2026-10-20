@@ -37,7 +37,7 @@ def assert_channel_schema(record, channel):
             assert record[f"{name}_err"] == [None, None, None]
 
 
-def test_ec_background_records_the_exact_tb_dependency_and_preserves_crc(tmp_path):
+def test_ec_background_records_the_exact_tb_dependency_and_excludes_failed_crc(tmp_path):
     products = tmp_path / "products"
     frame = pd.DataFrame(
         {
@@ -61,8 +61,9 @@ def test_ec_background_records_the_exact_tb_dependency_and_preserves_crc(tmp_pat
     assert result["outputs"][0]["data_type"] == "source_bkg"
     output = products / "14B/ec/L1/parquet/src_bkg_30m_corr.l1.parquet"
     actual = read_parquet(output)
-    np.testing.assert_allclose(actual["amp_corr"], frame["amp"])
-    assert actual["crc_check"].tolist() == frame["crc_check"].tolist()
+    np.testing.assert_allclose(actual["amp_corr"], frame.loc[frame.crc_check, "amp"])
+    assert actual["crc_check"].tolist() == [True, True]
+    assert result["outputs"][0]["input_quality"]["excluded_crc_count"] == 2
     metadata = read_parquet_metadata(output, "tb_correction")
     assert metadata["tb_corrfile"] == dependency.name
     assert metadata["tb_params_used"] == {str(ch): tb_params[ch] for ch in range(4)}

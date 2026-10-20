@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
-from calibration_lib.workbench.acquisition import default_profile
+from calibration_lib.workbench.acquisition import default_profile, validate_profile
 from calibration_lib.workbench.acquisition_store import (
     MAX_XML_BYTES,
     freeze_profile,
@@ -34,7 +34,7 @@ def test_default_profiles_load_real_bundled_xml_and_preserve_payload_directory(t
     assert profile_digest(first) != profile_digest(second)
     assert "<grid1x_ft_packet" in first["xml"]["event"]["text"]
     assert Path(first["xml"]["event"]["source_path"]).is_file()
-    assert len(presets()) == 2
+    assert {item["id"] for item in presets()} == {"hnu_packet", "grid_packet", "grid10_packet"}
     assert read_xml(tmp_path, preset="grid_packet")["tags"]
 
 
@@ -146,6 +146,7 @@ def test_custom_repeated_packet_requires_explicit_repeat_stride(tmp_path):
         "different_event_packet",
     )
     profile["parser"]["event_tag"] = "different_event_packet"
+    profile["parser"].update(event_multi_evt=None, event_multi_step=None)
     with pytest.raises(ValueError, match="字段布局无效"):
         prepare_profile(tmp_path, profile)
     profile["parser"].update(event_multi_evt=40, event_multi_step=12)
@@ -226,3 +227,104 @@ def test_json_and_xml_contents_must_agree_even_with_updated_file_hash(tmp_path):
     reference["file_sha256"] = hashlib.sha256(profile_path.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="与引用不一致"):
         load_profile(reference)
+
+
+def legacy_profile(tmp_path):
+    """A complete v1 profile written before optional GRID-10B transforms."""
+    profile = prepared(tmp_path)
+    profile["parser"]["fields"].pop("current", None)
+    for key in ("temp_mode", "bias_mode", "hk_selection", "stable_bias_tolerance"):
+        profile["parser"]["transform"].pop(key, None)
+    return profile
+
+
+def test_legacy_snapshot_hash_and_omissions_survive_new_runtime_defaults(tmp_path):
+    profile = legacy_profile(tmp_path)
+    original_sha = profile_digest(profile)
+    reference = freeze_profile(tmp_path / "old-run", profile, 1)
+    assert reference["sha256"] == original_sha
+    original_files = {path: path.read_bytes() for path in Path(reference["path"]).parent.iterdir()}
+    loaded = load_profile(reference)
+    assert "current" not in loaded["parser"]["fields"]
+    assert "hk_selection" not in loaded["parser"]["transform"]
+    assert loaded["_sha256"] == profile_digest(loaded) == original_sha
+    runtime = validate_profile(loaded)
+    assert runtime["parser"]["fields"]["current"] == "sipm_current{channel}"
+    assert runtime["parser"]["transform"]["hk_selection"] == "legacy_tail"
+    assert runtime["parser"]["transform"]["bias_mode"] == "affine"
+    assert profile_digest(runtime) != original_sha
+    # Validation, XML preparation and copying must preserve the stored schema.
+    for _ in range(3):
+        loaded = prepare_profile(tmp_path, loaded)
+        assert profile_digest(loaded) == original_sha
+    copied = freeze_profile(tmp_path / "new-run", loaded, 1)
+    assert copied["sha256"] == original_sha
+    assert Path(copied["path"]).parent != Path(reference["path"]).parent
+    assert all(path.read_bytes() == content for path, content in original_files.items())
+
+
+def test_partial_new_profile_is_completed_while_complete_legacy_profile_keeps_its_shape(tmp_path):
+    partial = prepare_profile(
+        tmp_path, {"parser": {"conditions": {"mode": "fixed", "temp": 20, "bias": 28.5}}}
+    )
+    assert partial["parser"]["fields"]["current"] == "sipm_current{channel}"
+    assert partial["parser"]["transform"]["hk_selection"] == "legacy_tail"
+    assert profile_digest(prepare_profile(tmp_path, legacy_profile(tmp_path))) == profile_digest(
+        legacy_profile(tmp_path)
+    )
+
+
+def test_legacy_preset_applies_and_creates_runs_with_original_sha_then_publishes_new_version(tmp_path):
+    from calibration_lib.workbench.service import Workbench
+
+    raw = tmp_path / "data/LEGACY-A"
+    for name in ("Temp_Vbias", "X_new", "source"):
+        (raw / name).mkdir(parents=True)
+    (raw / "Temp_Vbias/20C_285_001.event.dat").write_bytes(b"event")
+    (raw / "Temp_Vbias/20C_285_ecu_001.hk").write_bytes(b"hk")
+    product = tmp_path / "products/LEGACY-A"
+    (product / "tb/L0/parquet").mkdir(parents=True)
+    service = Workbench(tmp_path)
+    try:
+        dataset = service.scan_datasets(raw_dir=str(raw), product_dir=str(product))["datasets"][0]
+        before_preset = service.create(dataset_id=dataset["id"])
+        profile = legacy_profile(tmp_path)
+        original_sha = profile_digest(profile)
+        registered = service.register_acquisition_preset(
+            {
+                "name": "Legacy flight protocol",
+                "payload": "LEGACY-A",
+                "profile": profile,
+                "bindings": [{"role": "raw", "path": str(raw)}, {"role": "product", "path": str(product)}],
+            }
+        )
+        assert registered["reference"]["sha256"] == original_sha
+        original_snapshot = registered["preset"]["versions"][0]["profile_reference"]
+        original_files = {
+            path: path.read_bytes() for path in Path(original_snapshot["path"]).parent.iterdir()
+        }
+        automatic = service.create(dataset_id=dataset["id"])
+        assert automatic["acquisition_preset"]["sha256"] == automatic["acquisition"]["sha256"] == original_sha
+        applied = service.apply_acquisition_preset(before_preset["id"], registered["reference"]["id"], 1)
+        assert applied["acquisition_preset"]["sha256"] == applied["acquisition"]["sha256"] == original_sha
+        assert "current" not in service.acquisition(applied["id"])["profile"]["parser"]["fields"]
+        assert (
+            service.adapter_for(applied).acquisition["parser"]["transform"]["hk_selection"] == "legacy_tail"
+        )
+        future = service.acquisition(applied["id"])["profile"]
+        future["parser"]["transform"]["hk_selection"] = "stable_plateau"
+        next_version = service.save_acquisition_preset(
+            applied["id"], {"preset_id": registered["reference"]["id"], "profile": future}
+        )
+        assert next_version["reference"]["version"] == 2
+        assert next_version["reference"]["sha256"] != original_sha
+        assert next_version["run"]["acquisition"]["sha256"] == next_version["reference"]["sha256"]
+        assert service.create(dataset_id=dataset["id"])["acquisition_preset"]["version"] == 2
+        assert service.view(automatic["id"])["acquisition"]["sha256"] == original_sha
+        assert (
+            service.acquisition_preset(registered["reference"]["id"], 1)["reference"]["sha256"]
+            == original_sha
+        )
+        assert all(path.read_bytes() == content for path, content in original_files.items())
+    finally:
+        service.close()

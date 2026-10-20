@@ -194,6 +194,8 @@ class TBL2Processor:
                 ch = int(rec.get("channel", -1))
                 if ch not in per_ch_tv:
                     continue
+                if rec.get("fit_quality", {}).get("accepted") is False:
+                    continue
                 gain = rec.get("center", 0.0)
                 gain_err = rec.get("center_err", 0.0)
                 rsq = rec.get("rsquared", 0.0)

@@ -18,7 +18,7 @@ KINDS = ("tb", "xray", "source", "background")
 
 def default_profile(profile: str | None = None) -> dict:
     """Return an independent JSON-serializable preset for current GRID packets."""
-    return {
+    result = {
         "version": 1,
         "xml": {
             "event": {"source_path": None, "text": None},
@@ -41,8 +41,13 @@ def default_profile(profile: str | None = None) -> dict:
                 "ccm": "data_ccm",
                 "temp": "sipm_temp{channel}",
                 "bias": "sipm_voltage{channel}",
+                "current": "sipm_current{channel}",
             },
             "transform": {
+                "temp_mode": "affine",
+                "bias_mode": "affine",
+                "hk_selection": "legacy_tail",
+                "stable_bias_tolerance": 0.2,
                 "base_divisor": 4.0,
                 "ccm_divisor": 65535.0,
                 "temp_scale": 0.01,
@@ -96,6 +101,56 @@ def default_profile(profile: str | None = None) -> dict:
             ],
         },
     }
+    label = str(profile or "").upper().removeprefix("GRID-")
+    if label in ("14B", "15B"):
+        result["parser"].update(event_multi_evt=38, event_multi_step=14)
+    if label == "10B":
+        protocol = Path(__file__).resolve().parents[1] / "resources/legacy/grid10_packet.xml"
+        result["xml"] = {role: {"source_path": str(protocol), "text": None} for role in ("event", "hk")}
+        result["parser"].update(event_tag="grid1x_wf_packet", hk_tag="hk_grid1x_packet",
+                                event_multi_evt=1, event_multi_step=None)
+        result["parser"]["transform"].update(temp_mode="grid10_signed", bias_mode="grid10_current_drop",
+                                             hk_selection="stable_plateau")
+        result["fitting"] = {"tb_histogram": {"min": 0.0, "max": 16384.0, "bin_width": 6.0}}
+        result["discovery"]["sources"].append(
+            {"name": "Am241", "aliases": ["am241", "Am-241"], "energies_keV": [59.5]},
+        )
+        result["discovery"]["rules"] = [
+            {"kind": "tb", "directory": "tb_data",
+             "event_regex": r"^(?P<key>\d+)_observe_(?P<temp>m?-?\d+(?:\.\d+)?)C_(?P<bias>\d+)\.dat$",
+             "hk_regex": r"^(?P<key>\d+)_hk_(?P<temp>m?-?\d+(?:\.\d+)?)C_(?P<bias>\d+)\.dat$",
+             "metadata_regex": None, "prefer_suffix": ""},
+            {"kind": "xray", "directory": "x_data",
+             "event_regex": r"^(?P<key>\d+)_observe_(?P<energy>\d+(?:\.\d+)?)_ch(?P<channel>\d)\.dat$",
+             "hk_regex": r"^(?P<key>\d+)_hk_(?P<energy>\d+(?:\.\d+)?)_ch(?P<channel>\d)\.dat$",
+             "metadata_regex": None, "prefer_suffix": ""},
+            {"kind": "source", "directory": "src_data",
+             "event_regex": r"^(?P<key>073)_observe_(?P<source>Cs137)\.dat$",
+             "hk_regex": r"^(?P<key>073)_hk_(?P<source>Cs137)\.dat$",
+             "metadata_regex": None, "metadata": {"exposure_minutes": 60}, "prefer_suffix": ""},
+            {"kind": "background", "directory": "src_data",
+             "event_regex": r"^(?P<key>075)_observe_Cs137_bkg\.dat$",
+             "hk_regex": r"^(?P<key>075)_hk_Cs137_bkg\.dat$",
+             "metadata_regex": None, "metadata": {"source": "bkg", "exposure_minutes": 30}, "prefer_suffix": ""},
+        ]
+    return result
+
+
+def tb_histogram_config(profile: dict | None = None) -> dict[str, float]:
+    """Validate the physical ADC histogram range shared by processors and UI."""
+    fitting = (profile or {}).get("fitting", {})
+    if not isinstance(fitting, dict):
+        raise ValueError("fitting 必须为对象")
+    values = fitting.get("tb_histogram", {})
+    if not isinstance(values, dict) or set(values) - {"min", "max", "bin_width"}:
+        raise ValueError("tb_histogram 仅支持 min/max/bin_width")
+    result = {key: _number(values.get(key, default), f"tb_histogram.{key}")
+              for key, default in (("min", 0), ("max", 1200), ("bin_width", 1))}
+    if (result["min"] < 0 or result["max"] > 65536 or result["max"] <= result["min"]
+            or result["bin_width"] <= 0 or (result["max"] - result["min"]) / result["bin_width"] > 65536
+            or (result["max"] - result["min"]) / result["bin_width"] < 9):
+        raise ValueError("TB 谱范围须在 0–65536 ADC，步长为正且 bin 数在 9–65536")
+    return result
 
 
 def _merge(base: dict, updates: dict) -> dict:
@@ -149,6 +204,17 @@ def validate_profile(profile: dict) -> dict:
     if not isinstance(profile, dict):
         raise ValueError("采集配置必须为 JSON 对象")
     normalized = _merge(default_profile(), profile)
+    capabilities = normalized.get("processing_capabilities", {})
+    if not isinstance(capabilities, dict):
+        raise ValueError("processing_capabilities 必须为对象")
+    for layer, capability in capabilities.items():
+        if not isinstance(layer, str) or not layer.strip() or not isinstance(capability, dict):
+            raise ValueError("处理能力须为按层命名的对象")
+        if not isinstance(capability.get("supported"), bool):
+            raise ValueError(f"{layer}.supported 必须为布尔值")
+        reason = capability.get("reason", "")
+        if not isinstance(reason, str) or capability["supported"] is False and not reason.strip():
+            raise ValueError(f"{layer}.reason 须说明不支持该计算的原因")
     if normalized.get("version") != 1:
         raise ValueError("不支持的采集配置版本；当前为 1")
     for section in ("xml", "parser", "discovery"):
@@ -179,7 +245,11 @@ def validate_profile(profile: dict) -> dict:
     for key in ("channel", "max", "base", "temp", "bias"):
         if not isinstance(fields.get(key), str) or not fields[key].strip():
             raise ValueError(f"字段映射 {key} 不能为空")
-    for key in ("temp", "bias"):
+    for key in ("temp", "bias", "current"):
+        if fields.get(key) is None and key == "current":
+            continue
+        if not isinstance(fields.get(key), str) or not fields[key].strip():
+            raise ValueError(f"字段映射 {key} 必须为非空文本")
         try:
             fields[key].format(channel=0)
         except (KeyError, ValueError, IndexError) as exc:
@@ -192,12 +262,25 @@ def validate_profile(profile: dict) -> dict:
     transform = parser.get("transform")
     if not isinstance(transform, dict):
         raise ValueError("parser.transform 必须为对象")
+    for key, choices in (("temp_mode", ("affine", "grid10_signed")),
+                         ("bias_mode", ("affine", "grid10_current_drop", "grid11_current_drop")),
+                         ("hk_selection", ("legacy_tail", "stable_plateau"))):
+        if transform.get(key) not in choices:
+            raise ValueError(f"未知 {key} 转换模式 {transform.get(key)!r}")
+    if transform["bias_mode"] != "affine" and not fields.get("current"):
+        raise ValueError("电流压降修正需要 current 字段映射")
     for key, value in transform.items():
+        if key in ("temp_mode", "bias_mode", "hk_selection"):
+            continue
         transform[key] = _number(value, key, positive=key in ("base_divisor", "ccm_divisor"))
     tail = transform.get("tail_samples")
     if int(tail) != tail or tail < 1 or tail > 1000000:
         raise ValueError("tail_samples 必须为 1–1000000 的整数")
     transform["tail_samples"] = int(tail)
+    if transform["stable_bias_tolerance"] <= 0:
+        raise ValueError("stable_bias_tolerance 必须为正数")
+    if "fitting" in normalized:
+        normalized["fitting"]["tb_histogram"] = tb_histogram_config(normalized)
     conditions = parser.get("conditions")
     if not isinstance(conditions, dict) or conditions.get("mode") not in (
         "hk",
@@ -244,6 +327,11 @@ def validate_profile(profile: dict) -> dict:
                 raise ValueError(f"{key} 需要命名组 key、energy+channel 或 source+exposure 用于唯一配对")
         if not isinstance(rule.get("prefer_suffix", ""), str):
             raise ValueError("prefer_suffix 必须为文本")
+        metadata = rule.get("metadata", {})
+        if not isinstance(metadata, dict) or set(metadata) - {
+            "temp", "bias", "source", "exposure_minutes", "peak_energies_keV", "energy_keV", "channel",
+        }:
+            raise ValueError("规则 metadata 仅支持工况、源、曝光、能量和通道常量")
     aliases = set()
     for source in discovery["sources"]:
         if not isinstance(source, dict):
@@ -464,7 +552,7 @@ def discover(raw_root: Path | str, profile: dict) -> dict:
                     if metadata:
                         groups.update({k: v for k, v in metadata.groupdict().items() if v is not None})
                 try:
-                    rows.append(_normal_row({"kind": rule["kind"], **groups, **pair}, root, profile))
+                    rows.append(_normal_row({"kind": rule["kind"], **rule.get("metadata", {}), **groups, **pair}, root, profile))
                 except (ValueError, OSError) as exc:
                     errors.append(f"{Path(pair['event']).name}: {exc}")
     # Repeated rules/manifest rows must never silently replace an output or reuse

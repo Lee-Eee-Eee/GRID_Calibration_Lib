@@ -128,7 +128,7 @@ def parse_grid_data_single(file_name, evt_index, xml_file='grid_packet.xml', dat
         size = int(et.find('size').text)
         length = int(et.find('len').text)
         if name == 'waveform_data':
-            length = data['sample_length'][0]
+            length = np.atleast_1d(data['sample_length'])[0]
         tag_info.loc[len(tag_info.index)] = [name, start, size, length]
 
         endian_bak = endian
