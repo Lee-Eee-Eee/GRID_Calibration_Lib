@@ -87,6 +87,12 @@ def peak_job_settings(layer, spec):
     if supplied and layer not in ("TB_L1", "EC_L2"):
         raise ValueError("自动寻峰配置只适用于 TB L1 / EC L2")
     result = {}
+    if "fit_channels" in spec:
+        channels = spec["fit_channels"]
+        if (layer != "TB_L1" or not isinstance(channels, list) or not channels
+                or any(type(ch) is not int or ch not in range(4) for ch in channels)):
+            raise ValueError("fit_channels 只适用于 TB L1，须为 0–3 的通道列表")
+        result["fit_channels"] = sorted(set(channels))
     if "automatic_window" in supplied:
         if not isinstance(spec["automatic_window"], bool):
             raise ValueError("automatic_window 必须为布尔值")
@@ -250,6 +256,8 @@ class Workbench:
                 acquisition=reference,
                 inventory=inventory,
                 acquisition_products={},
+                acquisition_l1_channels={},
+                tb_l1_failures={},
                 acquisition_pending_layers=list(LAYERS),
                 pending_windows=[],
                 pending_ec_windows=[],
@@ -897,11 +905,15 @@ class Workbench:
             required_layer = {"TB_L2": "TB_L1", "EC_L3": "EC_L2"}.get(layer)
             if required_layer in state.get("acquisition_pending_layers", []):
                 coverage = self.acquisition_coverage(state, required_layer)
-                raise ValueError(
-                    f"读取配置尚未覆盖全部 {required_layer} 输入（{coverage['completed']}/{coverage['required']}），请先完成上游重算"
-                )
+                if layer != "TB_L2" or self._unreviewed_tb_l1_inputs(state):
+                    raise ValueError(
+                        f"读取配置尚未覆盖全部 {required_layer} 输入（{coverage['completed']}/{coverage['required']}），请先完成上游重算"
+                    )
             if layer == "TB_L2" and "TB_L1" in state["dirty_layers"]:
-                raise ValueError("窗口修订尚未拟合，请先执行 TB L1")
+                unresolved = set(state.get("pending_windows", [])) - set(state["config"].get("excluded", []))
+                unresolved.difference_update(state.get("tb_l1_failures", {}))
+                if unresolved or not (state.get("tb_l1_failures") or state["config"].get("excluded")):
+                    raise ValueError("窗口修订尚未拟合，请先执行 TB L1")
             if (
                 layer in ("EC_L1", "EC_L2", "EC_L3")
                 and state.get("tb_binding", "follow_run") == "follow_run"
@@ -1034,6 +1046,104 @@ class Workbench:
             self.executor.submit(self._execute, run_id, job_id)
             return copy.deepcopy(job)
 
+    def _unreviewed_tb_l1_inputs(self, state):
+        """Failed fits are rejected points; untouched reading inputs still wait."""
+        excluded = set(state["config"].get("excluded", [])) | set(state.get("tb_l1_failures", {}))
+        completed = set(state.get("acquisition_products", {}).get("TB_L1", []))
+        coverage = state.get("acquisition_l1_channels", {})
+        rows = (state.get("inventory", {}).get("raw", {}).get("reading_preview") or {}).get("rows", [])
+        return {
+            f"{state['payload']}:{row['stem']}:{channel}"
+            for row in rows if row["kind"] == "tb"
+            for channel in range(4)
+            if channel not in coverage.get(row["stem"], [0, 1, 2, 3] if row["stem"] in completed else [])
+            and f"{state['payload']}:{row['stem']}:{channel}" not in excluded
+        }
+
+    def _record_tb_l1_attempt(self, state, job):
+        """Keep failed old fits inspectable, but prevent their reuse in L2."""
+        result = job.get("result", {})
+        processor = result.get("processor", {})
+        requested_channels = job["config"].get("fit_channels", [0, 1, 2, 3])
+        stems = job["config"].get("only") or result.get("scope", {}).get("only")
+        if stems is None:
+            if job.get("scope") == "representative":
+                stems = state["inventory"]["representative"]["tb_stems"]
+            else:
+                stems = set(self.adapter_for(state).tb_files(state["payload"], self.root(state["id"]) / "products"))
+                preview = state.get("inventory", {}).get("raw", {}).get("reading_preview") or {}
+                stems.update(row["stem"] for row in preview.get("rows", []) if row["kind"] == "tb")
+        succeeded = {
+            f"{state['payload']}:{item['stem']}:{channel}"
+            for item in processor.get("outputs", [])
+            for channel in item.get("channels_updated", [])
+        } if job["status"] in ("succeeded", "partial") else set()
+        failures = {}
+        for error in result.get("errors", []):
+            if isinstance(error, dict) and (error.get("stem") or error.get("file")):
+                stem = error.get("stem") or Path(error["file"]).stem.removesuffix(".l0")
+                channels = requested_channels if error.get("channel") is None else [error["channel"]]
+                for channel in channels:
+                    failures[f"{state['payload']}:{stem}:{channel}"] = error.get("error", "Fit failed")
+        if job["status"] == "failed":
+            for stem in stems or []:
+                for channel in requested_channels:
+                    point = f"{state['payload']}:{stem}:{channel}"
+                    failures.setdefault(point, job.get("error") or "Fit failed")
+        failures = {point: error for point, error in failures.items() if point not in succeeded}
+        latest = state.setdefault("tb_l1_failures", {})
+        for point in succeeded:
+            latest.pop(point, None)
+        latest.update({point: {"job_id": job["id"], "error": error} for point, error in failures.items()})
+        if failures:
+            state["dirty_layers"] = sorted(set(state["dirty_layers"]) | {"TB_L1", "TB_L2"})
+        if job.get("acquisition"):
+            channels = state.setdefault("acquisition_l1_channels", {})
+            completed = set(state.setdefault("acquisition_products", {}).get("TB_L1", []))
+            for point in failures:
+                _, stem, channel = point.split(":")
+                previous = set(channels.get(stem, [0, 1, 2, 3] if stem in completed else []))
+                previous.discard(int(channel))
+                channels[stem] = sorted(previous)
+                completed.discard(stem)
+            state["acquisition_products"]["TB_L1"] = sorted(completed)
+            if failures:
+                state["acquisition_pending_layers"] = sorted(set(state.get("acquisition_pending_layers", [])) | {"TB_L1"})
+        by_stem = {}
+        for point, error in failures.items():
+            _, stem, channel = point.split(":")
+            by_stem.setdefault(stem, {})[int(channel)] = error
+        invalidated = []
+        for stem, errors in by_stem.items():
+            filename = f"{stem}_fit_results.l1.json"
+            path = layer_dir(self.root(state["id"]) / "products", state["payload"], "TB_L1") / "json" / filename
+            if not path.is_file():
+                continue
+            records = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(records, list):
+                continue
+            changed = [record for record in records if isinstance(record, dict) and record.get("channel") in errors]
+            if not changed:
+                continue
+            job_root = self.root(state["id"]) / "jobs" / job["id"]
+            write(job_root / "previous-results" / filename, records)
+            for record in changed:
+                if (record.get("fit_quality") or {}).get("status") != "fit_failed":
+                    record["previous_fit_quality"] = record.get("fit_quality")
+                record["fit_quality"] = {**(record.get("fit_quality") or {}), "accepted": False, "status": "fit_failed"}
+                record["fit_failure"] = {"job_id": job["id"], "error": errors[record["channel"]]}
+                invalidated.append(f"{state['payload']}:{stem}:{record['channel']}")
+            write(path, records)
+            relative = path.relative_to(self.root(state["id"]) / "products").as_posix()
+            write(job_root / "products" / relative, records)
+            artifacts = {item["path"]: item for item in job.get("outputs", [])}
+            artifacts[relative] = {"path": relative, "sha256": digest(path), "job_id": job["id"]}
+            job["outputs"] = list(artifacts.values())
+        job["invalidated_l1_points"] = invalidated
+        if invalidated:
+            job.setdefault("result", {})["invalidated_l1_points"] = invalidated
+            write(self.root(state["id"]) / "jobs" / job["id"] / "result.json", job["result"])
+
     def _execute(self, run_id, job_id):
         root = self.root(run_id)
         with self.lock:
@@ -1056,6 +1166,10 @@ class Workbench:
                 for src in (layer_dir(root / "products", state["payload"], json_layer) / "json").glob(
                     "*.json"
                 ):
+                    if (job["layer"] == "TB_L1" and job["config"].get("only")
+                            and src.name.endswith("_fit_results.l1.json")
+                            and src.name.removesuffix("_fit_results.l1.json") not in job["config"]["only"]):
+                        continue
                     target = output / src.relative_to(root / "products")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, target)
@@ -1064,6 +1178,9 @@ class Workbench:
                 for src in (layer_dir(root / "products", state["payload"], input_layer) / "parquet").glob(
                     "*.parquet"
                 ):
+                    if (job["layer"] == "TB_L1" and job["config"].get("only")
+                            and src.stem.removesuffix(".l0") not in job["config"]["only"]):
+                        continue
                     target = output / src.relative_to(root / "products")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, target)
@@ -1083,12 +1200,13 @@ class Workbench:
                 result.setdefault("warnings", []).append(job["ec_coverage"]["description"])
                 result["ec_coverage"] = job["ec_coverage"]
             write(job_root / "result.json", result)
+            job["result"] = clean(result)
             changed = [
                 p
                 for p in target_dir.rglob("*")
                 if p.is_file() and before.get(str(p)) != (digest(p), p.stat().st_mtime_ns)
             ]
-            if not result.get("success", False):
+            if not result.get("success", False) and not result.get("partial", False):
                 raise RuntimeError(json.dumps(clean(result.get("errors") or result), ensure_ascii=False))
             if not changed:
                 raise RuntimeError("处理器没有生成本次新产物；历史文件不能作为成功依据")
@@ -1102,14 +1220,21 @@ class Workbench:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, target)
                 generated.append({"path": str(rel.as_posix()), "sha256": digest(src), "job_id": job_id})
-            job.update(status="succeeded", result=clean(result), outputs=generated)
+            if result.get("partial"):
+                counts = result.get("counts", {})
+                job.update(status="partial", outputs=generated,
+                           error=f"{counts.get('channels_fitted', 0)} 个通道已保存，{counts.get('channels_failed', 0)} 个通道拟合失败")
+            else:
+                job.update(status="succeeded", outputs=generated)
         except Exception as exc:
             job.update(status="failed", error=str(exc))
             (job_root / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
         job["finished_at"] = now()
         with self.lock:
             state = self.read(run_id)
-            if job["status"] == "succeeded":
+            if job["layer"] == "TB_L1":
+                self._record_tb_l1_attempt(state, job)
+            if job["status"] in ("succeeded", "partial") or job.get("outputs"):
                 layer = job["layer"]
                 accumulated = {a["path"]: a for a in state["generated"].get(layer, [])}
                 accumulated.update({a["path"]: a for a in job["outputs"]})
@@ -1125,10 +1250,23 @@ class Workbench:
                         "EC_L2": "_fit_results.l2.json",
                     }.get(layer)
                     completed = set(state.setdefault("acquisition_products", {}).get(layer, []))
+                    if layer == "TB_L1":
+                        channel_coverage = state.setdefault("acquisition_l1_channels", {})
+                        # Existing fully completed stems predate channel-level
+                        # reruns and already belong to this reading revision.
+                        for stem in completed:
+                            channel_coverage.setdefault(stem, [0, 1, 2, 3])
+                        for item in job.get("result", {}).get("processor", {}).get("outputs", []):
+                            channels = set(channel_coverage.get(item["stem"], []))
+                            channels.update(item.get("channels_updated", []))
+                            channel_coverage[item["stem"]] = sorted(channels)
+                        completed = {stem for stem, channels in channel_coverage.items()
+                                     if set(channels) == {0, 1, 2, 3}}
                     completed.update(
                         Path(item["path"]).name.removesuffix(suffix)
                         for item in job["outputs"]
                         if suffix and item["path"].endswith(suffix)
+                        and layer != "TB_L1"
                     )
                     if layer in ("TB_L2", "EC_L3"):
                         completed.add("aggregate")
@@ -1142,15 +1280,15 @@ class Workbench:
                     state["acquisition_pending_layers"] = sorted(pending)
                     job["acquisition_coverage"] = coverage
                 if layer == "TB_L1":
-                    fitted_stems = {
-                        Path(a["path"]).name.removesuffix("_fit_results.l1.json")
-                        for a in job["outputs"]
-                        if a["path"].endswith("_fit_results.l1.json")
+                    fitted_points = {
+                        f"{state['payload']}:{item['stem']}:{channel}"
+                        for item in job.get("result", {}).get("processor", {}).get("outputs", [])
+                        for channel in item.get("channels_updated", range(item.get("channels_fitted", 0)))
                     }
                     state["pending_windows"] = [
-                        p for p in state.get("pending_windows", []) if p.split(":")[1] not in fitted_stems
+                        p for p in state.get("pending_windows", []) if p not in fitted_points
                     ]
-                    if state["pending_windows"]:
+                    if state["pending_windows"] or state.get("tb_l1_failures"):
                         dirty.add("TB_L1")
                 if layer == "EC_L2":
                     fitted_energies = {
@@ -1197,6 +1335,10 @@ class Workbench:
                     if any(row["kind"] == "background" and row["stem"] in stems for row in rows):
                         energy_keys.update(f"src_{row['source']}" for row in rows if row["kind"] == "source")
                     subsets = {"TB_L1": stems} if layer == "TB_L0" else {}
+                    if layer == "TB_L0":
+                        channel_coverage = state.setdefault("acquisition_l1_channels", {})
+                        for stem in stems:
+                            channel_coverage.pop(stem, None)
                     if layer == "EC_L0":
                         subsets["EC_L1"] = stems
                     if layer in ("EC_L0", "EC_L1"):
@@ -1383,6 +1525,7 @@ class Workbench:
                 job
                 for job in reversed(state["jobs"])
                 if job["layer"] == "TB_L1"
+                and channel in job["config"].get("fit_channels", [0, 1, 2, 3])
                 and (
                     stem in job["config"].get("only", [])
                     or job.get("scope") == "all"
@@ -1399,6 +1542,19 @@ class Workbench:
             if attempt
             else None
         )
+        if attempt and attempt.get("result"):
+            errors = attempt["result"].get("errors", [])
+            matching = [error for error in errors if isinstance(error, dict)
+                        and (error.get("stem") == stem or error.get("file") == f"{stem}.l0.parquet")
+                        and error.get("channel") in (None, channel)]
+            updated = any(item.get("stem") == stem and channel in item.get("channels_updated", [])
+                          for item in attempt["result"].get("processor", {}).get("outputs", []))
+            if matching:
+                result["last_fit_attempt"].update(status="failed", error="; ".join(error["error"] for error in matching))
+            elif updated:
+                result["last_fit_attempt"].update(status="succeeded", error=None)
+            elif attempt["status"] in ("partial", "failed"):
+                result["last_fit_attempt"].update(status="not_fitted", error=None)
         return clean(result)
 
     def ec_overview(self, run_id, channel=0, layer="EC_L2"):

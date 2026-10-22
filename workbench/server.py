@@ -141,6 +141,10 @@ def make_handler(workbench):
                         return self._json(200, workbench.surface(
                             run_id, int(query.get("channel", [0])[0]), query.get("layer", ["TB_L2"])[0]
                         ))
+                    if len(parts) == 4 and parts[3] == "l1-overview":
+                        from .l1_review import overview
+
+                        return self._json(200, overview(workbench, run_id))
                     if len(parts) == 4 and parts[3] == "spectrum":
                         return self._json(
                             200,

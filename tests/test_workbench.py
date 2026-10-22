@@ -305,7 +305,9 @@ def test_single_stem_refit_keeps_other_saved_windows_pending(workbench, workspac
         records = json.loads(destination.read_text())
         records[0]["center"] = 302
         put(destination, records)
-        return {"success": True}
+        return {"success": True, "processor": {"outputs": [
+            {"stem": stem, "channels_fitted": 4, "channels_updated": [0, 1, 2, 3]}
+        ]}}
 
     monkeypatch.setattr(workbench.adapter, "execute", compute)
     first = settled(

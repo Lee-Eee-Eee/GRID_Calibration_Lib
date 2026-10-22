@@ -93,11 +93,19 @@ def test_rerunning_one_l0_requires_its_own_l1_before_surface(configured_run, mon
                 path = output / payload / "tb/L1/json" / (stem + "_fit_results.l1.json")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(
-                    json.dumps([{"channel": ch, "center": 100.0} for ch in range(4)]), encoding="utf-8"
+                    json.dumps([{"channel": ch, "center": 100.0, "center_err": 1.,
+                                 "sigma": 10., "sigma_err": 1., "amplitude": 1000., "amplitude_err": 30.,
+                                 "fwhm": 23.548, "resolution": .23548, "resolution_err": .01,
+                                 "temp": 25., "temp_err": .1, "bias": 28.5, "bias_err": .01,
+                                 "window_lo": 65., "window_hi": 135., "fit_mode": "gaus"}
+                                for ch in range(4)]), encoding="utf-8"
                 )
             else:
                 raise AssertionError("A stale aggregate must be rejected before processor execution")
-        return {"success": True}
+        return {"success": True, "processor": {"outputs": [
+            {"stem": stem, "channels_fitted": 4, "channels_updated": [0, 1, 2, 3]}
+            for stem in config.get("only") or stems
+        ]}} if layer == "TB_L1" else {"success": True}
 
     monkeypatch.setattr(ComputeAdapter, "execute", execute)
     monkeypatch.setattr(service, "validate", lambda *_args: {"available": True, "accepted": True})

@@ -142,7 +142,8 @@ def test_failed_first_fit_can_be_inspected_revised_and_refit_with_actual_process
         failed = settled(
             service,
             run["id"],
-            service.submit(run["id"], {"layer": "TB_L1", "stem": "case", "representative": False}),
+            service.submit(run["id"], {"layer": "TB_L1", "stem": "case", "representative": False,
+                                      "fit_channels": [0]}),
         )
         assert failed["status"] == "failed" and failed["error"]
         assert service.view(run["id"])["stages"]["TB_L1"]["status"] == "failed"
@@ -157,7 +158,8 @@ def test_failed_first_fit_can_be_inspected_revised_and_refit_with_actual_process
         succeeded = settled(
             service,
             run["id"],
-            service.submit(run["id"], {"layer": "TB_L1", "stem": "case", "representative": False}),
+            service.submit(run["id"], {"layer": "TB_L1", "stem": "case", "representative": False,
+                                      "fit_channels": [0]}),
         )
         assert succeeded["status"] == "succeeded", succeeded.get("error")
         assert succeeded["result"]["processor_class"] == "TBL1Processor"
@@ -175,7 +177,8 @@ def test_failed_first_fit_can_be_inspected_revised_and_refit_with_actual_process
         failed_again = settled(
             service,
             run["id"],
-            service.submit(run["id"], {"layer": "TB_L1", "stem": "case", "representative": False}),
+            service.submit(run["id"], {"layer": "TB_L1", "stem": "case", "representative": False,
+                                      "fit_channels": [0]}),
         )
         assert failed_again["status"] == "failed"
         current = service.spectrum(run["id"], "case", 0)

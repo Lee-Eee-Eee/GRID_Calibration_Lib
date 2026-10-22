@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from time import perf_counter
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,8 +19,6 @@ from ...common.utils import (
     DataLayout,
     get_timestamp,
     read_json,
-    read_parquet,
-    read_parquet_metadata,
     validated_events,
     write_json,
 )
@@ -46,13 +47,13 @@ class FitResult:
     sigma_err: float
     amplitude: float
     amplitude_err: float
-    slope: Optional[float]
-    intercept: Optional[float]
-    exp_amplitude: Optional[float]
-    exp_decay: Optional[float]
-    quad_a: Optional[float]
-    quad_b: Optional[float]
-    quad_c: Optional[float]
+    slope: float | None
+    intercept: float | None
+    exp_amplitude: float | None
+    exp_decay: float | None
+    quad_a: float | None
+    quad_b: float | None
+    quad_c: float | None
     fwhm: float
     height: float
     fit_mode: str
@@ -74,9 +75,9 @@ class TBL1Processor:
     def process(
         self,
         tb_l0_dir: Path,
-        config: Optional[Dict[str, Any]] = None,
-        only_stems: Optional[Iterable[str]] = None,
-    ) -> Dict[str, Any]:
+        config: dict[str, Any] | None = None,
+        only_stems: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
         """处理 TB L1。
 
         参数:
@@ -95,9 +96,9 @@ class TBL1Processor:
             win_path = str(default_path) if default_path.exists() else None
 
         manual_windows = self._load_windows(Path(win_path)) if win_path else {}
-        used_windows: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        used_windows: dict[str, dict[str, dict[str, Any]]] = {}
 
-        results: Dict[str, Any] = {
+        results: dict[str, Any] = {
             "payload": self.payload_name,
             "layer": "TB_L1",
             "timestamp": get_timestamp(),
@@ -114,13 +115,13 @@ class TBL1Processor:
         if not parquet_dir.exists():
             raise ValueError(f"L0 parquet directory not found: {parquet_dir}")
 
-        only_set = {s.strip() for s in only_stems if s and s.strip()} if only_stems else None
+        only_set = {s.strip().removesuffix(".l0") for s in only_stems if s and s.strip()} if only_stems else None
         partial_run = only_set is not None
 
         all_parquets = sorted(parquet_dir.glob("*.parquet"))
         if partial_run:
-            parquet_files = [p for p in all_parquets if p.stem in only_set]
-            missing = only_set - {p.stem for p in parquet_files}
+            parquet_files = [p for p in all_parquets if p.stem.removesuffix(".l0") in only_set]
+            missing = only_set - {p.stem.removesuffix(".l0") for p in parquet_files}
             if missing:
                 print(f"⚠ 以下 stem 在 L0 parquet 中找不到: {sorted(missing)}")
             if not parquet_files:
@@ -130,132 +131,126 @@ class TBL1Processor:
         else:
             parquet_files = all_parquets
 
-        for parquet_file in parquet_files:
+        selected_channels = cfg.get("fit_channels", [0, 1, 2, 3])
+        if (not isinstance(selected_channels, (list, tuple)) or not selected_channels
+                or any(type(ch) is not int or ch not in range(4) for ch in selected_channels)):
+            raise ValueError("fit_channels must contain channel numbers 0–3")
+        selected_channels = sorted(set(selected_channels))
+        results["fit_channels"] = selected_channels
+        results["n_files"] = len(parquet_files)
+        results["file_outcomes"] = []
+        results["channels_fitted"] = 0
+        results["channels_failed"] = 0
+        for file_index, parquet_file in enumerate(parquet_files, 1):
+            started = perf_counter()
+            stem = parquet_file.stem.removesuffix(".l0")
+            fig = None
+            updated = []
+            failures = []
             try:
-                df, input_quality = validated_events(read_parquet(parquet_file))
-                stem = parquet_file.stem.replace(".l0", "")
-                meta = read_parquet_metadata(parquet_file, meta_key="hk_data")
+                # Spectral fitting needs amplitude, channel and CRC only. Read
+                # one footer for both metadata fields instead of once per channel.
+                import pyarrow.parquet as pq
 
-                channel_records: list[dict[str, Any]] = []
-                used_windows.setdefault(stem, {})
-
-                fig, axes = plt.subplots(2, 2, figsize=(13, 9), constrained_layout=True)
-                axes_flat = axes.flatten()
-
-                for ch in range(4):
-                    amp_data = df[df["channel"] == ch]["amp"].to_numpy(dtype=float)
-                    if len(amp_data) < 10:
-                        continue
-
-                    windows = {} if cfg.get("automatic_window") else manual_windows
-                    acquisition = read_parquet_metadata(parquet_file, meta_key="acquisition") or {}
-                    histogram = cfg.get("histogram_config") or acquisition.get("fitting", {}).get("tb_histogram")
-                    fit_res = self._fit_channel(stem, ch, amp_data, windows, auto_window,
-                                                cfg.get("peak_detection"), histogram)
-                    is_manual = bool(self._is_manual_entry(windows.get(stem, {}).get(str(ch), {})))
-
-                    temps = meta.get("temp", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
-                    temp_errs = meta.get("temp_err", [0.0] * 4) if isinstance(meta, dict) else [0.0] * 4
-                    biases = meta.get("bias", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
-                    bias_errs = meta.get("bias_err", [0.0] * 4) if isinstance(meta, dict) else [0.0] * 4
-                    ch_temp = float(temps[ch]) if ch < len(temps) else float("nan")
-                    ch_temp_err = float(temp_errs[ch]) if ch < len(temp_errs) else 0.0
-                    ch_bias = float(biases[ch]) if ch < len(biases) else float("nan")
-                    ch_bias_err = float(bias_errs[ch]) if ch < len(bias_errs) else 0.0
-
-                    # 分辨率 R = FWHM / center；误差用一阶传播
-                    if np.isfinite(fit_res.center) and fit_res.center > 0:
-                        resolution = float(fit_res.fwhm / fit_res.center)
-                        sigma_term = (fit_res.fwhm / fit_res.center) * (fit_res.sigma_err / max(fit_res.sigma, 1e-12)) if fit_res.sigma > 0 else 0.0
-                        center_term = (fit_res.fwhm / fit_res.center**2) * fit_res.center_err
-                        resolution_err = float(np.sqrt(sigma_term**2 + center_term**2))
-                    else:
-                        resolution = float("nan")
-                        resolution_err = 0.0
-
-                    record = {
-                        "channel": int(ch),
-                        "center": float(fit_res.center),
-                        "center_err": float(fit_res.center_err),
-                        "sigma": float(fit_res.sigma),
-                        "sigma_err": float(fit_res.sigma_err),
-                        "amplitude": float(fit_res.amplitude),
-                        "amplitude_err": float(fit_res.amplitude_err),
-                        "fwhm": float(fit_res.fwhm),
-                        "height": float(fit_res.height),
-                        "resolution": resolution,
-                        "resolution_err": resolution_err,
-                        "temp": ch_temp,
-                        "temp_err": ch_temp_err,
-                        "bias": ch_bias,
-                        "bias_err": ch_bias_err,
-                        "window_lo": float(fit_res.lo),
-                        "window_hi": float(fit_res.hi),
-                        "window_manual": is_manual,
-                        "fit_mode": fit_res.fit_mode,
-                        "rsquared": float(fit_res.rsquared),
-                        "n_events": int(len(amp_data)),
-                        "peak_detection": fit_res.peak_detection,
-                        "fit_quality": fit_res.fit_quality,
-                        "histogram_config": fit_res.histogram_config,
-                        "input_quality": input_quality,
-                    }
-                    if fit_res.slope is not None:
-                        record["slope"] = float(fit_res.slope)
-                    if fit_res.intercept is not None:
-                        record["intercept"] = float(fit_res.intercept)
-                    if fit_res.exp_amplitude is not None:
-                        record["exp_amplitude"] = float(fit_res.exp_amplitude)
-                    if fit_res.exp_decay is not None:
-                        record["exp_decay"] = float(fit_res.exp_decay)
-                    if fit_res.quad_a is not None:
-                        record["quad_a"] = float(fit_res.quad_a)
-                        record["quad_b"] = float(fit_res.quad_b)
-                        record["quad_c"] = float(fit_res.quad_c)
-                    channel_records.append(record)
-
-                    used_windows[stem][str(ch)] = {
-                        "lo": float(fit_res.lo),
-                        "hi": float(fit_res.hi),
-                        "manual": is_manual,
-                    }
-
-                    ax = axes_flat[ch]
-                    self._plot_channel(ax, ch, fit_res)
-
-                temp_mean, bias_mean = self._extract_tb_file_mean(meta)
-
-                fig.suptitle(f"{stem} | Fit mode: auto-select", fontsize=14)
-                fig_path = self.layout.get_tb_l1_figure(f"{stem}_fit.l1.jpg")
-                fig.savefig(fig_path, dpi=150, format="jpg")
-                plt.close(fig)
-
+                parquet = pq.ParquetFile(parquet_file)
+                columns = [name for name in ("channel", "amp", "crc_check")
+                           if name in parquet.schema_arrow.names]
+                df, input_quality = validated_events(parquet.read(columns=columns).to_pandas())
+                metadata = parquet.schema_arrow.metadata or {}
+                meta = json.loads(metadata.get(b"hk_data", b"{}"))
+                acquisition = json.loads(metadata.get(b"acquisition", b"{}"))
+                histogram = cfg.get("histogram_config") or acquisition.get("fitting", {}).get("tb_histogram")
+                windows = {} if cfg.get("automatic_window") else manual_windows
                 json_path = self.layout.get_tb_l1_json(f"{stem}_fit_results.l1.json")
-                # 顶层为 list[4]，符合 cali_format wiki 规范；下游 L2 直接用 list/array
-                write_json(json_path, channel_records)
-
-                results["outputs"].append(
-                    {
-                        "stem": stem,
-                        "channels_fitted": len(channel_records),
-                        "json": json_path.name,
-                        "figure": fig_path.name,
-                        "input_quality": input_quality,
-                    }
-                )
-                results["n_processed"] += 1
-                print(f"✓ L1: {stem} ({len(channel_records)} channels)")
+                existing = read_json(json_path) if json_path.exists() else []
+                records = {row["channel"]: row for row in existing if isinstance(row, dict) and "channel" in row}
+                fits = {}
+                used_windows.setdefault(stem, {})
+                amplitudes = df["amp"].to_numpy(dtype=float)
+                channels = df["channel"].to_numpy()
+                for ch in selected_channels:
+                    try:
+                        amp_data = amplitudes[channels == ch]
+                        if len(amp_data) < 10:
+                            raise ValueError(f"Only {len(amp_data)} valid events; at least 10 are required")
+                        fit_res = self._fit_channel(stem, ch, amp_data, windows, auto_window,
+                                                    cfg.get("peak_detection"), histogram)
+                        is_manual = self._is_manual_entry(windows.get(stem, {}).get(str(ch), {}))
+                        record = self._fit_record(ch, fit_res, meta, is_manual, len(amp_data), input_quality)
+                        record["acquisition_profile_sha256"] = acquisition.get("profile_sha256")
+                        records[ch] = record
+                        fits[ch] = fit_res
+                        updated.append(ch)
+                        used_windows[stem][str(ch)] = {
+                            "lo": float(fit_res.lo), "hi": float(fit_res.hi), "manual": is_manual,
+                        }
+                    except Exception as exc:
+                        failure = {"file": parquet_file.name, "stem": stem, "channel": ch,
+                                   "error": str(exc), "peak_detection": getattr(exc, "diagnostics", None)}
+                        failures.append(failure)
+                        results["errors"].append(failure)
+                if updated:
+                    # A channel edit preserves the other saved channel records.
+                    # Failed requests retain their previous fit, while errors
+                    # and channels_updated explicitly describe this attempt.
+                    write_json(json_path, [records[ch] for ch in sorted(records)])
+                    if len(selected_channels) == 1:
+                        fig, ax = plt.subplots(figsize=(8, 5))
+                        axes = {selected_channels[0]: ax}
+                        figure_name = f"{stem}_ch{selected_channels[0]}_fit.l1.jpg"
+                    else:
+                        fig, grid = plt.subplots(2, 2, figsize=(13, 9))
+                        axes = dict(enumerate(grid.flat))
+                        figure_name = f"{stem}_fit.l1.jpg"
+                    for ch, ax in axes.items():
+                        if ch in fits:
+                            self._plot_channel(ax, ch, fits[ch])
+                        else:
+                            ax.text(0.5, 0.5, f"CH{ch}: fit failed" if ch in selected_channels else f"CH{ch}: unchanged",
+                                    ha="center", va="center", transform=ax.transAxes)
+                    fig.suptitle(f"{stem} | Fit mode: auto-select", fontsize=14)
+                    # Fixed padding avoids constrained-layout's repeated text
+                    # measurement on every draw during an interactive refit.
+                    fig.subplots_adjust(left=0.08, right=0.98, bottom=0.10, top=0.88, hspace=0.42, wspace=0.25)
+                    fig_path = self.layout.get_tb_l1_figure(figure_name)
+                    fig.savefig(fig_path, dpi=150, format="jpg")
+                    results["outputs"].append({
+                        "stem": stem, "channels_fitted": len(records), "channels_updated": updated,
+                        "channels_failed": [failure["channel"] for failure in failures],
+                        "json": json_path.name, "figure": fig_path.name, "input_quality": input_quality,
+                    })
+                    results["n_processed"] += 1
             except Exception as exc:
-                results["errors"].append({"file": parquet_file.name, "error": str(exc),
-                                          "peak_detection": getattr(exc, "diagnostics", None)})
-                print(f"✗ Error: {parquet_file.name} - {exc}")
+                failure = {"file": parquet_file.name, "stem": stem, "channel": None,
+                           "error": str(exc), "peak_detection": getattr(exc, "diagnostics", None)}
+                failures.append(failure)
+                results["errors"].append(failure)
+            finally:
+                if fig is not None:
+                    plt.close(fig)
+            results["channels_fitted"] += len(updated)
+            results["channels_failed"] += len(selected_channels) - len(updated)
+            outcome = {"stem": stem, "channels_updated": updated,
+                       "channels_failed": [failure["channel"] for failure in failures],
+                       "errors": failures, "elapsed_seconds": round(perf_counter() - started, 3)}
+            results["file_outcomes"].append(outcome)
+            print("L1_PROGRESS " + json.dumps({
+                "completed": file_index, "total": len(parquet_files), "stem": stem,
+                "fitted": results["channels_fitted"], "failed": results["channels_failed"],
+            }), flush=True)
+            print(f"[L1 {file_index}/{len(parquet_files)}] {stem}: "
+                  f"fitted {len(updated)}/{len(selected_channels)} channels, "
+                  f"failed {len(failures)} ({outcome['elapsed_seconds']:.2f}s)", flush=True)
+            for failure in failures:
+                print(f"  CH{failure['channel']}: {failure['error']}", flush=True)
 
         # partial run 时只合并更新本次涉及的 stem，避免清掉之前其他文件的快照/清单
         snap_path = self.layout.get_tb_l1_json("fit_windows_used.json")
         manifest_path = self.layout.get_tb_l1_json("L1_manifest.json")
         if partial_run:
             existing_snap = self._load_windows(snap_path) if snap_path.exists() else {}
-            existing_snap.update(used_windows)
+            for stem, channels in used_windows.items():
+                existing_snap.setdefault(stem, {}).update(channels)
             write_json(snap_path, existing_snap)
 
             existing_manifest = read_json(manifest_path) if manifest_path.exists() else {}
@@ -279,7 +274,68 @@ class TBL1Processor:
             write_json(manifest_path, results)
         return results
 
-    def _is_manual_entry(self, item: Dict[str, Any]) -> bool:
+    def _fit_record(self, ch, fit_res, meta, is_manual, n_events, input_quality):
+        temps = meta.get("temp", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
+        temp_errs = meta.get("temp_err", [0.0] * 4) if isinstance(meta, dict) else [0.0] * 4
+        biases = meta.get("bias", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
+        bias_errs = meta.get("bias_err", [0.0] * 4) if isinstance(meta, dict) else [0.0] * 4
+        ch_temp = float(temps[ch]) if ch < len(temps) else float("nan")
+        ch_temp_err = float(temp_errs[ch]) if ch < len(temp_errs) else 0.0
+        ch_bias = float(biases[ch]) if ch < len(biases) else float("nan")
+        ch_bias_err = float(bias_errs[ch]) if ch < len(bias_errs) else 0.0
+
+        # 分辨率 R = FWHM / center；误差用一阶传播
+        if np.isfinite(fit_res.center) and fit_res.center > 0:
+            resolution = float(fit_res.fwhm / fit_res.center)
+            sigma_term = (fit_res.fwhm / fit_res.center) * (fit_res.sigma_err / max(fit_res.sigma, 1e-12)) if fit_res.sigma > 0 else 0.0
+            center_term = (fit_res.fwhm / fit_res.center**2) * fit_res.center_err
+            resolution_err = float(np.sqrt(sigma_term**2 + center_term**2))
+        else:
+            resolution = float("nan")
+            resolution_err = 0.0
+
+        record = {
+            "channel": int(ch),
+            "center": float(fit_res.center),
+            "center_err": float(fit_res.center_err),
+            "sigma": float(fit_res.sigma),
+            "sigma_err": float(fit_res.sigma_err),
+            "amplitude": float(fit_res.amplitude),
+            "amplitude_err": float(fit_res.amplitude_err),
+            "fwhm": float(fit_res.fwhm),
+            "height": float(fit_res.height),
+            "resolution": resolution,
+            "resolution_err": resolution_err,
+            "temp": ch_temp,
+            "temp_err": ch_temp_err,
+            "bias": ch_bias,
+            "bias_err": ch_bias_err,
+            "window_lo": float(fit_res.lo),
+            "window_hi": float(fit_res.hi),
+            "window_manual": is_manual,
+            "fit_mode": fit_res.fit_mode,
+            "rsquared": float(fit_res.rsquared),
+            "n_events": int(n_events),
+            "peak_detection": fit_res.peak_detection,
+            "fit_quality": fit_res.fit_quality,
+            "histogram_config": fit_res.histogram_config,
+            "input_quality": input_quality,
+        }
+        if fit_res.slope is not None:
+            record["slope"] = float(fit_res.slope)
+        if fit_res.intercept is not None:
+            record["intercept"] = float(fit_res.intercept)
+        if fit_res.exp_amplitude is not None:
+            record["exp_amplitude"] = float(fit_res.exp_amplitude)
+        if fit_res.exp_decay is not None:
+            record["exp_decay"] = float(fit_res.exp_decay)
+        if fit_res.quad_a is not None:
+            record["quad_a"] = float(fit_res.quad_a)
+            record["quad_b"] = float(fit_res.quad_b)
+            record["quad_c"] = float(fit_res.quad_c)
+        return record
+
+    def _is_manual_entry(self, item: dict[str, Any]) -> bool:
         """判断窗口条目是否为 resource 中提供的拟合窗口。
 
         legacy 项目里只要 ``lo`` / ``hi`` 同时存在就视为"已配置"，``manual`` 字段
@@ -290,7 +346,7 @@ class TBL1Processor:
             return False
         return "lo" in item and "hi" in item
 
-    def _load_windows(self, path: Path) -> Dict[str, Any]:
+    def _load_windows(self, path: Path) -> dict[str, Any]:
         if not path.exists():
             return {}
         try:
@@ -299,7 +355,7 @@ class TBL1Processor:
         except Exception:
             return {}
 
-    def _extract_tb_file_mean(self, metadata: Dict[str, Any]) -> Tuple[float, float]:
+    def _extract_tb_file_mean(self, metadata: dict[str, Any]) -> tuple[float, float]:
         temps = metadata.get("temp", []) if isinstance(metadata, dict) else []
         biases = metadata.get("bias", []) if isinstance(metadata, dict) else []
         valid_t = [float(t) for t in temps if isinstance(t, (int, float)) and np.isfinite(t)]
@@ -313,7 +369,7 @@ class TBL1Processor:
         stem: str,
         ch: int,
         energy: np.ndarray,
-        config: Dict[str, Any],
+        config: dict[str, Any],
         auto_window: bool,
         peak_config: dict[str, Any] | None = None,
         histogram_config: dict[str, float] | None = None,
@@ -443,11 +499,11 @@ class TBL1Processor:
 
     def _get_fit_window(
         self,
-        item: Dict[str, Any],
+        item: dict[str, Any],
         auto_lo: float,
         auto_hi: float,
         auto_window: bool,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         if isinstance(item, dict) and "lo" in item and "hi" in item:
             return float(item["lo"]), float(item["hi"])
         if auto_window:

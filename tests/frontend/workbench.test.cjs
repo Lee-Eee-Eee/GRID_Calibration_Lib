@@ -63,6 +63,7 @@ function controller() {
     state.layer = 'TB_L0'; state.channel = 0; state.busy = false; state.loading = false;
     state.loadToken = 0; state.spectrumToken = 0; state.dirty = false;
     const productionRenderUnpackWorkspace = renderUnpackWorkspace;
+    const productionSetBusy = setBusy;
     renderUnpackWorkspace = () => {}; setBusy = () => {};
     chartMessage = () => {}; messageError = error => { state.testError = error.message; };
   `, context);
@@ -122,6 +123,261 @@ test('reversed channel responses retain the latest channel and file', async () =
   assert.equal(ui.run('selected.join()'), '14B:ch3-file:3');
 });
 
+test('a surface refresh finishing after an explicit file selection preserves the new file', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1';
+    const points = [{ id: '14B:094:0', stem: '094' }, { id: '14B:101:0', stem: '101' }];
+    state.point = points[0];
+    const entered = deferred(), release = deferred();
+    api = async path => path.includes('/l1-overview') ? { points } : { x: [0, 100], y: [1, 20], histogram_config: { min: 0, max: 100 } };
+    renderSurface = async () => { entered.resolve(); await release.promise; };
+    highlightSelectedPoint = async () => {};
+    renderSpectrum = async () => {};
+    renderCurrentStatus = () => {};
+    const pending = loadSurface();
+  `);
+  await ui.run('entered.promise');
+  await ui.run('selectPoint(points[1])');
+  ui.run('release.resolve()');
+  await ui.run('pending');
+  assert.equal(ui.run('state.point.stem'), '101');
+  assert.equal(ui.element('point-select').value, '14B:101:0');
+  assert.equal(ui.run('savedView().familyStems.TB'), '101');
+});
+
+test('an earlier file switch cannot overwrite a later file switch when window saves finish out of order', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1'; state.dirty = true;
+    state.point = { id: '14B:094:0', stem: '094' };
+    const saves = [deferred(), deferred()]; let saveCount = 0;
+    saveRevision = async () => { await saves[saveCount++].promise; };
+    api = async () => ({ x: [0, 100], y: [1, 20], histogram_config: { min: 0, max: 100 } });
+    highlightSelectedPoint = async () => {};
+    renderSpectrum = async () => {};
+    renderCurrentStatus = () => {};
+    const earlier = selectPoint({ id: '14B:101:0', stem: '101' });
+    const latest = selectPoint({ id: '14B:102:0', stem: '102' });
+    saves[1].resolve();
+  `);
+  // Let a later selection's save return before the earlier selection's save.
+  await Promise.resolve();
+  ui.run('saves[0].resolve()');
+  await ui.run('Promise.all([earlier, latest])');
+  assert.equal(ui.run('state.point.stem'), '102');
+  assert.equal(ui.element('point-select').value, '14B:102:0');
+  assert.equal(ui.run('savedView().familyStems.TB'), '102');
+});
+
+test('fit controls are disabled immediately while a file switch saves the previous window', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1'; state.dirty = true;
+    state.point = { id: '14B:094:0', stem: '094' };
+    state.spectrum = { x: [0, 100], y: [1, 20] };
+    const saved = deferred();
+    saveRevision = async () => { await saved.promise; };
+    setBusy = productionSetBusy;
+    api = async () => ({ x: [0, 100], y: [1, 20], histogram_config: { min: 0, max: 100 } });
+    highlightSelectedPoint = async () => {};
+    renderSpectrum = async () => {}; renderCurrentStatus = () => {};
+    const pending = selectPoint({ id: '14B:101:0', stem: '101' });
+  `);
+  assert.equal(ui.element('fit-spectrum').disabled, true);
+  assert.equal(ui.element('auto-fit-spectrum').disabled, true);
+  assert.equal(ui.element('window-lo').disabled, true);
+  assert.equal(ui.element('window-hi').disabled, true);
+  ui.run('saved.resolve()');
+  await ui.run('pending');
+  assert.equal(ui.run('state.point.stem'), '101');
+});
+
+test('fit submission keeps the file and channel whose window was saved', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1'; state.channel = 0;
+    state.point = { id: '14B:101:0', stem: '101' };
+    state.spectrum = { x: [0, 100], y: [1, 20] };
+    $('window-lo').value = '20'; $('window-hi').value = '80';
+    const saved = deferred(); let submitted, patch;
+    saveRevision = async extra => { patch = extra; await saved.promise; };
+    executeJob = async (layer, config) => { submitted = { layer, ...config }; };
+    notify = () => {};
+    const pending = fitSpectrum();
+    state.channel = 3; state.point = { id: '14B:102:3', stem: '102' };
+    saved.resolve();
+  `);
+  await ui.run('pending');
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(patch)')), { windows: { '101': { '0': { lo: 20, hi: 80 } } } });
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(submitted)')), { layer: 'TB_L1', stem: '101', channel: 0, fit_channels: [0] });
+});
+
+test('the main layer action keeps its original layer, file, channel and scope while saving', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1'; state.channel = 0; state.dirty = true;
+    state.point = { id: '14B:101:0', stem: '101' }; $('run-scope').value = 'representative';
+    const saved = deferred(); let submitted, busyStates = [];
+    saveRevision = async () => { await saved.promise; };
+    setBusy = value => { busyStates.push(value); };
+    executeJob = async (layer, config) => { submitted = { layer, ...config }; };
+  `);
+  const pending = ui.element('run-layer').listeners.click[0]({});
+  assert.equal(ui.run('busyStates[0]'), true);
+  ui.run(`
+    state.layer = 'EC_L0'; state.channel = 3; state.point = { id: 'other:3', stem: 'other' };
+    $('run-scope').value = 'full'; saved.resolve();
+  `);
+  await pending;
+  assert.equal(ui.run('submitted.layer'), 'TB_L1');
+  assert.equal(ui.run('submitted.stem'), '101');
+  assert.equal(ui.run('submitted.channel'), 0);
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(busyStates)')), [true, false]);
+});
+
+test('file fitting cannot submit the previous trial file after another trial has opened', async () => {
+  for (const action of ['fitSpectrum()', 'fitAllL1Channels()']) {
+    const ui = controller();
+    ui.run(`
+      state.layer = 'TB_L1'; state.channel = 0; state.dirty = true;
+      state.point = { id: '14B:101:0', stem: '101' };
+      state.spectrum = { x: [0, 100], y: [1, 20] };
+      $('window-lo').value = '20'; $('window-hi').value = '80';
+      const saved = deferred(); let submissions = 0;
+      saveRevision = async () => { await saved.promise; };
+      executeJob = async () => { submissions++; };
+      notify = () => {};
+    `);
+    ui.run(`const pending = ${action}; state.run = { id:'run-b', payload:'15B' }; saved.resolve();`);
+    await assert.rejects(ui.run('pending'), /试算已切换/);
+    assert.equal(ui.run('submissions'), 0, action);
+  }
+});
+
+test('L1 file search and review filters select only matching conditions', () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1';
+    state.l1Overview = { files: [
+      { stem: '094_observe_50C_290', has_l0: true, status: 'fitted', fitted: 4, channels: [] },
+      { stem: '101_observe_50C_285', has_l0: true, status: 'attention', fitted: 3, channels: [] },
+      { stem: '102_observe_40C_285', has_l0: true, status: 'attention', fitted: 0, channels: [] },
+      { stem: '103_observe_30C_285', has_l0: true, status: 'pending', fitted: 0, channels: [] },
+      { stem: 'history_without_l0', has_l0: false, status: 'fitted', fitted: 4, channels: [] }
+    ] };
+    $('l1-file-filter').value = 'all';
+  `);
+  assert.equal(ui.run('filteredL1Files().length'), 4);
+  ui.element('l1-file-filter').value = 'attention';
+  assert.equal(ui.run('filteredL1Files().map(item => item.stem).join()'), '101_observe_50C_285,102_observe_40C_285');
+  ui.element('l1-file-search').value = '50c';
+  assert.equal(ui.run('filteredL1Files().map(item => item.stem).join()'), '101_observe_50C_285');
+  ui.element('l1-file-filter').value = 'fitted';
+  assert.equal(ui.run('filteredL1Files().map(item => item.stem).join()'), '094_observe_50C_290');
+  ui.element('l1-file-search').value = '';
+  ui.element('l1-file-filter').value = 'pending';
+  assert.equal(ui.run('filteredL1Files().map(item => item.stem).join()'), '103_observe_30C_285');
+});
+
+test('L1 previous and next navigate the filtered file list without wrapping at the boundary', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1';
+    state.l1Overview = { files: [
+      { stem: '094', has_l0: true, status: 'fitted', channels: [{ id: '14B:094:0', stem: '094', channel: 0 }] },
+      { stem: '101', has_l0: true, status: 'attention', channels: [{ id: '14B:101:0', stem: '101', channel: 0 }] },
+      { stem: '102', has_l0: true, status: 'attention', channels: [{ id: '14B:102:0', stem: '102', channel: 0 }] }
+    ] };
+    state.surface = { points: state.l1Overview.files.flatMap(file => file.channels) };
+    state.point = state.surface.points[1];
+    $('l1-file-filter').value = 'attention';
+    let selected = [];
+    selectPoint = async point => { state.point = point; selected.push(point.stem); };
+  `);
+  await ui.run('moveL1File(1)');
+  assert.equal(ui.run('state.point.stem'), '102');
+  await ui.run('moveL1File(1)');
+  assert.equal(ui.run('state.point.stem'), '102');
+  await ui.run('moveL1File(-1)');
+  assert.equal(ui.run('state.point.stem'), '101');
+  await ui.run('moveL1File(-1)');
+  assert.equal(ui.run('state.point.stem'), '101');
+  assert.equal(ui.run('selected.join()'), '102,101');
+});
+
+test('switching an L1 channel keeps the selected condition file', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1'; state.channel = 0; state.point = { id: '14B:101:0', stem: '101', channel: 0 };
+    renderNavigation = () => {}; renderStage = () => {}; renderSurface = async () => {};
+    api = async () => ({ points: [{ id: '14B:094:3', stem: '094', channel: 3 }, { id: '14B:101:3', stem: '101', channel: 3 }] });
+    selectPoint = async point => { state.point = point; rememberView(); };
+  `);
+  await ui.run('selectChannel(3)');
+  assert.equal(ui.run('state.point.stem'), '101');
+  assert.equal(ui.run('state.point.channel'), 3);
+  assert.equal(ui.run('state.channel'), 3);
+});
+
+test('a partial L1 job refreshes its usable results and reports successful and failed channels', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1';
+    const partial = { id: 'partial-l1', layer: 'TB_L1', status: 'partial',
+      result: { summary: { files_total: 2, channels_succeeded: 7, channels_failed: 1 },
+        counts: { outputs: 4, processed: 2, files: 2, channels_fitted: 7, channels_failed: 1 } } };
+    api = async () => ({ job: partial });
+    let refreshed = 0, notices = [];
+    refreshRun = async () => { refreshed++; };
+    renderJobs = () => {}; renderNavigation = () => {}; renderStage = () => {}; showTab = () => {};
+    notify = (message, type) => { notices.push({ message, type }); };
+  `);
+  const job = await ui.run(`executeJob('TB_L1', { representative: false })`);
+  assert.equal(job.status, 'partial');
+  assert.equal(ui.run('refreshed'), 1);
+  assert.equal(ui.run('state.run.jobs[0].status'), 'partial');
+  const completion = JSON.parse(ui.run('JSON.stringify(notices.at(-1))'));
+  assert.match(completion.message, /7/);
+  assert.match(completion.message, /1/);
+  assert.notEqual(completion.type, 'success');
+  assert.notEqual(completion.type, 'error');
+});
+
+test('L1 residuals use matching histogram bins and finite model counts with Poisson scaling', () => {
+  const ui = controller();
+  const residual = JSON.parse(ui.run(`JSON.stringify(l1Residual({
+    x: [10, 20, 30, 40, 50, 60], y: [9, 0, 4, NaN, 8, 3],
+    curve: { x: [10, 20, 30, 40, 45, 50, 60], y: [4, 0, 9, 9, 5, Infinity, 1] }
+  }))`));
+  assert.deepEqual(residual.x, [10, 20, 30, 60]);
+  assert.equal(residual.y.length, 4);
+  for (const [index, expected] of [2.5, 0, -5 / 3, 2].entries()) {
+    assert.ok(Math.abs(residual.y[index] - expected) < 1e-12);
+  }
+});
+
+test('an old residual plot cannot overwrite the latest file result caption or metric', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1'; state.point = { id: '14B:094:0', stem: '094' };
+    const entered = deferred(), release = deferred();
+    Plotly = { react: async () => { entered.resolve(); await release.promise; } };
+    window.Plotly = Plotly;
+    const pending = renderL1Residual({ x: [100, 200], y: [4, 16], curve: { x: [100, 200], y: [4, 9] } }, [100, 200]);
+  `);
+  await ui.run('entered.promise');
+  ui.run(`
+    ++state.spectrumToken; state.point = { id: '14B:101:0', stem: '101' };
+    $('residual-caption').textContent = 'current file residual';
+    $('residual-metric').textContent = 'current file metric';
+    release.resolve();
+  `);
+  await ui.run('pending');
+  assert.equal(ui.element('residual-caption').textContent, 'current file residual');
+  assert.equal(ui.element('residual-metric').textContent, 'current file metric');
+});
+
 test('a stale failed request cannot replace a newer view with an error', async () => {
   const ui = controller();
   ui.run(`
@@ -138,11 +394,13 @@ test('a plot finishing after a layer switch cannot paint the old secondary chart
   const ui = controller();
   ui.run(`
     state.layer = 'TB_L1';
-    state.surface = { points: [{ id: 'old', stem: 'old', center: 200, temp: 20, bias: 28 }] };
+    state.point = { id: 'old', stem: 'old', center: 200, temp: 20, bias: 28 };
+    state.spectrum = { x: [100, 200, 300], y: [1, 20, 1], curve: { x: [100, 200, 300], y: [2, 18, 2] } };
+    $('window-lo').value = '100'; $('window-hi').value = '300';
     const entered = deferred(), release = deferred(); let writes = [];
     Plotly = { react: async chart => { writes.push(chart.id); if (writes.length === 1) { entered.resolve(); await release.promise; } } };
     window.Plotly = Plotly;
-    const pending = renderSurface();
+    const pending = renderSpectrum();
   `);
   await ui.run('entered.promise');
   ui.run(`state.layer = 'EC_L0'; ++state.loadToken; $('surface-caption').textContent = 'current EC view'; release.resolve();`);
@@ -596,6 +854,24 @@ test('a workflow stops at a failed step and releases its processing state', asyn
   `);
   await assert.rejects(ui.run(`runPipeline(plan, 'tb')`), /解包失败/);
   assert.equal(ui.run('submitted.join()'), 'TB_L0');
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(busyStates)')), [true, false]);
+});
+
+test('a workflow stops after a partial L1 batch so its files can be reviewed before surface fitting', async () => {
+  const ui = controller();
+  ui.run(`
+    const plan = pipelinePlan('all', '', '');
+    let submitted = [], busyStates = [];
+    setBusy = value => { busyStates.push(value); };
+    selectLayer = async layer => { state.layer = layer; };
+    executeJob = async layer => {
+      submitted.push(layer);
+      return { layer, status: layer === 'TB_L1' ? 'partial' : 'succeeded' };
+    };
+  `);
+  await ui.run(`runPipeline(plan, 'all')`);
+  assert.equal(ui.run('submitted.join()'), 'TB_L0,TB_L1');
+  assert.equal(ui.run('state.layer'), 'TB_L1');
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(busyStates)')), [true, false]);
 });
 

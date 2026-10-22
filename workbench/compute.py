@@ -785,14 +785,19 @@ class ComputeAdapter:
             windows.setdefault(key.replace("-", "_"), copy.deepcopy(value))
             windows.setdefault(key.replace("_", "-"), copy.deepcopy(value))
         # A run starts from the exact saved historical windows wherever present.
-        for point in self.points(payload, target):
-            if point.get("fit_status") == "not_fitted":
+        directory = self._layer_dir(target, payload, "TB_L1") / "json"
+        for fit_path in sorted(directory.glob("*_fit_results.l1.json")):
+            records = read_json(fit_path)
+            if not isinstance(records, list):
                 continue
-            windows.setdefault(point["stem"], {})[str(point["channel"])] = {
-                "lo": point["window_lo"],
-                "hi": point["window_hi"],
-                "manual": True,
-            }
+            stem = fit_path.name.removesuffix("_fit_results.l1.json")
+            for record in records:
+                if (not isinstance(record, dict) or record.get("channel") not in range(4)
+                        or "window_lo" not in record or "window_hi" not in record):
+                    continue
+                windows.setdefault(stem, {})[str(record["channel"])] = {
+                    "lo": record["window_lo"], "hi": record["window_hi"], "manual": True,
+                }
         for stem, channels in config.get("windows", {}).items():
             for channel, window in channels.items():
                 lo, hi = float(window["lo"]), float(window["hi"])
@@ -894,6 +899,7 @@ class ComputeAdapter:
                     "fit_windows_config": str(windows),
                     "automatic_window": config.get("automatic_window", False),
                     "peak_detection": config.get("peak_detection", {}),
+                    "fit_channels": config.get("fit_channels", [0, 1, 2, 3]),
                 },
                 only_stems=[f"{stem}.l0" for stem in selection] if selection is not None else None,
             )
@@ -1110,8 +1116,13 @@ class ComputeAdapter:
             errors.append("Not every selected raw TB file was parsed successfully")
         if layer == "TB_L1":
             for item in result.get("outputs", []):
-                if item.get("channels_fitted") != 4:
-                    errors.append(f"Incomplete L1 channels for {item['stem']}")
+                requested = set(config.get("fit_channels", [0, 1, 2, 3]))
+                updated = set(item.get("channels_updated", range(item.get("channels_fitted", 0))))
+                if requested - updated and not any(
+                    isinstance(error, dict) and error.get("stem") == item["stem"] for error in errors
+                ):
+                    errors.append({"stem": item["stem"], "error": "Not every requested channel was fitted",
+                                   "channels": sorted(requested - updated)})
         if layer == "EC_L2":
             for item in result.get("outputs", []):
                 records = read_json(directory / "json" / item["json"])
@@ -1134,6 +1145,7 @@ class ComputeAdapter:
         return _clean(
             {
                 "success": not errors,
+                "partial": bool(errors and outputs) if layer == "TB_L1" else False,
                 "errors": errors,
                 "warnings": warnings,
                 "layer": layer,
@@ -1146,7 +1158,13 @@ class ComputeAdapter:
                     "processed": result.get(
                         "n_processed", result.get("n_files", len(result.get("outputs", [])))
                     ),
+                    **({"files": result.get("n_files", 0),
+                        "channels_fitted": result.get("channels_fitted", 0),
+                        "channels_failed": result.get("channels_failed", 0)} if layer == "TB_L1" else {}),
                 },
+                **({"summary": {"files_total": result.get("n_files", 0),
+                                 "channels_succeeded": result.get("channels_fitted", 0),
+                                 "channels_failed": result.get("channels_failed", 0)}} if layer == "TB_L1" else {}),
                 "scope": {"representative": representative, "only": selection},
                 "hydrated_historical_inputs": hydrated,
                 "tb_dependency": str(tb_path) if layer.startswith("EC_") and tb_path else None,
