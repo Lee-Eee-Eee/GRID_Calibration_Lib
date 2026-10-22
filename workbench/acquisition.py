@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import math
 import re
+import stat
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -379,9 +380,13 @@ def _normal_row(row: dict, root: Path, profile: dict, *, from_manifest=False) ->
             raise ValueError(f"映射行缺少 {role} 文件")
         path = Path(value).expanduser()
         path = (path if path.is_absolute() else root / path).resolve()
-        if not path.is_file():
+        try:
+            info = path.stat()
+        except OSError as exc:
+            raise ValueError(f"{role} 文件不存在: {path}") from exc
+        if not stat.S_ISREG(info.st_mode):
             raise ValueError(f"{role} 文件不存在: {path}")
-        if path.stat().st_size == 0:
+        if info.st_size == 0:
             raise ValueError(f"{role} 文件为空: {path.name}")
         result[role] = str(path)
     if result["event"] == result["hk"]:
@@ -514,8 +519,9 @@ def discover(raw_root: Path | str, profile: dict) -> dict:
                 invalid = False
                 for role in maps:
                     candidates = maps[role].get(key, [])
-                    nonempty = [item for item in candidates if item[0].stat().st_size > 0]
-                    empty = [item for item in candidates if item[0].stat().st_size == 0]
+                    nonempty, empty = [], []
+                    for item in candidates:
+                        (nonempty if item[0].stat().st_size > 0 else empty).append(item)
                     for path, _ in empty:
                         unmatched.append({"path": str(path), "reason": "文件为空", "rule": rule_index + 1})
                     suffix = rule.get("prefer_suffix", "")

@@ -380,19 +380,35 @@ $("analyze-reference").addEventListener("click", () => referenceAnalyze().catch(
 
 
 let indexedSources = [];
-async function sourceLibraryRefresh() {
-  const result = await api('/api/sources');
-  indexedSources = result.sources || [];
-  const select = clear($('source-select'));
-  select.append(new Option('选择已索引目录', ''));
-  for (const item of indexedSources) select.append(new Option(`${item.label} · ${item.file_count} 文件`, item.id));
-  $('source-summary').textContent = indexedSources.length ? `已保存 ${indexedSources.length} 个只读目录索引` : '尚未保存目录索引。填写原始数据目录后可建立索引。';
+let sourceLibraryLoaded = false;
+let sourceLibraryRequest = null;
+function sourceLibrarySummary() {
+  const item = indexedSources.find(item => item.id === $('source-select').value);
+  $('source-summary').textContent = item ? `${item.root} · ${number(item.total_bytes / 1e9, 3)} GB · 索引 ${item.indexed_at} · ${item.errors_count || 0} 项读取错误` : indexedSources.length ? `已保存 ${indexedSources.length} 个只读目录索引` : '尚未保存目录索引。填写原始数据目录后可建立索引。';
+}
+async function sourceLibraryRefresh(force = false) {
+  if (sourceLibraryLoaded && !force) { sourceLibrarySummary(); return indexedSources; }
+  if (sourceLibraryRequest) {
+    if (!force) return sourceLibraryRequest;
+    await sourceLibraryRequest;
+    return sourceLibraryRefresh(true);
+  }
+  sourceLibraryRequest = (async () => {
+    const result = await api('/api/sources');
+    const select = $('source-select'), previousId = select.value;
+    indexedSources = result.sources || [];
+    clear(select).append(new Option('选择已索引目录', ''));
+    for (const item of indexedSources) select.append(new Option(`${item.label} · ${item.file_count} 文件`, item.id));
+    select.value = indexedSources.some(item => item.id === previousId) ? previousId : '';
+    sourceLibraryLoaded = true;
+    sourceLibrarySummary();
+    return indexedSources;
+  })();
+  try { return await sourceLibraryRequest; }
+  finally { sourceLibraryRequest = null; }
 }
 $('source-library').addEventListener('toggle', () => { if ($('source-library').open) sourceLibraryRefresh().catch(datasetError); });
-$('source-select').addEventListener('change', () => {
-  const item = indexedSources.find(item => item.id === $('source-select').value);
-  $('source-summary').textContent = item ? `${item.root} · ${number(item.total_bytes / 1e9, 3)} GB · 索引 ${item.indexed_at} · ${item.errors_count || 0} 项读取错误` : '';
-});
+$('source-select').addEventListener('change', sourceLibrarySummary);
 $('use-source').addEventListener('click', () => {
   const item = indexedSources.find(item => item.id === $('source-select').value);
   if (!item) { datasetError(new Error('请选择已索引目录。')); return; }
@@ -405,7 +421,7 @@ $('index-source').addEventListener('click', async () => {
   $('index-source').disabled = true; $('source-status').textContent = '正在读取文件目录信息…';
   try {
     const result = await api('/api/sources/index', {method:'POST', body:{root}});
-    await sourceLibraryRefresh(); $('source-select').value = result.id;
+    await sourceLibraryRefresh(true); $('source-select').value = result.id; sourceLibrarySummary();
     $('source-status').textContent = `索引已保存 · ${result.file_count} 文件 · ${number(result.total_bytes / 1e9, 3)} GB · ${result.errors_count || 0} 项读取错误`;
   } catch (error) { $('source-status').textContent = error.message; }
   finally { $('index-source').disabled = false; }

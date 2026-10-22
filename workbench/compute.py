@@ -8,6 +8,7 @@ inside a workspace run. No peak or surface fitting algorithm is implemented here
 from __future__ import annotations
 
 import copy
+import json
 import math
 import re
 import shutil
@@ -25,7 +26,6 @@ from lmfit.models import ExponentialModel, GaussianModel, LinearModel, Quadratic
 from ..common.utils import (
     DataLayout,
     read_json,
-    read_parquet,
     read_parquet_metadata,
     validated_events,
     write_json,
@@ -96,7 +96,7 @@ class ComputeAdapter:
         return None
 
     def observations(self, payload):
-        return discover(self._config(payload).raw_root, self.acquisition) if self.acquisition else None
+        return discover(self._base_config(payload)[1], self.acquisition) if self.acquisition else None
 
     def historical_layer(self, payload: str, layer: str) -> Path:
         """Read-only source layer; an edited output label never renames its input."""
@@ -149,7 +149,7 @@ class ComputeAdapter:
                 specs.append(SourceSpec(name, event.name, matching[0].name, minutes, energies))
         return specs, background, issues
 
-    def _config(self, payload: str):
+    def _base_config(self, payload: str):
         validate_payload(payload)
         profile = self.dataset.get("profile") if self.dataset else payload
         try:
@@ -163,8 +163,13 @@ class ComputeAdapter:
             if self.dataset
             else self.workspace / "14、15B标定数据" / cfg.payload_id
         )
+        return cfg, raw
+
+    def _config(self, payload: str, *, observations=None):
+        cfg, raw = self._base_config(payload)
+        profile = self.dataset.get("profile") if self.dataset else payload
         if self.acquisition:
-            found = discover(raw, self.acquisition)
+            found = observations if observations is not None else discover(raw, self.acquisition)
             specs = [
                 SourceSpec(
                     row["source"],
@@ -233,7 +238,8 @@ class ComputeAdapter:
             raise ValueError("New computations must write inside workspace runs/<run_id>/")
 
     def inventory(self, payload: str) -> dict:
-        cfg = self._config(payload)
+        input_scan = self.observations(payload)
+        cfg = self._config(payload, observations=input_scan)
         tb = TBL0Processor(payload, self.history)
         ec = ECL0Processor(payload, self.history)
         tb_pairs = (
@@ -273,9 +279,7 @@ class ComputeAdapter:
             }
             for event, hk, energy in ec_pairs
         ]
-        input_scan = None
         if self.acquisition:
-            input_scan = discover(cfg.raw_root, self.acquisition)
 
             def sample(row):
                 return {
@@ -313,10 +317,11 @@ class ComputeAdapter:
         historical = {}
         for layer in LAYERS:
             directory = self.historical_layer(payload, layer)
+            files = [path for path in directory.rglob("*") if path.is_file()]
             historical[layer] = {
-                "files": len([path for path in directory.rglob("*") if path.is_file()]),
+                "files": len(files),
                 **{
-                    kind: len([path for path in (directory / kind).glob("*") if path.is_file()])
+                    kind: sum(path.parent == directory / kind for path in files)
                     for kind in ("json", "parquet", "figures")
                 },
                 "manifest": str(directory / "json" / f"{layer.split('_')[1]}_manifest.json"),
@@ -343,19 +348,20 @@ class ComputeAdapter:
 
     def points(self, payload: str, product_root: Path) -> list:
         directory = self._layer_dir(product_root, payload, "TB_L1") / "json"
+        l0_files = self.tb_files(payload, product_root)
         rows = []
         for path in sorted(directory.glob("*_fit_results.l1.json")):
             stem = path.name.removesuffix("_fit_results.l1.json")
             records = read_json(path)
             if not isinstance(records, list):
                 continue
+            l0_path = l0_files.get(stem)
             seen = set()
             for record in records:
                 channel = record.get("channel")
                 if channel not in range(4) or channel in seen:
                     continue
                 seen.add(channel)
-                l0_path = self._find_l0(payload, product_root, stem)
                 rows.append(
                     {
                         **record,
@@ -371,14 +377,6 @@ class ComputeAdapter:
                     }
                 )
         existing = {(row["stem"], row["channel"]) for row in rows}
-        l0_files = {}
-        for source in (
-            self._layer_dir(product_root, payload, "TB_L0") / "parquet",
-            self.historical_layer(payload, "TB_L0") / "parquet",
-        ):
-            for path in sorted(source.glob("*.parquet")):
-                stem = _stem(path.name)
-                l0_files.setdefault(stem, self._find_l0(payload, product_root, stem))
         for stem, path in l0_files.items():
             if path is None or all((stem, channel) in existing for channel in range(4)):
                 continue
@@ -418,6 +416,37 @@ class ComputeAdapter:
                 )
         return _clean(rows)
 
+    def tb_files(self, payload: str, product_root: Path) -> dict[str, Path]:
+        """Build a request-local L0 overlay once, rather than stat four channels."""
+        files = {}
+        for directory in (
+            self._layer_dir(product_root, payload, "TB_L0") / "parquet",
+            self.historical_layer(payload, "TB_L0") / "parquet",
+        ):
+            for path in sorted(directory.glob("*.parquet")):
+                if path.is_file():
+                    files.setdefault(_stem(path.name), path)
+        return files
+
+    @staticmethod
+    def _spectrum_input(path: Path, field: str):
+        """Read only plot columns and metadata from the same fresh Parquet file."""
+        import pyarrow.parquet as pq
+
+        parquet = pq.ParquetFile(path)
+        columns = ["channel", field]
+        if "crc_check" in parquet.schema_arrow.names:
+            columns.append("crc_check")
+        frame = parquet.read(columns=columns).to_pandas()
+        metadata = {}
+        for key in ("hk_data", "acquisition", "tb_correction"):
+            raw = (parquet.schema_arrow.metadata or {}).get(key.encode("utf-8"))
+            try:
+                metadata[key] = json.loads(raw.decode("utf-8")) if raw else {}
+            except (ValueError, UnicodeError):
+                metadata[key] = {}
+        return frame, metadata
+
     def _tb_histogram(self, record, acquisition):
         return (record or {}).get("histogram_config") or tb_histogram_config(
             acquisition if acquisition.get("fitting") else self.acquisition
@@ -449,27 +478,37 @@ class ComputeAdapter:
             raise ValueError("Channel must be 0, 1, 2 or 3")
         if layer not in ("TB_L0", "TB_L1"):
             raise ValueError("TB spectrum layer must be TB_L0 or TB_L1")
-        record = next(
-            (
-                row
-                for row in self.points(payload, product_root)
-                if row["stem"] == stem and row["channel"] == channel
-            ),
-            None,
-        )
-        if record and record.get("fit_status") == "not_fitted":
-            record = None
         path = self._find_l0(payload, product_root, stem)
         if path is None:
             raise FileNotFoundError(f"No real L0 spectrum available for {stem}")
-        frame = read_parquet(path)
+        l1_path = self._layer_dir(product_root, payload, "TB_L1") / "json" / f"{stem}_fit_results.l1.json"
+        records = read_json(l1_path) if l1_path.is_file() else []
+        record = (
+            next((row for row in records if row.get("channel") == channel), None)
+            if isinstance(records, list)
+            else None
+        )
+        if record is not None:
+            record = {
+                **record,
+                "id": f"{payload}:{stem}:{channel}",
+                "stem": stem,
+                "payload": payload,
+                "gain": record.get("center"),
+                "l1_path": str(l1_path),
+                "l0_path": str(path),
+                "fit_status": "rejected"
+                if record.get("fit_quality", {}).get("accepted") is False
+                else "fitted",
+            }
+        frame, metadata = self._spectrum_input(path, "amp")
         input_quality = {"crc_available": "crc_check" in frame, "input_events": len(frame)}
         if layer != "TB_L0":
             frame, input_quality = validated_events(frame)
         amp = frame.loc[frame["channel"] == channel, "amp"].to_numpy(dtype=float)
         if not amp.size:
             raise ValueError(f"L0 has no events for {stem} ch{channel}")
-        acquisition = read_parquet_metadata(path, "acquisition") or {}
+        acquisition = metadata["acquisition"] or {}
         histogram = self._tb_histogram(record, acquisition)
         # Use the same binning as the saved fit. Historical one-ADC displays
         # retain their compact viewport while configured spectra keep all bins.
@@ -501,7 +540,7 @@ class ComputeAdapter:
             "source": "run" if Path(product_root).resolve() in path.resolve().parents else "historical",
             "files": list(available.values()),
             "layer": layer,
-            "hk_data": read_parquet_metadata(path, "hk_data"),
+            "hk_data": metadata["hk_data"],
             "histogram_config": histogram,
             "input_quality": input_quality,
             "window_bounds": {"min": histogram["min"], "max": histogram["max"], "minimum_width": 8},
@@ -624,16 +663,10 @@ class ComputeAdapter:
             }
         )
 
-    def ec_spectrum(
-        self, payload: str, product_root: Path, layer: str | int, channel: int | str, stem: str | None = None
-    ) -> dict:
-        """Read an actual raw/corrected EC spectrum without triggering a fit."""
-        if isinstance(layer, int) and isinstance(channel, str):
-            layer, channel = channel, layer
+    def ec_files(self, payload: str, product_root: Path, layer: str, channel: int) -> list[dict]:
+        """List parsed EC products without loading a spectrum or scanning raw data."""
         if layer not in ("EC_L0", "EC_L1") or channel not in range(4):
             raise ValueError("EC spectrum requires EC_L0/EC_L1 and channel 0..3")
-        representative = self.inventory(payload)["representative"]["ec_stems"]
-        preferred = stem or next((item for item in representative if item.endswith(f"_ch{channel}")), None)
         files = {}
         for directory, source in (
             (self._layer_dir(product_root, payload, layer) / "parquet", "run"),
@@ -646,8 +679,33 @@ class ComputeAdapter:
                     continue
                 files.setdefault(
                     item_stem,
-                    {"stem": item_stem, "path": str(candidate), "source": source, "channel": channel},
+                    {
+                        "stem": item_stem,
+                        "path": str(candidate),
+                        "source": source,
+                        "channel": channel,
+                        "fit_status": "parsed",
+                    },
                 )
+        return list(files.values())
+
+    def ec_spectrum(
+        self,
+        payload: str,
+        product_root: Path,
+        layer: str | int,
+        channel: int | str,
+        stem: str | None = None,
+        *,
+        preferred_stems: list[str] | None = None,
+    ) -> dict:
+        """Read an actual raw/corrected EC spectrum without triggering a fit."""
+        if isinstance(layer, int) and isinstance(channel, str):
+            layer, channel = channel, layer
+        files = {item["stem"]: item for item in self.ec_files(payload, product_root, layer, channel)}
+        preferred = stem or next(
+            (item for item in preferred_stems or [] if item.endswith(f"_ch{channel}")), None
+        )
         if stem and stem not in files:
             raise FileNotFoundError(f"No real {layer} spectrum for {stem} ch{channel}")
         if not files:
@@ -656,8 +714,8 @@ class ComputeAdapter:
             (item for item in files.values() if "bkg" not in item["stem"]), next(iter(files.values()))
         )
         path, source = Path(selected["path"]), selected["source"]
-        frame = read_parquet(path)
         field = "amp" if layer == "EC_L0" else "amp_corr"
+        frame, metadata = self._spectrum_input(path, field)
         values = frame.loc[frame["channel"] == channel, field].to_numpy(dtype=float)
         values = values[np.isfinite(values)]
         if not values.size:
@@ -679,7 +737,7 @@ class ComputeAdapter:
             hi = min(hi, max(160.0, float(window["hi"]) * 1.5))
         width = max(4.0, (hi - lo) / 400)
         counts, edges = np.histogram(values, bins=np.arange(lo, hi + width, width))
-        correction = read_parquet_metadata(path, "tb_correction") if layer == "EC_L1" else {}
+        correction = metadata["tb_correction"] if layer == "EC_L1" else {}
         return _clean(
             {
                 "x": (edges[:-1] + edges[1:]) / 2,
@@ -778,12 +836,12 @@ class ComputeAdapter:
             raise ValueError(reason)
         self._assert_output_root(product_root)
         product_root = Path(product_root)
-        cfg = self._config(payload)
         if layer in ("TB_L0", "EC_L0") and self.dataset and not self.dataset.get("raw_dir"):
             raise ValueError("当前数据集只载入了产品目录；请先选择对应原始数据目录，再执行 L0 解析")
         layout = DataLayout(product_root, payload)
         representative = bool(config.get("representative", True))
         inventory = self.inventory(payload)
+        cfg = self._config(payload, observations=inventory["raw"]["reading_preview"])
         selection = config.get("only")
         if selection is not None:
             selection = [_stem(item) for item in selection]
@@ -854,7 +912,7 @@ class ComputeAdapter:
             selection = None  # A surface always uses the full current L1 snapshot.
         elif layer == "EC_L0":
             issues = (
-                discover(cfg.raw_root, self.acquisition)["errors"]
+                inventory["raw"]["reading_preview"]["errors"]
                 if self.acquisition
                 else self._source_config(cfg.raw_root)[2]
             )

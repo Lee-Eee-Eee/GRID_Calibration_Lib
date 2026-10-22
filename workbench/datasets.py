@@ -53,6 +53,18 @@ class DatasetCatalog:
         self.workspace = Path(workspace).resolve()
         self.path = self.workspace / "runs" / "datasets.json"
 
+    def saved(self) -> dict | None:
+        """Read saved choices without probing removable or network input roots."""
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(value, dict) or not isinstance(value.get("datasets"), list):
+            return None
+        if not isinstance(value.get("defaults"), dict):
+            return None
+        return value
+
     def _path(self, value, *, required=False):
         if value is None or not str(value).strip():
             if required:

@@ -138,7 +138,9 @@ def make_handler(workbench):
                             "/".join(parts[5:]),
                         )
                     if len(parts) == 4 and parts[3] == "surface":
-                        return self._json(200, workbench.surface(run_id, int(query.get("channel", [0])[0])))
+                        return self._json(200, workbench.surface(
+                            run_id, int(query.get("channel", [0])[0]), query.get("layer", ["TB_L2"])[0]
+                        ))
                     if len(parts) == 4 and parts[3] == "spectrum":
                         return self._json(
                             200,

@@ -11,7 +11,7 @@ const layers = [
   { id: "EC_L2", title: "能线峰拟合", heading: "EC 能线峰拟合", description: "拟合校正后的 X 射线与放射源能线，生成能量–峰位点。", input: "EC L1 · 校正谱", output: "L2 峰位 JSON · 能线拟合图", dependency: "EC L1 + 源能线配置", process: "单峰拟合、曝光归一化和本底处理" },
   { id: "EC_L3", title: "能量标定", heading: "EC 能量刻度与分辨率", description: "复用现行 E=f(ADC) 全局拟合；低 / 高能段当前使用同一组系数。", input: "EC L2 · 已知能量与峰位", output: "L3 标定 JSON · 分辨率图", dependency: "EC L2 + 对应 TB 版本", process: "现行 E=f(ADC) 全局二次拟合；方向与 wiki 分段规范有差异，详见算法说明" }
 ];
-const state = { bootstrap: null, run: null, layer: "TB_L2", channel: 0, surface: null, spectrum: null, point: null, ecOverview: null, tbVersions: [], datasets: [], surfaceMode: "response", busy: false, loading: false, dirty: false, openToken: 0, loadToken: 0, spectrumToken: 0, ecToken: 0, pollToken: 0, tab: "artifacts", analysisView: "residual", expandedJobs: new Set() };
+const state = { bootstrap: null, run: null, layer: "TB_L0", channel: 0, surface: null, spectrum: null, point: null, ecOverview: null, tbVersions: [], datasets: [], surfaceMode: "response", busy: false, loading: false, dirty: false, openToken: 0, loadToken: 0, spectrumToken: 0, ecToken: 0, pollToken: 0, tab: "artifacts", analysisView: "residual", expandedJobs: new Set() };
 const statusNames = { idle: "未运行", pending: "未运行", not_run: "未运行", queued: "排队中", running: "运行中", succeeded: "计算成功", success: "计算成功", completed: "计算成功", failed: "计算失败", stale: "依赖待更新", historical: "仅历史参考" };
 const plotConfig = { responsive: true, displaylogo: false, showLink: false, modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines", "sendDataToCloud", "sendChartToCloud"], toImageButtonOptions: { format: "png", scale: 2 } };
 const chartFont = { family: 'Arial, "Microsoft YaHei", sans-serif', size: 12, color: "#586572" };
@@ -37,6 +37,67 @@ function notify(message, type = "info") { $("message").textContent = message; $(
 function messageError(error) { notify(error.message || String(error), "error"); }
 function fitAttemptReason(error) { try { const values=JSON.parse(error); if(Array.isArray(values)) return values.map(item=>typeof item==="string"?item:item.error||item.message).filter(Boolean).join(" · "); } catch {} return String(error||"未知原因"); }
 function activeLayer() { return layers.find((item) => item.id === state.layer); }
+function viewContext() { return `${state.run?.id}:${state.layer}:${state.channel}`; }
+function plotContext() { return `${viewContext()}:${state.loadToken}:${state.spectrumToken}`; }
+function isUnpackLayer() { return ["TB_L0", "EC_L0"].includes(state.layer); }
+function unpackInputs() { return (state.layer === "TB_L0" ? state.surface?.points : state.ecOverview?.files) || []; }
+function unpackRawInputs() {
+  const rows = state.run?.inventory?.raw?.reading_preview?.rows;
+  if (Array.isArray(rows)) return rows.filter(item => state.layer === "TB_L0" ? item.kind === "tb" : item.kind !== "tb");
+  return unpackInputs().filter(item => item.event);
+}
+function unpackDisabledReason(all = false) {
+  if (!state.run) return "请先选择数据并创建试算";
+  if (state.loading) return "正在载入试算";
+  if (state.busy) return "处理器正在运行";
+  if (!state.run.dataset?.raw_dir && !state.run.raw_dir && !unpackRawInputs().length) return "当前仅载入产品，请选择原始数据目录后创建试算";
+  if (all) return unpackRawInputs().length ? "" : "当前层未发现匹配的原始文件，请检查数据目录与文件规则";
+  if (!state.point) return "请先选择输入文件";
+  if ($("unpack-search").value.trim() && !state.point.stem.toLowerCase().includes($("unpack-search").value.trim().toLowerCase())) return "请从筛选结果中选择输入文件";
+  if (!state.point.event) return "此项只有历史产物，未找到原始文件；请检查目录与文件配对规则";
+  return "";
+}
+function renderUnpackWorkspace() {
+  if (!state.run || !isUnpackLayer()) return;
+  const dataset = state.run.dataset || {}, profile = state.run.acquisition, preset = state.run.acquisition_preset;
+  $("unpack-source").textContent = dataset.raw_dir || state.run.raw_dir || (unpackRawInputs().length ? state.bootstrap?.defaults?.raw_dir || "工作区默认数据目录" : "仅载入产品 · 尚未选择原始数据");
+  $("unpack-source").title = $("unpack-source").textContent;
+  const sourceParts = $("unpack-source").textContent.split(/[\\/]/).filter(Boolean);
+  if (sourceParts.length > 3) $("unpack-source").textContent = `${sourceParts[0]} / … / ${sourceParts.slice(-2).join(" / ")}`;
+  $("unpack-profile").textContent = `${preset?.name || dataset.profile || state.run.payload}${preset?.version ? ` · 预设 v${preset.version}` : ""}${profile ? ` · 读取修订 ${profile.revision} · ${(profile.sha256 || "").slice(0, 8)}` : " · 默认读取配置"}`;
+  $("unpack-output").textContent = `输出：runs/${state.run.id}/products/${state.run.payload}/${state.layer.startsWith("TB") ? "tb" : "ec"}/L0/`;
+  const filter = $("unpack-search").value.trim().toLowerCase(), select = clear($("unpack-file"));
+  const files = unpackInputs().filter(item => !filter || item.stem.toLowerCase().includes(filter));
+  if (!files.some(item => (item.id || item.stem) === state.point?.id)) select.append(new Option(files.length ? "选择输入文件" : "没有匹配文件", ""));
+  for (const item of files) select.append(new Option(`${item.stem} · ${item.fit_status === "not_parsed" ? "待解包" : item.source === "run" || item.source === "computed" ? "本次产物" : "已有 L0"}`, item.id || item.stem));
+  select.value = files.some(item => (item.id || item.stem) === state.point?.id) ? state.point.id : "";
+  const holder = clear($("unpack-files"));
+  for (const [label, value] of [["Event", state.point?.event], ["HK", state.point?.hk]]) { const row = node("span"); row.title = value || ""; row.append(node("b", "", label), node("span", "", value ? value.split(/[\\/]/).pop() : state.point ? "未匹配原始文件" : "选择文件后显示配对文件")); holder.append(row); }
+  const reason = unpackDisabledReason();
+  $("unpack-action-hint").textContent = reason || `将解包 ${state.point.stem} · 输出包含全部通道`;
+  updateUnpackControls();
+  const job = [...(state.run.jobs || [])].reverse().find(item => item.layer === state.layer);
+  if (job) renderUnpackProgress(job);
+  else $("unpack-progress").hidden = true;
+}
+function updateUnpackControls() {
+  for (const [id, all] of [["unpack-selected", false], ["unpack-all", true]]) { const reason = unpackDisabledReason(all); $(id).disabled = !!reason; $(id).title = reason || (all ? `解包本层全部 ${unpackRawInputs().length} 个文件` : `仅解包 ${state.point?.stem}`); }
+  $("unpack-file").disabled = state.loading || state.busy;
+  $("unpack-settings").disabled = !state.run || state.busy;
+  $("unpack-data").disabled = state.busy;
+  if (isUnpackLayer()) $("unpack-action-hint").textContent = unpackDisabledReason() || `将解包 ${state.point.stem} · 输出包含全部通道`;
+}
+function renderUnpackProgress(job) {
+  if (!isUnpackLayer() || job.layer !== state.layer) return;
+  const holder = $("unpack-progress"), status = normalizedStatus(job.status);
+  holder.hidden = false; holder.dataset.status = status;
+  holder.textContent = `${statusNames[status] || status} · ${job.config?.only?.join(", ") || job.stem || job.request?.stem || "本层解包任务"}${job.error ? ` · ${fitAttemptReason(job.error)}` : status === "succeeded" ? " · 新产物与日志已保存" : " · 可在运行记录中查看处理器日志"}`;
+}
+async function runUnpack(all = false) {
+  const reason = unpackDisabledReason(all); if (reason) throw new Error(reason);
+  $("run-scope").value = all ? "full" : "representative";
+  await executeJob(state.layer, all ? { representative: false } : { stem: state.point.stem, channel: state.channel, representative: false });
+}
 function runPath(suffix = "") { return `/api/runs/${encodeURIComponent(state.run.id)}${suffix}`; }
 function paramsFor(value) { if (!value) return {}; if (Array.isArray(value)) return value[state.channel] || {}; return value[state.channel] && typeof value[state.channel] === "object" ? value[state.channel] : value; }
 function pointLabel(point) { return `${point.stem} · ${number(point.temp, 1)} °C / ${number(point.bias, 3)} V${isExcluded(point) ? " · 已屏蔽" : point.fit_status === "not_parsed" ? " · 待解包" : point.fit_status === "not_fitted" ? " · 待拟合" : point.used === false ? " · 质量筛除" : ""}`; }
@@ -114,7 +175,7 @@ function renderStage() {
   $("acquisition-settings").title = acquisition ? `读取配置 v${acquisition.revision} · ${(acquisition.sha256 || "").slice(0, 10)}` : "选择或修改本载荷的 XML、文件规则与物理标签读取方式";
   $("tb-analysis").hidden = false;
   $("stage-analysis").hidden = true;
-  configureLayerPanels();
+  configureLayerPanels(); renderUnpackWorkspace();
   $("stage-overview-title").textContent = layer.heading;
   $("stage-overview-caption").textContent = "处理依赖与产物预览";
   const flow = clear($("stage-flow"));
@@ -144,6 +205,7 @@ function renderDependencies() {
   }
   const unavailable = state.run.stages?.[state.layer]?.unavailable_reason;
   if (unavailable) { banner.hidden = false; banner.textContent = unavailable; }
+  else if (state.layer === "EC_L0") banner.hidden = true;
   const coverage = state.run.ec_coverage;
   const details = $("ec-coverage-details"); details.hidden = !coverage?.sources?.length;
   const holder = clear($("ec-coverage-list"));
@@ -267,6 +329,7 @@ function surfaceViewport() {
 }
 
 async function renderTBSurface() {
+  const context = plotContext();
   if (!window.Plotly) throw new Error("本地 Plotly 资源未加载，请检查 /static/plotly.min.js。");
   $("residual-chart").classList.remove("metadata-chart");
   const data = state.surface; const points = data.points || []; const traces = [];
@@ -288,6 +351,7 @@ async function renderTBSurface() {
   const viewport = surfaceViewport();
   $("surface-chart").dataset.cameraMode = viewport.mode;
   await Plotly.react(plotTarget($("surface-chart")), traces, { margin: { l: 16, r: 65, t: 0, b: 25 }, paper_bgcolor: "#ffffff", font: chartFont, hoverlabel: chartHover, showlegend: false, uirevision: `${state.run.id}-${state.channel}-${viewport.mode}-${state.surfaceMode}`, scene: { xaxis: axis("T / °C"), yaxis: axis("Bias / V"), zaxis: axis(residualMode ? "残差 / %" : "峰位 / ADC"), camera: viewport.camera, aspectratio: { x: 1.5, y: 1, z: .8 } } }, plotConfig);
+  if (context !== plotContext()) return;
   bindPointClicks($("surface-chart"));
   const residualTraces = [];
   for (const group of groups) {
@@ -296,6 +360,7 @@ async function renderTBSurface() {
   }
   residualTraces.push(selectedPointTrace(false));
   await Plotly.react(plotTarget($("residual-chart")), residualTraces, { margin: { l: 64, r: 22, t: 16, b: 43 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, xaxis: { ...axisStyle, title: { text: "温度 / °C", standoff: 6 } }, yaxis: { ...axisStyle, title: { text: "残差 / %", standoff: 8 }, zeroline: true, zerolinecolor: "#9daab6", zerolinewidth: 1, rangemode: "tozero" }, hovermode: "closest", uirevision: `${state.run.id}-${state.channel}` }, plotConfig);
+  if (context !== plotContext()) return;
   bindPointClicks($("residual-chart"));
   const active = points.filter(isUsed); const residuals = active.map(residualPercent).filter(Number.isFinite);
   $("residual-metric").textContent = residuals.length ? `MAPE ${number(residuals.reduce((sum, val) => sum + Math.abs(val), 0) / residuals.length, 2)}%` : "—";
@@ -310,12 +375,14 @@ function selectedPointTrace(threeDimensional) {
 }
 
 async function highlightSelectedPoint() {
+  const context = plotContext();
   const point = state.point; if (!point || !window.Plotly) return;
   for (const [id, threeDimensional] of [["surface-chart", true], ["residual-chart", false]]) {
     const chart = $(id); const index = chart.data?.findIndex((trace) => trace.meta === "selected-point");
     if (!(index >= 0)) continue;
     const text = `当前选中 · ${point.stem}${isExcluded(point) ? " · 人工屏蔽" : point.used === false ? " · 质量筛除" : ""}`;
     await Plotly.restyle(chart, { x: [[point.temp]], y: [[threeDimensional ? point.bias : residualPercent(point)]], ...(threeDimensional ? { z: [[state.surfaceMode === "residual" ? residualPercent(point) : point.center]] } : {}), customdata: [[point.id || point.stem]], text: [[text]] }, [index]);
+  if (context !== plotContext()) return;
   }
 }
 
@@ -329,17 +396,19 @@ async function loadSurface() {
   if (!state.run) return;
   if (state.layer.startsWith("EC")) return loadEcAnalysis();
   const token = ++state.loadToken;
-  const data = await api(runPath(`/surface?channel=${state.channel}`));
+  const data = await api(runPath(`/surface?channel=${state.channel}&layer=${state.layer}`));
   if (token !== state.loadToken) return;
   if (state.layer === "TB_L0") {
     data.points = (data.files || []).map((f) => { const file = typeof f === "string" ? { stem: f } : f; return { ...(data.points || []).find((p) => p.stem === file.stem), ...file, id: `${state.run.payload}:${file.stem}:${state.channel}`, channel: state.channel }; });
     for (const raw of state.run.inventory?.raw?.tb_samples || []) if (!data.points.some(point => point.stem === raw.stem)) data.points.push({...raw, id:`${state.run.payload}:${raw.stem}:${state.channel}`,channel:state.channel,fit_status:"not_parsed",used:false});
   }
   state.surface = data;
+  renderUnpackWorkspace();
   const previousStem = state.point?.stem;
   const select = clear($("point-select"));
   for (const point of data.points || []) select.append(new Option(pointLabel(point), point.id || point.stem));
   await renderSurface();
+  if (token !== state.loadToken) return;
   const selected = (data.points || []).find((p) => p.stem === previousStem) || (data.points || []).find((p) => !isExcluded(p)) || data.points?.[0];
   if (selected) await selectPoint(selected); else {
     state.point = null; state.spectrum = null;
@@ -350,8 +419,9 @@ async function loadSurface() {
 }
 
 async function loadSurfaceSafely() {
+  const context = viewContext();
   try { await loadSurface(); }
-  catch (error) { state.spectrum=null; $("window-status").textContent="输入不可用于本次拟合"; chartMessage("spectrum-chart",error.message); messageError(error); }
+  catch (error) { if (context !== viewContext()) return; state.spectrum=null; $("window-status").textContent="输入不可用于本次拟合"; chartMessage("spectrum-chart",error.message); messageError(error); }
 }
 
 async function selectPoint(point) {
@@ -361,14 +431,17 @@ async function selectPoint(point) {
   $("auto-fit-status").textContent="";
   const token = ++state.spectrumToken;
   state.point = point; state.spectrum = null; state.dirty = false; $("point-select").value = point.id || point.stem;
+  if (state.layer === "TB_L0") { chartMessage("surface-chart", "正在读取所选文件的真实脉冲谱…"); $("surface-caption").textContent = `${point.stem} · CH ${state.channel} · 读取中`; }
+  renderUnpackWorkspace();
   await highlightSelectedPoint();
+  if (token !== state.spectrumToken) return;
   displayWindowValue("window-lo", ""); displayWindowValue("window-hi", "");
   $("window-lo").disabled = true; $("window-hi").disabled = true;
   clear($("spectrum-params"));
   if (window.Plotly) Plotly.purge($("spectrum-chart"));
   if (state.layer === "TB_L0" && point.fit_status === "not_parsed") {
     $("window-status").textContent = "尚未解析";
-    chartMessage("surface-chart", `${point.stem} 尚未生成 L0。点击“处理当前文件”调用实际解包器。`);
+    chartMessage("surface-chart", `${point.stem} 尚未生成 L0。点击上方“解包选中文件”调用实际解包器。`);
     chartMessage("residual-chart", `事件：${point.event || "—"}\n遥测：${point.hk || "—"}`);
     renderMetadata({source:"raw",source_path:point.event,stem:point.stem,metadata:{状态:"待解包",文件大小:`${number((point.bytes||0)/1e6,2)} MB`}});
     setBusy(state.busy); return;
@@ -401,12 +474,13 @@ async function selectPoint(point) {
     if (quality?.crc_available) { const item=node("div","param-item"); item.append(node("span","","CRC 有效事件（全通道）"),node("strong","",`${quality.used_events ?? "—"} / ${quality.input_events}`)); params.append(item); }
     if (spectrum.input_note) params.append(node("p","peak-evidence-warning",spectrum.input_note));
     if (spectrum.last_fit_attempt?.status === "failed") params.append(node("p","peak-evidence-warning",`最近一次拟合失败：${fitAttemptReason(spectrum.last_fit_attempt.error)}。${spectrum.fit ? "图中保留此前结果；本次未生成新拟合。" : "当前没有拟合结果，可调整窗口或寻峰约束后重试。"}`));
-    await renderSpectrum(); if (state.layer === "TB_L0") await renderRawMain(); setBusy(state.busy);
+    await renderSpectrum(); if (token !== state.spectrumToken) return; if (state.layer === "TB_L0") await renderRawMain(); setBusy(state.busy);
   } catch (error) { if (token !== state.spectrumToken) return; $("window-status").textContent = "读取失败"; clear($("spectrum-chart")).append(node("p", "chart-loading", `此工况能谱不可用：${error.message}`)); messageError(error); }
   updateExcludedButton(); renderRunBadge();
 }
 
 async function renderSpectrum() {
+  const context = plotContext();
   const data = state.spectrum; if (!data) return;
   if (["TB_L0", "EC_L0", "EC_L1"].includes(state.layer)) { $("spectrum-chart").hidden = true; return; }
   $("spectrum-chart").hidden = state.layer === "TB_L1";
@@ -424,6 +498,7 @@ async function renderSpectrum() {
   if (hasNegative) traces[0].y = data.y;
   const peak = peakPlotDetails(data); traces.push(...peak.traces);
   await Plotly.react(plotTarget(chart), traces, { margin: { l: 55, r: 16, t: editable ? 28 : 14, b: 41 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, xaxis: { ...axisStyle, title: { text: state.layer.startsWith("EC") && state.layer !== "EC_L0" ? "校正 ADC" : "ADC", standoff: 5 }, range }, yaxis: { ...axisStyle, title: { text: data.y_label || "计数 / bin", standoff: 6 }, type: hasNegative ? "linear" : "log", exponentformat: "power" }, shapes: [...(editable ? windowShapes(lo, hi) : []), ...peak.shapes], hovermode: "closest", uirevision: `${state.run.id}-${state.channel}-${state.point.id || state.point.stem}` }, plotConfig);
+  if (context !== plotContext()) return;
   if (state.layer === "TB_L1") $("surface-caption").textContent = `${state.point.stem} · CH ${state.channel} · 计数谱 / 峰+背景拟合 / 背景 · 直接拖动蓝色边界修改窗口`;
   renderPeakDiagnostics(data);
   installWindowHandles();
@@ -496,7 +571,7 @@ async function loadEcSpectrum() {
 function windowShapes(lo, hi) { if (!(hi > lo)) return []; return [{ type: "rect", xref: "x", yref: "paper", x0: lo, x1: hi, y0: 0, y1: 1, fillcolor: "rgba(36,87,167,0.045)", line: { width: 0 }, layer: "below" }, ...[lo, hi].map((value) => ({ type: "line", xref: "x", yref: "paper", x0: value, x1: value, y0: 0, y1: 1, line: { color: "#6b84a6", width: 1, dash: "dash" } }))]; }
 function renderRunBadge() { const hasResult = state.run?.jobs?.some((job) => normalizedStatus(job.status) === "succeeded"); $("run-state").textContent = state.loading ? "载入中" : !state.run ? "尚未创建试算" : state.busy ? "处理器运行中" : state.dirty ? "窗口未保存" : hasResult ? "修订与结果已保存" : "配置已保存"; $("run-state").className = `badge ${state.busy ? "running" : state.dirty ? "stale" : "neutral"}`; }
 function updateExcludedButton() { const excluded = isExcluded(state.point); $("toggle-excluded").textContent = excluded ? "恢复此点" : "屏蔽此点"; $("toggle-excluded").className = `button${excluded ? "" : " danger"}`; $("toggle-excluded").disabled = !state.point || state.busy; }
-function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit-tb", "save-run", "new-run", "dataset-settings", "acquisition-settings", "run-select", "payload"].forEach((id) => { $(id).disabled = busy || (!state.run && !["new-run", "dataset-settings", "payload"].includes(id) && !(id === "run-select" && state.bootstrap?.runs?.length)); }); ["fit-spectrum", "window-lo", "window-hi"].forEach((id) => { $(id).disabled = busy || !state.spectrum; }); $("apply-tb-version").disabled = busy || !$("tb-version-select").value; $("channel").disabled = state.loading; $("point-select").disabled = state.loading || busy; updateAutoFitControls(); updateExcludedButton(); renderRunBadge(); updateCapabilityControls(); }
+function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit-tb", "save-run", "new-run", "dataset-settings", "acquisition-settings", "run-select", "payload"].forEach((id) => { $(id).disabled = busy || (!state.run && !["new-run", "dataset-settings", "payload"].includes(id) && !(id === "run-select" && state.bootstrap?.runs?.length)); }); ["fit-spectrum", "window-lo", "window-hi"].forEach((id) => { $(id).disabled = busy || !state.spectrum; }); $("apply-tb-version").disabled = busy || !$("tb-version-select").value; $("channel").disabled = state.loading; $("point-select").disabled = state.loading || busy; updateAutoFitControls(); updateExcludedButton(); renderRunBadge(); updateCapabilityControls(); updateUnpackControls(); }
 
 async function resizeCharts() {
   if (!window.Plotly) return;
@@ -514,7 +589,7 @@ async function resizeCharts() {
   }
   installWindowHandles();
 }
-async function selectLayer(id) { if (state.dirty) await saveRevision({}, true); state.layer = id; state.point = null; state.spectrum = null; ++state.spectrumToken; renderNavigation(); if (state.run) { renderStage(); await loadSurfaceSafely(); requestAnimationFrame(resizeCharts); } }
+async function selectLayer(id) { if (state.dirty) await saveRevision({}, true); ++state.loadToken; ++state.spectrumToken; state.layer = id; $("run-scope").value = "representative"; $("unpack-search").value = ""; state.surface = null; state.ecOverview = null; state.point = null; state.spectrum = null; ++state.spectrumToken; renderNavigation(); if (state.run) { renderStage(); await loadSurfaceSafely(); requestAnimationFrame(resizeCharts); } }
 
 async function refreshRun(reloadCharts = true) {
   if (!state.run) return;
@@ -559,16 +634,40 @@ async function bootstrap() {
   } catch (error) { state.loading = false; setBusy(false); throw error; }
 }
 
-function openCreateDialog(payload = $("payload").value) { $("new-run-payload").value = payload; $("new-run-name").value = ""; $("dataset-raw-dir").value = ""; $("dataset-product-dir").value = ""; $("dataset-raw-dir").placeholder = state.bootstrap?.defaults?.raw_dir || "留空使用默认数据目录"; $("dataset-product-dir").placeholder = state.bootstrap?.defaults?.product_dir || "留空使用默认 products 目录"; renderDatasetOptions(payload); $("new-run-dialog").showModal(); scanDatasets(payload).catch(datasetError); }
+function openCreateDialog(payload = $("payload").value) {
+  const dataset = state.run?.dataset;
+  if (!state.datasetDialogReady || state.datasetDialogRunId !== state.run?.id) {
+    $("dataset-raw-dir").value = dataset?.raw_dir || "";
+    $("dataset-product-dir").value = dataset?.product_dir || "";
+    state.datasetDialogReady = true; state.datasetDialogRunId = state.run?.id; state.datasetPathsDirty = false;
+    if (dataset && !state.datasets.some(item => item.id === dataset.id)) state.datasets = [...state.datasets, dataset];
+    renderDatasetOptions(payload);
+    if (dataset && state.datasets.some(item => item.id === dataset.id)) { $("dataset-select").value = dataset.id; updateSelectedDataset(); }
+  }
+  $("new-run-payload").value = payload; $("new-run-name").value = "";
+  $("dataset-raw-dir").placeholder = state.bootstrap?.defaults?.raw_dir || "留空使用默认数据目录";
+  $("dataset-product-dir").placeholder = state.bootstrap?.defaults?.product_dir || "留空使用默认 products 目录";
+  $("new-run-dialog").showModal(); sourceLibraryRefresh().catch(datasetError);
+  if (state.datasetPathsDirty) datasetPathsChanged();
+}
+function datasetPathsChanged() {
+  state.datasetPathsDirty = true; state.datasetScanToken = (state.datasetScanToken || 0) + 1;
+  clear($("dataset-select")).append(new Option("目录已改变，请扫描并识别", ""));
+  $("new-run-form").querySelector('[type="submit"]').disabled = true;
+  $("scan-datasets").disabled = false;
+  $("dataset-scan-state").textContent = "目录已改变 · 点击扫描并识别";
+  clear($("dataset-paths"));
+}
+
 async function createRun(event) {
   event.preventDefault(); const button = event.submitter; if (button) button.disabled = true;
   try {
-    if (!$("dataset-select").value) await scanDatasets();
+    if (state.datasetPathsDirty || !$("dataset-select").value) throw new Error("请先扫描并识别目录，再创建试算。");
     const payload = $("new-run-payload").value.trim(); if (!payload) throw new Error("请填写载荷编号。");
     const result = await api("/api/runs", { method: "POST", body: { dataset_id: $("dataset-select").value || undefined, payload, name: $("new-run-name").value.trim() || undefined, ...registryCreateSpec() } });
-  $("new-run-dialog").close(); state.bootstrap = await api("/api/bootstrap"); state.datasets = state.bootstrap.datasets || state.datasets; await openRun((result.run || result).id);
+  $("new-run-dialog").close(); state.layer = "TB_L0"; state.bootstrap = await api("/api/bootstrap"); state.datasets = state.bootstrap.datasets || state.datasets; await openRun((result.run || result).id);
     notify("独立试算已创建，真实历史产物作为基线载入。当前尚未运行计算。", "success");
-  } catch (error) { messageError(error); } finally { if (button) button.disabled = false; }
+  } catch (error) { messageError(error); } finally { if (button) button.disabled = !!state.datasetPathsDirty || !$("dataset-select").value; }
 }
 
 function windowPatch() {
@@ -635,7 +734,7 @@ function syncJobStage(job) {
   if (!state.run || !job.layer) return;
   const status = normalizedStatus(job.status), previous = state.run.stages?.[job.layer] || {};
   state.run.stages = { ...(state.run.stages || {}), [job.layer]: { ...previous, status: job.status, stale: ["queued", "running"].includes(status) ? false : previous.stale } };
-  renderNavigation();
+  renderNavigation(); renderUnpackProgress(job);
   if (state.layer === job.layer) $("stage-status").replaceWith(Object.assign(badge(status), { id: "stage-status" }));
 }
 
@@ -671,12 +770,12 @@ function configureLayerPanels() {
   const titles = { TB_L0: "工况原始脉冲谱", TB_L1: "当前工况能谱与拟合", TB_L2: "温度–偏压响应与残差", EC_L0: "EC 原始脉冲谱", EC_L1: "EC 温度–偏压校正谱", EC_L2: "能线峰位与分辨率", EC_L3: "能量刻度与拟合残差" };
   $("tb-analysis").dataset.layer = state.layer;
   $("main-chart-title").textContent = titles[state.layer]; $("tb-analysis").dataset.layer = state.layer;
-  $("inspector-title").textContent = ec ? raw ? "数据文件详情" : "能峰复核" : "工况能谱";
+  $("inspector-title").textContent = isUnpackLayer() ? "解包结果详情" : ec ? raw ? "数据文件详情" : "能峰复核" : "工况能谱";
   $("point-field-label").textContent = ec ? raw ? "数据文件" : "能线 / 源峰" : "工况文件";
   $("surface-mode").hidden = state.layer !== "TB_L2";
   $("ec-detail-mode").hidden = state.layer !== "EC_L3";
   $("spectrum-chart").hidden = raw || state.layer === "TB_L1";
-  $("dependency-toolbar").hidden = !ec;
+  $("dependency-toolbar").hidden = !ec || state.layer === "EC_L0";
   $("window-section").hidden = raw;
   $("automatic-peak-controls").hidden = raw;
   if(raw) $("peak-diagnostics").hidden = true;
@@ -688,18 +787,24 @@ function configureLayerPanels() {
   $("analysis-tab-comparison").textContent = raw ? "输入与依赖" : ec ? "刻度参数" : "参数比较";
   $("residual-caption").textContent = raw ? "当前通道的真实输入数据与文件来源" : ec ? "点击能线点，联动右侧校正谱与拟合窗口" : state.layer === "TB_L1" ? "点击工况点，下钻真实 L0 谱与当前 L1 峰拟合" : "相对曲面的偏差 · 点击测量点定位工况";
   $("main-chart-legend").hidden = raw || state.layer === "TB_L1";
+  const unpack = isUnpackLayer();
+  document.body.classList.toggle("l0-workspace", unpack);
+  $("unpack-workspace").hidden = !unpack;
+  for (const id of ["run-scope", "run-scope-label", "run-layer"]) $(id).hidden = unpack;
   $("run-scope").options[0].textContent = ["TB_L0", "TB_L1", "EC_L0", "EC_L1"].includes(state.layer) ? "当前文件" : state.layer === "EC_L2" ? "当前能峰" : "代表样例";
   updateRunScopeCaption();
   if (state.spectrum && ec && state.layer !== "EC_L0") renderSpectrumProvenance(state.spectrum);
   else { $("spectrum-evidence-status").hidden = true; $("spectrum-provenance").hidden = true; }
-  if (ec) loadTbVersions().catch(messageError);
+  if (ec && state.layer !== "EC_L0") loadTbVersions().catch(messageError);
 }
 
-function updateRunScopeCaption() { const full = $("run-scope").value === "full", fileLayer = ["TB_L0", "TB_L1", "EC_L0", "EC_L1"].includes(state.layer); $("run-layer").textContent = full ? "运行本层全部数据" : fileLayer ? "处理当前文件" : state.layer === "EC_L2" ? "拟合当前能峰" : "运行本层"; $("run-layer").title = full ? "不传单文件或能峰筛选，处理全部适用输入" : fileLayer ? "处理右侧当前选中的真实文件" : state.layer === "EC_L2" ? "仅重拟合右侧选定能量与通道的能峰" : "使用处理器代表范围运行本层"; }
+function updateRunScopeCaption() { const full = $("run-scope").value === "full", fileLayer = ["TB_L1", "EC_L1"].includes(state.layer); $("run-layer").textContent = full ? "运行本层全部数据" : state.layer === "EC_L1" ? "校正当前文件" : state.layer === "TB_L1" ? "拟合当前文件" : state.layer === "EC_L2" ? "拟合当前能峰" : "运行本层"; $("run-layer").title = full ? "处理本层全部适用输入" : fileLayer ? "仅处理当前选中文件" : "使用当前层的处理器"; }
+
 
 function basicPlotLayout(x, y, extra = {}) { return { margin: { l: 65, r: 25, t: 20, b: 46 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, hovermode: "closest", xaxis: { ...axisStyle, title: { text: x, standoff: 7 } }, yaxis: { ...axisStyle, title: { text: y, standoff: 7 } }, ...extra }; }
 
 async function renderSurface() {
+  const context = plotContext();
   if (state.layer === "TB_L2") return renderTBSurface();
   if (state.layer.startsWith("EC")) return renderEcOverview();
   const points = state.surface?.points || [];
@@ -707,24 +812,29 @@ async function renderSurface() {
   $("residual-chart").classList.remove("metadata-chart");
   const groups = [{ matches: isUsed, name: "参与拟合", color: chartColors.blue }, { matches: isExcluded, name: "已屏蔽", color: chartColors.excluded }, { matches: (p) => !isExcluded(p) && p.used === false, name: "质量筛除", color: chartColors.muted }];
   const traces = groups.map((g) => { const ps = points.filter(g.matches); return { type: "scatter", mode: "markers", x: ps.map((p) => p.temp), y: ps.map((p) => p.center), error_y: { type: "data", array: ps.map((p) => p.center_err || 0), visible: true, color: g.color, thickness: 1 }, customdata: ps.map((p) => p.id), text: ps.map((p) => `${p.stem}<br>偏压 ${number(p.bias, 3)} V`), marker: { color: g.color, size: 7, symbol: g.name === "已屏蔽" ? "x" : "circle" }, name: g.name, hovertemplate: "%{text}<br>温度 %{x:.2f} °C<br>峰位 %{y:.3f} ADC<extra></extra>" }; });
-  await Plotly.react(plotTarget($("surface-chart")), traces, basicPlotLayout("温度 / °C", "L1 峰位 / ADC"), plotConfig); bindPointClicks($("surface-chart"));
-  await Plotly.react(plotTarget($("residual-chart")), [{ type: "scatter", mode: "markers", x: points.map((p) => p.temp), y: points.map((p) => p.rsquared ?? p.fit?.rsquared ?? null), customdata: points.map((p) => p.id), text: points.map((p) => p.stem), marker: { color: points.map((p) => isExcluded(p) ? chartColors.excluded : p.used === false ? chartColors.muted : chartColors.blue), size: 7 }, hovertemplate: "%{text}<br>R² %{y:.5f}<extra></extra>" }], basicPlotLayout("温度 / °C", "R²", { margin: { l: 65, r: 25, t: 10, b: 42 } }), plotConfig); bindPointClicks($("residual-chart"));
+  await Plotly.react(plotTarget($("surface-chart")), traces, basicPlotLayout("温度 / °C", "L1 峰位 / ADC"), plotConfig); if (context !== plotContext()) return; bindPointClicks($("surface-chart"));
+  if (context !== plotContext()) return;
+  await Plotly.react(plotTarget($("residual-chart")), [{ type: "scatter", mode: "markers", x: points.map((p) => p.temp), y: points.map((p) => p.rsquared ?? p.fit?.rsquared ?? null), customdata: points.map((p) => p.id), text: points.map((p) => p.stem), marker: { color: points.map((p) => isExcluded(p) ? chartColors.excluded : p.used === false ? chartColors.muted : chartColors.blue), size: 7 }, hovertemplate: "%{text}<br>R² %{y:.5f}<extra></extra>" }], basicPlotLayout("温度 / °C", "R²", { margin: { l: 65, r: 25, t: 10, b: 42 } }), plotConfig); if (context !== plotContext()) return; bindPointClicks($("residual-chart"));
+  if (context !== plotContext()) return;
   $("point-count").textContent = `${points.length} 个工况`; $("surface-caption").textContent = "每个点对应真实 L1 拟合结果，点击复核窗口与谱峰"; $("residual-metric").textContent = ""; renderParams();
 }
 
 function renderMetadata(data) {
   const holder = clear($("spectrum-params"));
-  const entries = [["数据来源", data.source === "run" || data.source === "computed" ? "本次产物" : data.source === "raw" ? "原始输入（只读）" : "历史输入"], ["事件数", number(data.n_events, 0)], ["谱字段", data.field || "amp"], ["TB 参数包", data.tb_corrfile || "—"], ["源文件", data.path || data.source_path || data.stem]];
+  const entries = [["数据来源", data.source === "run" || data.source === "computed" ? "本次产物" : data.source === "raw" ? "原始输入（只读）" : "历史输入"], ["当前通道事件", number(data.n_events, 0)], ["谱字段", data.field || "amp"], ["TB 参数包", data.tb_corrfile || "—"], ["源文件", data.path || data.source_path || data.stem]];
+  if (data.input_quality?.input_events) entries.push(["全通道事件", number(data.input_quality.input_events, 0)]);
   if (data.metadata) for (const [key, value] of Object.entries(data.metadata)) entries.push([key, valueText(value)]);
   if (data.hk_data) for (const [key, value] of Object.entries(data.hk_data)) entries.push([`HK ${key}`, Array.isArray(value) ? number(value[state.channel], 4) : valueText(value)]);
   for (const [label, value] of entries) { const item = node("div", label === "源文件" ? "param-item wide" : "param-item"); item.append(node("span", "", label), node("strong", "", value)); holder.append(item); }
 }
 
 async function renderRawMain() {
+  const context = plotContext();
   const data = state.spectrum;
-  if (!data) { chartMessage("surface-chart", "请选择数据文件读取真实脉冲谱。"); return; }
+  if (!data) { chartMessage("surface-chart", "正在载入文件列表与真实脉冲谱…"); return; }
   const traces = [{ type: "scatter", mode: "lines", x: data.x || [], y: (data.y || []).map((n) => n > 0 ? n : null), line: { color: chartColors.ink, width: 1.4, shape: "hv" }, hovertemplate: "ADC %{x:.1f}<br>计数 %{y:.0f}<extra></extra>" }];
   await Plotly.react(plotTarget($("surface-chart")), traces, basicPlotLayout(data.field === "amp_corr" ? "校正 ADC" : "ADC", "计数 / bin", { yaxis: { ...axisStyle, type: "log", title: { text: "计数 / bin" } }, xaxis: { ...axisStyle, title: { text: data.field === "amp_corr" ? "校正 ADC" : "ADC" }, range: data.display_range } }), plotConfig);
+  if (context !== plotContext()) return;
   $("surface-caption").textContent = `${data.stem || state.point?.stem} · CH ${state.channel} · ${number(data.n_events ?? data.y?.reduce((a, b) => a + b, 0), 0)} 事件`;
   $("point-count").textContent = `${state.layer === "TB_L0" ? state.surface?.points?.length || 0 : state.ecOverview?.files?.length || 0} 个文件`;
   const chart = $("residual-chart"); if (chart.data) Plotly.purge(chart); clear(chart); chart.classList.add("metadata-chart");
@@ -751,7 +861,9 @@ async function loadEcAnalysis() {
   const previousId = state.point?.id; const select = clear($("point-select"));
   for (const p of points) select.append(new Option(raw ? p.stem : `${number(p.E, 3)} keV · ${p.stem || p.source_name || "能线"}${isExcluded(p) ? " · 已屏蔽" : ""}`, p.id));
   if (!raw) await renderEcOverview();
+  if (token !== state.loadToken || runId !== state.run.id || layer !== state.layer) return;
   const selected = points.find((p) => p.id === previousId) || points.find((p) => !isExcluded(p)) || points[0];
+  renderUnpackWorkspace();
   if (selected) await selectEcPoint(selected); else { state.point = null; state.spectrum = null; chartMessage("spectrum-chart", "本通道没有可用能峰或数据文件，请检查目录或运行上游层。"); if (raw) chartMessage("surface-chart", "本层暂无可用 Parquet 输入。"); }
   setBusy(state.busy);
 }
@@ -762,6 +874,7 @@ function ecPrediction(p) { const coef = state.ecOverview?.params?.EC_low || stat
 function ecPointStatus(point) { if (isExcluded(point)) return "人工屏蔽"; const reasons = point.quality_reasons || []; if (point.used === false || reasons.length) return `未参与 L3${reasons.length ? ` · ${reasons.join(" · ")}` : " · 未通过筛选"}`; return point.used === true ? "参与 L3 拟合" : "尚未标记拟合状态"; }
 
 async function renderEcOverview() {
+  const context = plotContext();
   const data = state.ecOverview || {}, points = data.points || [], l3 = state.layer === "EC_L3";
   if (["EC_L0", "EC_L1"].includes(state.layer)) return renderRawMain();
   $("residual-chart").classList.remove("metadata-chart");
@@ -770,11 +883,13 @@ async function renderEcOverview() {
   const x = (p) => l3 ? p.center : p.E, y = (p) => l3 ? p.E : p.center;
   traces.push({ type: "scatter", mode: "markers", x: points.map(x), y: points.map(y), error_y: l3 ? undefined : { type: "data", array: points.map((p) => p.center_err || 0), visible: true, thickness: 1, color: "#6888b1" }, customdata: points.map((p) => p.id), text: points.map((p) => `${p.stem}<br>${number(p.E, 3)} keV · ${ecPointStatus(p)}`), marker: { color: points.map((p) => isExcluded(p) ? chartColors.excluded : p.used === false ? chartColors.muted : chartColors.blue), symbol: points.map((p) => isExcluded(p) ? "x" : "circle"), size: 8, line: { color: "#fff", width: .8 } }, name: "真实能峰", hovertemplate: "%{text}<br>横坐标 %{x:.3f}<br>纵坐标 %{y:.3f}<extra></extra>" });
   if (state.point && points.some((p) => p.id === state.point.id)) traces.push({ type: "scatter", mode: "markers", x: [x(state.point)], y: [y(state.point)], customdata: [state.point.id], marker: { size: 13, color: "rgba(0,0,0,0)", line: { color: chartColors.fit, width: 2 } }, hoverinfo: "skip", name: "当前选中" });
-  await Plotly.react(plotTarget($("surface-chart")), traces, basicPlotLayout(l3 ? "校正峰位 / ADC" : "已知能量 / keV", l3 ? "能量 / keV" : "校正峰位 / ADC", { uirevision: `${state.run.id}-${state.layer}-${state.channel}` }), plotConfig); bindEcClicks($("surface-chart"));
+  await Plotly.react(plotTarget($("surface-chart")), traces, basicPlotLayout(l3 ? "校正峰位 / ADC" : "已知能量 / keV", l3 ? "能量 / keV" : "校正峰位 / ADC", { uirevision: `${state.run.id}-${state.layer}-${state.channel}` }), plotConfig); if (context !== plotContext()) return; bindEcClicks($("surface-chart"));
+  if (context !== plotContext()) return;
   const showResidual = l3 && $("ec-detail-mode").value === "residual";
   const secondary = [{ type: "scatter", mode: "markers", x: points.map((p) => p.E), y: points.map((p) => showResidual ? p.residual_percent ?? (ecPrediction(p) === null ? null : 100 * (ecPrediction(p) - p.E) / p.E) : p.resolution), customdata: points.map((p) => p.id), text: points.map((p) => `${p.stem} · ${number(p.E, 3)} keV<br>${ecPointStatus(p)}`), marker: { color: points.map((p) => isExcluded(p) ? chartColors.excluded : p.used === false ? chartColors.muted : chartColors.blue), symbol: points.map((p) => isExcluded(p) ? "x" : "circle"), size: 7 }, hovertemplate: "%{text}<br>%{y:.4f}%<extra></extra>" }];
   if (!showResidual && data.resolution_curve?.x?.length) secondary.unshift({ type: "scatter", mode: "lines", x: data.resolution_curve.x, y: data.resolution_curve.y, line: { color: chartColors.fit, width: 1.6 }, hoverinfo: "skip" });
-  await Plotly.react(plotTarget($("residual-chart")), secondary, basicPlotLayout("能量 / keV", showResidual ? "能量残差 / %" : "分辨率 / %", { margin: { l: 65, r: 25, t: 10, b: 42 }, yaxis: { ...axisStyle, title: { text: showResidual ? "能量残差 / %" : "分辨率 / %" }, zeroline: true, zerolinecolor: "#9daab6" } }), plotConfig); bindEcClicks($("residual-chart"));
+  await Plotly.react(plotTarget($("residual-chart")), secondary, basicPlotLayout("能量 / keV", showResidual ? "能量残差 / %" : "分辨率 / %", { margin: { l: 65, r: 25, t: 10, b: 42 }, yaxis: { ...axisStyle, title: { text: showResidual ? "能量残差 / %" : "分辨率 / %" }, zeroline: true, zerolinecolor: "#9daab6" } }), plotConfig); if (context !== plotContext()) return; bindEcClicks($("residual-chart"));
+  if (context !== plotContext()) return;
   $("surface-caption").textContent = l3 ? "校正峰位与已知能量 · 点击点复核输入谱峰" : "所选通道的 X 射线与放射源能线 · 点击点修改峰窗口";
   $("point-count").textContent = `${points.filter(isUsed).length} / ${points.length} 参与 L3`;
   $("residual-metric").textContent = "";
@@ -805,6 +920,14 @@ async function selectEcPoint(point) {
   $("auto-fit-status").textContent="";
   const token = ++state.spectrumToken, layer = state.layer, raw = ["EC_L0", "EC_L1"].includes(layer);
   state.point = point; state.spectrum = null; state.dirty = false; $("point-select").value = point.id; $("selected-channel").textContent = `CH ${state.channel}`;
+  if (raw) { chartMessage("surface-chart", "正在读取所选文件的真实脉冲谱…"); $("surface-caption").textContent = `${point.stem} · CH ${state.channel} · 读取中`; }
+  renderUnpackWorkspace();
+  if (layer === "EC_L0" && point.fit_status === "not_parsed") {
+    chartMessage("surface-chart", `${point.stem} 尚未生成 L0。点击上方“解包选中文件”调用实际解包器。`);
+    chartMessage("residual-chart", `事件：${point.event || "—"}\n遥测：${point.hk || "—"}`);
+    renderMetadata({source:"raw",source_path:point.event,stem:point.stem,metadata:{状态:"待解包"}});
+    setBusy(state.busy); return;
+  }
   $("spectrum-evidence-status").hidden = true; $("spectrum-provenance").hidden = true;
   const conditions = clear($("point-condition")); for (const [key, value] of raw ? [["通道", `CH ${state.channel}`]] : [["能量", `${number(point.E, 3)} keV`], ["峰位", `${number(point.center, 3)} ADC`]]) { const item = node("span", "", key); item.append(node("strong", "", value)); conditions.append(item); }
   chartMessage("spectrum-chart", "正在读取真实校正谱…");
@@ -820,7 +943,7 @@ async function selectEcPoint(point) {
   if (!raw && spectrum.curve?.note) { const item = node("div", "param-item wide"); item.append(node("span", "", "历史曲线说明"), node("strong", "", "历史记录缺少背景参数，图中仅显示高斯峰分量；重拟合后保存完整曲线。")); holder.append(item); }
   if (!raw && point.quality_reasons?.length) { const item = node("div", "param-item wide"); item.append(node("span", "", "L3 质量筛选"), node("strong", "", point.quality_reasons.join(" · "))); holder.append(item); }
   renderSpectrumProvenance(spectrum);
-  await renderSpectrum(); if (raw) await renderRawMain(); else await renderEcOverview(); setBusy(state.busy);
+  await renderSpectrum(); if (token !== state.spectrumToken || layer !== state.layer) return; if (raw) await renderRawMain(); else await renderEcOverview(); setBusy(state.busy);
 }
 
 function renderSpectrumProvenance(spectrum) {
@@ -887,7 +1010,7 @@ function renderDatasetOptions(payload) {
 }
 function updateSelectedDataset() { const dataset = state.datasets.find((d) => d.id === $("dataset-select").value); const holder = clear($("dataset-paths")); if (!dataset) return; $("new-run-payload").value = dataset.payload || dataset.source_payload || ""; holder.append(node("span", "", `数据：${dataset.raw_dir || "未选择"}`), node("span", "", `产品：${dataset.product_dir || "未选择"}`)); registryDatasetSelection().catch(datasetError); }
 function datasetError(error) { $("dataset-scan-state").textContent = error.message; $("dataset-scan-state").className = "scan-error"; }
-async function scanDatasets(preferredPayload) { const button = $("scan-datasets"), submit = $("new-run-form").querySelector('[type="submit"]'), token = (state.datasetScanToken || 0) + 1; state.datasetScanToken = token; state.datasets = []; clear($("dataset-select")).append(new Option("正在扫描目录…", "")); clear($("dataset-paths")); button.disabled = true; submit.disabled = true; $("dataset-scan-state").textContent = "正在扫描目录…"; try { const result = await api("/api/datasets/scan", { method: "POST", body: { raw_dir: $("dataset-raw-dir").value.trim() || undefined, product_dir: $("dataset-product-dir").value.trim() || undefined } }); if (token !== state.datasetScanToken) return; state.datasets = result.datasets || []; renderDatasetOptions(typeof preferredPayload === "string" ? preferredPayload : undefined); $("dataset-scan-state").textContent = `找到 ${state.datasets.length} 个数据集`; $("dataset-scan-state").className = ""; if (!state.datasets.length) throw new Error("未发现可识别的数据或产品。请检查目录层级。"); } finally { if (token === state.datasetScanToken) { button.disabled = false; submit.disabled = !state.datasets.length; } } }
+async function scanDatasets(preferredPayload) { const button = $("scan-datasets"), submit = $("new-run-form").querySelector('[type="submit"]'), token = (state.datasetScanToken || 0) + 1; state.datasetScanToken = token; state.datasets = []; clear($("dataset-select")).append(new Option("正在扫描目录…", "")); clear($("dataset-paths")); button.disabled = true; submit.disabled = true; $("dataset-scan-state").textContent = "正在扫描目录…"; try { const result = await api("/api/datasets/scan", { method: "POST", body: { raw_dir: $("dataset-raw-dir").value.trim() || undefined, product_dir: $("dataset-product-dir").value.trim() || undefined } }); if (token !== state.datasetScanToken) return; state.datasets = result.datasets || []; state.datasetPathsDirty = false; renderDatasetOptions(typeof preferredPayload === "string" ? preferredPayload : undefined); $("dataset-scan-state").textContent = `找到 ${state.datasets.length} 个数据集`; $("dataset-scan-state").className = ""; if (!state.datasets.length) throw new Error("未发现可识别的数据或产品。请检查目录层级。"); } catch (error) { if (token !== state.datasetScanToken) return; throw error; } finally { if (token === state.datasetScanToken) { button.disabled = false; submit.disabled = !state.datasets.length || state.datasetPathsDirty; } } }
 
 let directoryTarget = "", directoryState = null, directoryLoadToken = 0;
 async function browseDirectory(target) { directoryTarget = target; $("directory-dialog").showModal(); await loadDirectory($(target).value.trim()); }
@@ -936,7 +1059,7 @@ function acquisitionStatus(text, error = false) { $("acquisition-status").textCo
 function acquisitionError(error) { acquisitionStatus(error.message || String(error), true); }
 function acquisitionMarkChanged() { if (!acquisitionDraft.profile) return; acquisitionDraft.changed = true; acquisitionDraft.previewValid = false; $("save-acquisition").disabled = true; acquisitionStatus("草稿已修改。预览并校验后可保存。仅影响本试算。"); registryRefreshButtons(); }
 function acquisitionSetBusy(busy) { acquisitionDraft.busy = busy; for (const id of ["preview-acquisition", "load-acquisition-preset", "load-event-xml", "load-hk-xml", "use-event-xml-preset", "use-hk-xml-preset", "choose-event-xml-file", "choose-hk-xml-file"]) $(id).disabled = busy || (id === "preview-acquisition" && !acquisitionDraft.profile); $("save-acquisition").disabled = busy || !acquisitionDraft.previewValid; $("acquisition-dialog").setAttribute("aria-busy", String(busy)); registryRefreshButtons(); }
-function acquisitionShowTab(tab) { for (const name of ["xml", "metadata", "preview"]) { const active = tab === name; $("acquisition-tab-" + name).classList.toggle("active", active); $("acquisition-tab-" + name).setAttribute("aria-selected", String(active)); $("acquisition-panel-" + name).hidden = !active; } $("acquisition-dialog").querySelector(".acquisition-scroll").scrollTop = 0; }
+function acquisitionShowTab(tab) { if (tab === "metadata") acquisitionEnsureMetadata(); for (const name of ["xml", "metadata", "preview"]) { const active = tab === name; $("acquisition-tab-" + name).classList.toggle("active", active); $("acquisition-tab-" + name).setAttribute("aria-selected", String(active)); $("acquisition-panel-" + name).hidden = !active; } $("acquisition-dialog").querySelector(".acquisition-scroll").scrollTop = 0; }
 function acquisitionNumber(id, nullable = false) { const raw = $(id).value.trim(); if (raw === "" && nullable) return null; const n = Number(raw); if (raw === "" || !Number.isFinite(n)) throw new Error(`请填写有效数值：${$(id).closest("label")?.firstChild?.textContent || id}`); return n; }
 function acquisitionFormField(holder, key, label, value, numeric = false) { const field = node("label", "", label), input = node("input"); input.id = "profile-" + key; input.type = numeric ? "number" : "text"; if (numeric) input.step = "any"; input.value = Array.isArray(value) ? value.join(", ") : value ?? ""; field.append(input); holder.append(field); }
 function acquisitionRemoveButton(row, label) { const cell = node("td"), button = node("button", "profile-remove-row", "×"); button.type = "button"; button.setAttribute("aria-label", label); button.addEventListener("click", () => { row.remove(); acquisitionMarkChanged(); }); cell.append(button); row.append(cell); }
@@ -980,9 +1103,9 @@ function acquisitionRenderProfile(profile) {
   const multi = clear($("profile-multipacket")); for (const [key, label] of Object.entries(acquisitionMultipacketLabels)) acquisitionFormField(multi, key, label, parser[key], true);
   $("profile-condition-mode").value = conditions.mode || "hk"; for (const key of ["temp", "bias", "temp_scale", "bias_scale"]) $("profile-condition-" + key.replaceAll("_", "-")).value = conditions[key] ?? (key.endsWith("_scale") ? 1 : "");
   $("profile-discovery-mode").value = discovery.mode || "rules";
-  clear($("profile-manifest-rows")); for (const item of discovery.manifest || []) acquisitionAppendManifest(item);
-  clear($("profile-rule-rows")); for (const item of discovery.rules || []) acquisitionAppendRule(item);
-  clear($("profile-source-rows")); for (const item of discovery.sources || []) acquisitionAppendSource(item);
+  acquisitionDraft.metadataRendered = false;
+  for (const id of ["profile-manifest-rows", "profile-rule-rows", "profile-source-rows"]) clear($(id));
+  if (!$("acquisition-panel-metadata").hidden) acquisitionEnsureMetadata();
   acquisitionUpdateModes(); acquisitionDraft.previewFingerprint = null; acquisitionDraft.previewValid = false; $("save-acquisition").disabled = true;
   clear($("acquisition-preview-messages")); clear($("acquisition-preview-results")).append(node("p", "empty-list", "尚未预览当前草稿。")); $("acquisition-preview-summary").textContent = "修改配置后点击“预览与校验”";
 }
@@ -1000,10 +1123,20 @@ function acquisitionReadProfile() {
   parser.conditions = { ...(parser.conditions || {}), mode: conditionMode, temp: acquisitionNumber("profile-condition-temp", true), bias: acquisitionNumber("profile-condition-bias", true), temp_scale: acquisitionNumber("profile-condition-temp-scale"), bias_scale: acquisitionNumber("profile-condition-bias-scale") };
   if (conditionMode === "fixed" && (parser.conditions.temp === null || parser.conditions.bias === null)) throw new Error("固定工况需要填写温度和偏压。");
   profile.discovery ||= {}; profile.discovery.mode = $("profile-discovery-mode").value;
+  if (acquisitionDraft.metadataRendered) {
   profile.discovery.manifest = [...$("profile-manifest-rows").rows].map((row) => { const item = { ...row._profileOriginal }; for (const input of row.querySelectorAll("[data-key]")) { const raw = input.value.trim(), key = input.dataset.key; if (!raw) { delete item[key]; continue; } if (["channel", "energy_keV", "exposure_minutes", "temp", "bias"].includes(key)) { if (!Number.isFinite(Number(raw))) throw new Error(`文件映射 ${key} 需要有效数值。`); item[key] = Number(raw); } else if (key === "peak_energies_keV") item[key] = raw.split(",").map((value) => { const n = Number(value.trim()); if (!(n > 0)) throw new Error("映射表的源能线须为正数，使用逗号分隔。"); return n; }); else item[key] = raw; } return item; });
   profile.discovery.rules = [...$("profile-rule-rows").rows].map((row) => { const item = { ...row._profileOriginal }; for (const input of row.querySelectorAll("[data-key]")) { const key = input.dataset.key, value = input.value.trim(); if (key === "metadata") { if (value) { try { item.metadata = JSON.parse(value); } catch { throw new Error("文件规则常量须为 JSON 对象，例如 {\"exposure_minutes\":60}"); } if (!item.metadata || Array.isArray(item.metadata) || typeof item.metadata !== "object") throw new Error("文件规则常量须为 JSON 对象"); } else delete item.metadata; } else item[key] = value || (key === "metadata_regex" ? null : ""); } return item; });
   profile.discovery.sources = [...$("profile-source-rows").rows].map((row) => { const item = { ...row._profileOriginal }; for (const input of row.querySelectorAll("[data-key]")) { const key = input.dataset.key, raw = input.value.trim(); item[key] = key === "aliases" ? raw.split(",").map((s) => s.trim()).filter(Boolean) : key === "energies_keV" ? raw.split(",").map((s) => s.trim()).filter(Boolean).map((s) => { const value = Number(s); if (!(value > 0)) throw new Error("源能线应填写正数，使用逗号分隔。"); return value; }) : raw; } return item; });
+  }
   return profile;
+}
+function acquisitionEnsureMetadata() {
+  if (!acquisitionDraft.profile || acquisitionDraft.metadataRendered) return;
+  const discovery = acquisitionDraft.profile.discovery || {};
+  for (const item of discovery.manifest || []) acquisitionAppendManifest(item);
+  for (const item of discovery.rules || []) acquisitionAppendRule(item);
+  for (const item of discovery.sources || []) acquisitionAppendSource(item);
+  acquisitionDraft.metadataRendered = true;
 }
 async function acquisitionOpen() {
   if (!state.run || state.busy) return; if (state.dirty) await saveRevision({}, true);
@@ -1079,6 +1212,15 @@ $("load-acquisition-preset").addEventListener("click", () => acquisitionLoadPres
 $("preview-acquisition").addEventListener("click", () => acquisitionPreview().catch(acquisitionError)); $("save-acquisition").addEventListener("click", () => acquisitionSave().catch(acquisitionError));
 $("profile-add-manifest").addEventListener("click", () => { acquisitionAppendManifest(); acquisitionMarkChanged(); }); $("profile-add-rule").addEventListener("click", () => { acquisitionAppendRule(); acquisitionMarkChanged(); }); $("profile-add-source").addEventListener("click", () => { acquisitionAppendSource(); acquisitionMarkChanged(); });
 $("profile-import-manifest").addEventListener("click", () => { try { const rows = acquisitionParseDelimited($("profile-manifest-import").value); clear($("profile-manifest-rows")); for (const row of rows) acquisitionAppendManifest(row); acquisitionMarkChanged(); acquisitionStatus(`已导入 ${rows.length} 组文件映射，请预览后保存。`); } catch (error) { acquisitionError(error); } });
+$("unpack-data").addEventListener("click", () => openCreateDialog());
+$("unpack-settings").addEventListener("click", () => acquisitionOpen().catch(acquisitionError));
+$("unpack-search").addEventListener("input", renderUnpackWorkspace);
+$("unpack-file").addEventListener("change", handleError(async (event) => { const point = unpackInputs().find(item => (item.id || item.stem) === event.target.value); if (point) await selectPoint(point); }));
+$("unpack-selected").addEventListener("click", handleError(() => runUnpack(false)));
+$("unpack-all").addEventListener("click", () => { $("unpack-batch-summary").textContent = `${state.run.payload} · ${state.layer} · 共 ${unpackRawInputs().length} 个原始文件（所有通道，不受文件筛选影响）。`; $("start-unpack-batch").textContent = `解包全部 ${unpackRawInputs().length} 个文件`; $("unpack-batch-dialog").showModal(); });
+for (const id of ["close-unpack-batch", "cancel-unpack-batch"]) $(id).addEventListener("click", () => $("unpack-batch-dialog").close());
+$("start-unpack-batch").addEventListener("click", handleError(async () => { $("unpack-batch-dialog").close(); await runUnpack(true); }));
+$("use-default-directories").addEventListener("click", () => { $("dataset-raw-dir").value = ""; $("dataset-product-dir").value = ""; datasetPathsChanged(); scanDatasets().catch(datasetError); });
 $("new-run").addEventListener("click", () => openCreateDialog());
 $("dataset-settings").addEventListener("click", () => openCreateDialog());
 $("create-first-run").addEventListener("click", () => openCreateDialog());
@@ -1087,7 +1229,7 @@ $("cancel-new-run").addEventListener("click", () => $("new-run-dialog").close())
 $("new-run-form").addEventListener("submit", createRun);
 $("run-select").addEventListener("change", handleError((event) => openRun(event.target.value)));
 $("payload").addEventListener("change", handleError(async (event) => { const payload = event.target.value; const run = (state.bootstrap.runs || []).find((item) => item.payload === payload); if (run) await openRun(run.id); else openCreateDialog(payload); }));
-$("channel").addEventListener("change", handleError(async (event) => { if (state.dirty) await saveRevision({}, true); state.channel = Number(event.target.value); state.dirty = false; state.point = null; state.spectrum = null; await loadSurfaceSafely(); }));
+$("channel").addEventListener("change", handleError(async (event) => { if (state.dirty) await saveRevision({}, true); ++state.loadToken; ++state.spectrumToken; state.channel = Number(event.target.value); state.dirty = false; state.point = null; state.spectrum = null; await loadSurfaceSafely(); }));
 $("point-select").addEventListener("change", handleError(async (event) => { const collection = state.layer.startsWith("EC") ? ["EC_L0", "EC_L1"].includes(state.layer) ? state.ecOverview?.files : state.ecOverview?.points : state.surface?.points; const point = collection?.find((p) => (p.id || p.stem) === event.target.value); if (point) await selectPoint(point); }));
 for (const id of ["window-lo", "window-hi"]) $(id).addEventListener("input", () => { $(id).dataset.edited = "true"; $(id).title = ""; state.dirty = true; $("window-status").textContent = "窗口已修改 · 未拟合"; renderRunBadge(); if (window.Plotly && spectrumChart().data) Plotly.relayout(spectrumChart(), { shapes: [...windowShapes(windowValue("window-lo"), windowValue("window-hi")), ...peakPlotDetails(state.spectrum || {}).shapes] }); });
 $("save-run").addEventListener("click", handleError(() => saveRevision()));
@@ -1095,7 +1237,7 @@ $("fit-spectrum").addEventListener("click", handleError(fitSpectrum));
 $("auto-fit-spectrum").addEventListener("click", handleError(autoFitSpectrum));
 $("toggle-excluded").addEventListener("click", handleError(toggleExcluded));
 $("refit-tb").addEventListener("click", handleError(async () => { if (state.dirty) await saveRevision({}, true); await executeJob(state.layer.startsWith("EC") ? "EC_L3" : "TB_L2"); }));
-$("run-layer").addEventListener("click", handleError(async () => { if (state.dirty) await saveRevision({}, true); const extra = state.point && $("run-scope").value !== "full" ? ["TB_L0", "TB_L1", "EC_L0", "EC_L1"].includes(state.layer) ? { stem: state.point.stem, channel: state.channel } : state.layer === "EC_L2" ? { point_id: state.point.id, channel: state.channel } : {} : {}; await executeJob(state.layer, extra); }));
+$("run-layer").addEventListener("click", handleError(async () => { if (["TB_L0", "TB_L1", "EC_L0", "EC_L1", "EC_L2"].includes(state.layer) && $("run-scope").value !== "full" && !state.point) throw new Error("请先选择输入文件或能峰。"); if (state.dirty) await saveRevision({}, true); const extra = state.point && $("run-scope").value !== "full" ? ["TB_L0", "TB_L1", "EC_L0", "EC_L1"].includes(state.layer) ? { stem: state.point.stem, channel: state.channel } : state.layer === "EC_L2" ? { point_id: state.point.id, channel: state.channel } : {} : {}; await executeJob(state.layer, extra); }));
 $("run-scope").addEventListener("change", updateRunScopeCaption);
 $("run-pipeline").addEventListener("click", handleError(runPipeline));
 $("refresh-run").addEventListener("click", handleError(() => refreshRun()));
@@ -1106,13 +1248,13 @@ $("surface-mode").addEventListener("change", handleError(async (event) => { stat
 $("ec-detail-mode").addEventListener("change", handleError(renderEcOverview));
 $("dataset-select").addEventListener("change", updateSelectedDataset);
 $("scan-datasets").addEventListener("click", () => scanDatasets().catch(datasetError));
-for (const id of ["dataset-raw-dir", "dataset-product-dir"]) $(id).addEventListener("change", () => scanDatasets().catch(datasetError));
+for (const id of ["dataset-raw-dir", "dataset-product-dir"]) $(id).addEventListener("input", datasetPathsChanged);
 for (const button of document.querySelectorAll("[data-browse-target]")) button.addEventListener("click", handleError(() => browseDirectory(button.dataset.browseTarget)));
 $("close-directory-dialog").addEventListener("click", () => $("directory-dialog").close());
 $("directory-up").addEventListener("click", handleError(() => loadDirectory(directoryState.parent)));
 $("directory-go").addEventListener("click", handleError(() => loadDirectory($("directory-location").value.trim())));
 $("directory-location").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); loadDirectory(event.target.value.trim()).catch(messageError); } });
-$("choose-directory").addEventListener("click", handleError(async () => { if (!directoryState) return; $(directoryTarget).value = directoryState.path; $("directory-dialog").close(); if (directoryTarget === "reference-directory") await referenceScan(); else await scanDatasets(); }));
+$("choose-directory").addEventListener("click", handleError(async () => { if (!directoryState) return; $(directoryTarget).value = directoryState.path; $("directory-dialog").close(); if (directoryTarget === "reference-directory") await referenceScan(); else datasetPathsChanged(); }));
 $("apply-tb-version").addEventListener("click", handleError(applyTbVersion));
 $("tb-version-select").addEventListener("change", () => { const selected = state.tbVersions.find((v) => v.id === $("tb-version-select").value); $("tb-binding-state").textContent = selected ? `SHA-256 ${(selected.sha256 || "").slice(0, 10)} · 点击采用后生效` : ""; });
 $("import-tb-version").addEventListener("click", handleError(async () => { const path = $("tb-import-path").value.trim(); if (!path) throw new Error("请填写 TB L2 JSON 的完整路径。"); if (state.dirty) await saveRevision({}, true); const result = await api(runPath("/dependency"), { method: "PATCH", body: { path } }); state.run = result.run || result; $("tb-import-path").value = ""; renderRun(); await loadSurfaceSafely(); notify("TB L2 JSON 已只读导入并固定为 EC 校正依据，可直接运行 EC L1。", "success"); }));

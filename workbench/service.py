@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from .acquisition import discover
 from .acquisition_store import freeze_profile, load_profile, prepare_profile, presets, profile_digest
 from .compute import ComputeAdapter
 from .datasets import DatasetCatalog, validate_payload
@@ -216,8 +215,8 @@ class Workbench:
         state = self.read(run_id)
         prepared = prepare_profile(self.workspace, profile)
         adapter = ComputeAdapter(self.workspace, state.get("dataset"), prepared)
-        raw_root = adapter._config(state["payload"]).raw_root
-        result = discover(raw_root, prepared)
+        raw_root = adapter._base_config(state["payload"])[1]
+        result = adapter.observations(state["payload"])
         if not raw_root.is_dir():
             result["errors"] = []
         result["sha256"] = profile_digest(prepared)
@@ -477,10 +476,7 @@ class Workbench:
             for path in sorted(self.runs.glob("*/state.json"), reverse=True):
                 state = json.loads(path.read_text(encoding="utf-8"))
                 runs.append({k: state.get(k) for k in ("id", "payload", "created_at", "name")})
-        catalog = self.catalog.scan()
-        if self.catalog.path.exists():
-            saved = json.loads(self.catalog.path.read_text(encoding="utf-8"))
-            catalog["datasets"] = saved.get("datasets", catalog["datasets"])
+        catalog = self.catalog.saved() or self.catalog.scan()
         self._annotate_datasets(catalog)
         return {
             **catalog,
@@ -932,8 +928,14 @@ class Workbench:
                 raise ValueError("全量 EC L2 需要先执行全量 EC L1；当前仅有代表样例校正")
             if spec.get("stem"):
                 adapter = self.adapter_for(state)
-                known = {p["stem"] for p in adapter.points(state["payload"], self.root(run_id) / "products")}
                 if layer.startswith("TB_"):
+                    known = set(adapter.tb_files(state["payload"], self.root(run_id) / "products"))
+                    known.update(
+                        path.name.removesuffix("_fit_results.l1.json")
+                        for path in (
+                            layer_dir(self.root(run_id) / "products", state["payload"], "TB_L1") / "json"
+                        ).glob("*_fit_results.l1.json")
+                    )
                     known.update(
                         path.name.removesuffix(".l0.parquet")
                         for directory in (
@@ -956,6 +958,15 @@ class Workbench:
                         )
                         for path in directory.glob("parquet/*.parquet")
                     }
+                    if layer == "EC_L0":
+                        inventory = adapter.inventory(state["payload"])
+                        raw = inventory.get("raw", {})
+                        known.update(sample["stem"] for sample in raw.get("ec_samples", []))
+                        known.update(
+                            row["stem"]
+                            for row in (raw.get("reading_preview") or {}).get("rows", [])
+                            if row["kind"] != "tb"
+                        )
                 if spec["stem"] not in known:
                     raise ValueError("未知工况")
                 config["only"] = [spec["stem"]]
@@ -1247,7 +1258,12 @@ class Workbench:
             raise FileNotFoundError("任务不存在")
         log = self.root(run_id) / "jobs" / job_id / "processor.log"
         if log.exists():
-            job["log"] = log.read_text(encoding="utf-8")[-12000:]
+            # Four bytes per Unicode character is enough to retain the same
+            # tail without rereading an ever-growing batch log on each poll.
+            with log.open("rb") as stream:
+                stream.seek(max(0, log.stat().st_size - 48000))
+                tail = stream.read().decode("utf-8", errors="replace")
+                job["log"] = tail.replace("\r\n", "\n").replace("\r", "\n")[-12000:]
         return job
 
     def validate(self, layer, paths):
@@ -1287,11 +1303,34 @@ class Workbench:
             "total": len(rows),
         }
 
-    def surface(self, run_id, channel=0):
+    def surface(self, run_id, channel=0, layer="TB_L2"):
         self._channel(channel)
+        if layer not in ("TB_L0", "TB_L1", "TB_L2"):
+            raise ValueError("TB surface layer must be TB_L0, TB_L1 or TB_L2")
         state = self.read(run_id)
         root = self.root(run_id)
         adapter = self.adapter_for(state)
+        if layer == "TB_L0":
+            empty = {"points": [], "params": None, "grid": None, "diagnostics": {}, "version": None}
+            files = {
+                stem: {
+                    "stem": stem,
+                    "path": str(path),
+                    "source": "run" if (root / "products") in path.parents else "historical",
+                    "fit_status": "parsed",
+                }
+                for stem, path in adapter.tb_files(state["payload"], root / "products").items()
+            }
+            for sample in state.get("inventory", {}).get("raw", {}).get("tb_samples", []):
+                files[sample["stem"]] = {
+                    **sample,
+                    "source": "raw",
+                    "fit_status": "not_parsed",
+                    **files.get(sample["stem"], {}),
+                }
+            return clean(
+                {**empty, "baseline": empty, "files": [files[key] for key in sorted(files)], "dirty": False}
+            )
         result = adapter.surface(state["payload"], root / "products", channel)
         result["baseline"] = adapter.surface(state["payload"], root / "baseline", channel)
         result["files"] = [
@@ -1363,6 +1402,41 @@ class Workbench:
         self._channel(channel)
         state = self.read(run_id)
         adapter = self.adapter_for(state)
+        if layer in ("EC_L0", "EC_L1"):
+            files = {
+                item["stem"]: item
+                for item in adapter.ec_files(state["payload"], self.root(run_id) / "products", layer, channel)
+            }
+            if layer == "EC_L0":
+                raw = state.get("inventory", {}).get("raw", {})
+                rows = (raw.get("reading_preview") or {}).get("rows", []) or raw.get("ec_samples", [])
+                for row in rows:
+                    if row.get("kind") == "tb" or row.get("channel") not in (None, channel):
+                        continue
+                    files[row["stem"]] = {
+                        **row,
+                        "source": "raw",
+                        "fit_status": "not_parsed",
+                        "channel": channel,
+                        **files.get(row["stem"], {}),
+                    }
+            empty = {
+                "points": [],
+                "params": None,
+                "curve": {"x": [], "y": []},
+                "resolution_curve": {"x": [], "y": []},
+                "diagnostics": {},
+                "version": None,
+            }
+            return clean(
+                {
+                    **empty,
+                    "baseline": empty,
+                    "files": list(files.values()),
+                    "selected_tb": self.selected_tb(state),
+                    "ec_dependency": state.get("ec_dependency"),
+                }
+            )
         result = ECInspector(adapter).overview(state["payload"], self.root(run_id) / "products", channel)
         for point in result["points"]:
             point["actual_used"] = point.get("used", False)
@@ -1373,14 +1447,6 @@ class Workbench:
         result["baseline"] = ECInspector(adapter).overview(
             state["payload"], self.root(run_id) / "baseline", channel
         )
-        if layer in ("EC_L0", "EC_L1"):
-            # Return available files even when the selected channel has no representative energy.
-            try:
-                result["files"] = adapter.ec_spectrum(
-                    state["payload"], self.root(run_id) / "products", layer, channel
-                ).get("files", [])
-            except FileNotFoundError:
-                result["files"] = []
         result["selected_tb"] = self.selected_tb(state)
         result["ec_dependency"] = state.get("ec_dependency")
         return clean(result)
@@ -1391,7 +1457,12 @@ class Workbench:
         adapter = self.adapter_for(state)
         if layer in ("EC_L0", "EC_L1"):
             result = adapter.ec_spectrum(
-                state["payload"], self.root(run_id) / "products", layer, channel, stem=stem
+                state["payload"],
+                self.root(run_id) / "products",
+                layer,
+                channel,
+                stem=stem,
+                preferred_stems=state.get("inventory", {}).get("representative", {}).get("ec_stems", []),
             )
         elif layer in ("EC_L2", "EC_L3") and point_id:
             result = ECInspector(adapter).spectrum(
@@ -1475,9 +1546,11 @@ class Workbench:
                 ("historical", hist, f"/api/runs/{run_id}/history/{layer}/"),
                 ("run", root / "products", f"/api/runs/{run_id}/files/products/"),
             ):
-                directory = source_root if source == "historical" else layer_dir(source_root, payload, layer)
-                for path in directory.rglob("*"):
-                    if not path.is_file():
+                # History was already enumerated for its count; current
+                # outputs are tracked explicitly by successful jobs.
+                paths = files if source == "historical" else (source_root / rel for rel in sorted(generated))
+                for path in paths:
+                    if source == "run" and not path.is_file():
                         continue
                     rel = path.relative_to(source_root).as_posix()
                     computed = source == "run" and rel in generated
