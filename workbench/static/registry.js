@@ -1,11 +1,57 @@
-/* Reusable acquisition profiles and read-only reference-spectrum inspection. */
+/* Payload reading presets and reference spectra. */
 "use strict";
 
 const payloadRegistry = { presets: [], draftReference: null, openToken: 0, datasetToken: 0, datasetLoading: false, datasetError: null, datasetId: null };
 const referenceState = { files: [], spectrum: null, analysis: null, token: 0, busy: false };
 
+function registryPresetName(preset) {
+  const payload = String(preset?.payload || "").trim();
+  let name = String(preset?.name || payload || "读取配置").trim();
+  if (payload && name.startsWith(payload)) name = name.slice(payload.length).replace(/^[\s·:：—-]+/, "");
+  return name || "默认配置";
+}
 function registryReferenceLabel(reference) {
-  return reference ? `${reference.name || reference.id} · ${reference.payload || "载荷"} · v${reference.version}` : "本试算尚未关联可复用预设";
+  return reference ? `${registryPresetName(reference)} · v${reference.version}` : "默认读取配置";
+}
+function registryPresetOption(preset, showPayload = false) {
+  const option = new Option(`${showPayload ? preset.payload + " / " : ""}${registryPresetName(preset)}`, preset.id);
+  option.title = `${preset.payload} · ${preset.name}`;
+  return option;
+}
+
+const registryOtherChoice = "__other_payloads__";
+function registryFillPresetChoices(selectId, payload, selectedId = "", showAll = false, emptyLabel = "默认读取配置") {
+  const select = clear($(selectId)); select.append(new Option(emptyLabel, ""));
+  const candidates = payloadRegistry.presets.filter(preset => showAll || preset.payload === payload || preset.id === selectedId);
+  for (const preset of candidates) select.append(registryPresetOption(preset, showAll || preset.payload !== payload));
+  if (!showAll && payloadRegistry.presets.some(preset => preset.payload !== payload && preset.id !== selectedId)) select.append(new Option("选择其他载荷预设…", registryOtherChoice));
+  select.value = candidates.some(preset => preset.id === selectedId) ? selectedId : "";
+  select.dataset.selectedPresetId = select.value; select.dataset.showAll = String(showAll);
+  return select;
+}
+function registryDatasetScope() {
+  const dataset = state.datasets.find(item => item.id === $("dataset-select").value);
+  return dataset?.acquisition_preset_match?.reference?.payload || $("new-run-payload").value.trim() || dataset?.payload || "";
+}
+function registryChoosePreset(selectId, versionId, payload) {
+  const select = $(selectId), version = $(versionId).value;
+  if (select.value === registryOtherChoice) {
+    registryFillPresetChoices(selectId, payload, select.dataset.selectedPresetId || "", true, "选择配置");
+    registryFillVersions(versionId, registryPreset(select.value), version);
+  } else {
+    select.dataset.selectedPresetId = select.value;
+    registryFillVersions(versionId, registryPreset(select.value));
+  }
+  return registryPreset(select.value);
+}
+function registryDatasetPayloadChanged() {
+  if (payloadRegistry.datasetLoading) return;
+  const selectedId = $("dataset-preset").value, version = $("dataset-preset-version").value;
+  const select = registryFillPresetChoices("dataset-preset", registryDatasetScope(), registryPreset(selectedId)?.id || "", false);
+  const matching = payloadRegistry.presets.filter(preset => preset.payload === registryDatasetScope());
+  if (!select.value && matching.length === 1) { select.value = matching[0].id; select.dataset.selectedPresetId = select.value; }
+  registryFillVersions("dataset-preset-version", registryPreset(select.value), select.value === selectedId ? version : undefined);
+  registryDatasetSummary();
 }
 
 function registryPreset(id) { return payloadRegistry.presets.find((preset) => preset.id === id); }
@@ -24,7 +70,8 @@ function registryFillVersions(selectId, preset, selectedVersion) {
 
 function registryCurrentSummary() {
   const reference = state.run?.acquisition_preset;
-  $("payload-preset-current").textContent = `${registryReferenceLabel(reference)}${reference?.modified ? " · 本试算配置已有修改" : reference ? ` · SHA-256 ${(reference.sha256 || "").slice(0, 10)}` : "。校验草稿后可另存为载荷预设。"}`;
+  $("payload-preset-current").textContent = reference ? `${registryReferenceLabel(reference)}${reference.modified ? " · 已修改" : ""}` : "默认读取配置";
+  $("payload-preset-current").title = reference?.sha256 || "";
 }
 
 async function registryFetch() {
@@ -45,10 +92,7 @@ async function registryOpen(acquisitionResponse = {}) {
   try {
     await registryFetch();
     if (token !== payloadRegistry.openToken || runId !== acquisitionDraft.runId) return;
-    const select = clear($("payload-preset-select"));
-    select.append(new Option("选择已保存的载荷预设", ""));
-    for (const preset of payloadRegistry.presets) select.append(new Option(`${preset.payload} · ${preset.name}`, preset.id));
-    select.value = reference?.id || "";
+    const select = registryFillPresetChoices("payload-preset-select", state.run?.payload || reference?.payload || "", reference?.id || "", false, "选择配置");
     registryFillVersions("payload-preset-version", registryPreset(select.value), reference?.version);
     registryCurrentSummary();
     registryRefreshButtons();
@@ -97,7 +141,7 @@ async function registryLoadDraft() {
     $("payload-preset-payload").value = result.preset.payload;
     acquisitionMarkChanged();
     acquisitionShowTab("xml");
-    acquisitionStatus(`${registryReferenceLabel(result.reference)} 已载入草稿。预览后可保存；点击“切换试算版本”可直接采用已保存版本。`);
+    acquisitionStatus(`${registryReferenceLabel(result.reference)} 已载入，编辑后检查配对并保存。`);
   } finally { acquisitionSetBusy(false); registryRefreshButtons(); }
 }
 
@@ -124,10 +168,10 @@ async function registryApply() {
     acquisitionDraft.sha256 = response.sha256;
     acquisitionRenderProfile(response.profile);
     acquisitionDraft.changed = false;
-    $("acquisition-version").textContent = `配置版本 ${response.revision} · SHA-256 ${(response.sha256 || "").slice(0, 10)}`;
+    $("acquisition-version").textContent = `修订 ${response.revision}`;
     await registryOpen(response);
-    acquisitionStatus(`本试算已采用 ${registryReferenceLabel(state.run.acquisition_preset)}。相关层的依赖状态已更新。`);
-    notify(`载荷读取配置已切换至 v${version}，后续计算使用该版本的 XML、换算、文件规则及源能线。`, "success");
+    acquisitionStatus(`已应用 ${registryReferenceLabel(state.run.acquisition_preset)}。`);
+    notify(`已应用配置 v${version}。`, "success");
   } finally { acquisitionSetBusy(false); registryRefreshButtons(); }
 }
 
@@ -152,7 +196,7 @@ async function registrySave(asVersion) {
     acquisitionDraft.sha256 = response.sha256;
     acquisitionRenderProfile(response.profile);
     acquisitionDraft.changed = false;
-    $("acquisition-version").textContent = `配置版本 ${response.revision} · SHA-256 ${(response.sha256 || "").slice(0, 10)}`;
+    $("acquisition-version").textContent = `修订 ${response.revision}`;
     await registryOpen(response);
     const reference = result.reference || state.run.acquisition_preset;
     acquisitionStatus(`${registryReferenceLabel(reference)} 已保存${bindDirectories ? "，并关联当前数据与产品目录" : ""}。新建试算可直接复用。`);
@@ -167,13 +211,13 @@ function registryDatasetSummary() {
   const version = $("dataset-preset-version").value;
   if (selected) {
     const matched = match.reference?.id === selected.id && Number(match.reference?.version) === Number(version);
-    $("dataset-preset-summary").textContent = `${matched ? "目录自动匹配" : "手动选择"}：${selected.name} · ${selected.payload} · v${version}。新试算保存完整配置快照。`;
+    $("dataset-preset-summary").textContent = `${matched ? "自动匹配" : "已选择"} · ${registryPresetName(selected)} · v${version}`;
   } else if (match.status === "conflict") {
-    $("dataset-preset-summary").textContent = `${(match.warnings || []).join(" ") || "目录关联了不同的读取预设。"} 请明确选择预设和版本。`;
+    $("dataset-preset-summary").textContent = "有多个匹配配置，请选择需要的版本。";
   } else if (match.status === "matched") {
     $("dataset-preset-summary").textContent = `自动采用 ${registryReferenceLabel(match.reference)}。`;
   } else {
-    $("dataset-preset-summary").textContent = "当前目录尚未关联载荷预设。可先使用默认读取配置，在试算中校验后另存为可复用预设。";
+    $("dataset-preset-summary").textContent = "使用载荷默认配置。";
   }
   $("dataset-preset-summary").classList.toggle("scan-error", match.status === "conflict" && !selected);
 }
@@ -193,10 +237,10 @@ async function registryDatasetSelection() {
     if (token !== payloadRegistry.datasetToken || datasetId !== $("dataset-select").value) return;
     const dataset = state.datasets.find((item) => item.id === datasetId);
     const match = dataset?.acquisition_preset_match || {};
-    const select = clear($("dataset-preset"));
-    select.append(new Option(match.status === "conflict" ? "存在关联冲突，请明确选择" : "按目录自动选择", ""));
-    for (const preset of payloadRegistry.presets) select.append(new Option(`${preset.payload} · ${preset.name}`, preset.id));
-    if (match.status === "matched") select.value = match.reference?.id || "";
+    const scope = registryDatasetScope();
+    const matching = payloadRegistry.presets.filter(preset => preset.payload === scope);
+    const selectedId = match.status === "matched" ? match.reference?.id || "" : match.status !== "conflict" && matching.length === 1 ? matching[0].id : "";
+    const select = registryFillPresetChoices("dataset-preset", scope, selectedId, false, match.status === "conflict" ? "选择配置" : match.status === "matched" ? "目录关联配置" : "默认读取配置");
     if (match.status === "matched" && $("new-run-payload").value === dataset.payload && match.reference?.payload) $("new-run-payload").value = match.reference.payload;
     registryFillVersions("dataset-preset-version", registryPreset(select.value), match.reference?.version);
     registryDatasetSummary();
@@ -218,7 +262,7 @@ function registryCreateSpec() {
     if (!(presetVersion > 0) || !registryPreset(presetId)) throw new Error("请选择有效的载荷预设版本。");
     return { preset_id: presetId, preset_version: presetVersion };
   }
-  if (match.status === "conflict") throw new Error("所选数据与产品目录关联的读取预设存在冲突。请先明确选择预设和版本。");
+  if (match.status === "conflict") throw new Error("请选择读取配置及版本。");
   if (match.status === "matched" && match.reference) return { preset_id: match.reference.id, preset_version: match.reference.version };
   return {};
 }
@@ -280,7 +324,7 @@ function referenceMetadata(spectrum) {
   if (metadata.source || metadata.source_name) holder.append(node("p", "", `文件标记：${metadata.source || metadata.source_name}`));
   if (metadata.energies_keV?.length) holder.append(node("p", "", `已知能线 / keV：${metadata.energies_keV.map((value) => number(value, 3)).join("、")}`));
   if (metadata.nominal_energy_keV !== undefined) holder.append(node("p", "", `文件标称能量：${number(metadata.nominal_energy_keV, 3)} keV`));
-  holder.append(node("p", "mono", `SHA-256 ${(spectrum.sha256 || "").slice(0, 14)}`));
+  holder.title = spectrum.sha256 ? `SHA-256 ${spectrum.sha256}` : "";
   const details = node("details"), summary = node("summary", "", "文件与读取信息"); details.append(summary, node("p", "", spectrum.path));
   for (const [key, value] of Object.entries(metadata)) details.append(node("p", "", `${key}：${valueText(value)}`));
   holder.append(details);
@@ -289,7 +333,7 @@ function referenceMetadata(spectrum) {
 async function referenceLoad(path, scanToken) {
   const token = scanToken ?? ++referenceState.token;
   referenceState.spectrum = null; referenceState.analysis = null;
-  referenceSetBusy(true, "正在读取真实计数谱…");
+  referenceSetBusy(true, "正在读取计数谱…");
   $("reference-status").classList.remove("scan-error");
   clear($("reference-analysis"));
   try {
@@ -308,7 +352,7 @@ async function referencePlot() {
   if (!window.Plotly) { chartMessage("reference-chart", "绘图库尚未载入，请重试。"); return; }
   const detection = referenceState.analysis?.peak_detection || {};
   const candidates = detection.candidates || [];
-  const traces = [{ type: "scatter", mode: "lines", x: spectrum.x, y: spectrum.y, name: "真实计数谱", line: { color: chartColors.blue, width: 1.15 }, hovertemplate: "%{x:.1f} ADC<br>%{y:.0f} counts<extra></extra>" }];
+  const traces = [{ type: "scatter", mode: "lines", x: spectrum.x, y: spectrum.y, name: "计数谱", line: { color: chartColors.blue, width: 1.15 }, hovertemplate: "%{x:.1f} ADC<br>%{y:.0f} counts<extra></extra>" }];
   if (candidates.length) {
     const closestY = (center) => {
       const x = spectrum.x || [], y = spectrum.y || [];
@@ -364,12 +408,13 @@ async function referenceAnalyze() {
 for (const id of ["payload-preset-select", "payload-preset-version", "payload-preset-name", "payload-preset-payload", "payload-preset-bind"]) {
   for (const type of ["input", "change"]) $(id).addEventListener(type, (event) => { event.stopPropagation(); registryRefreshButtons(); });
 }
-$("payload-preset-select").addEventListener("change", () => { const preset = registryPreset($("payload-preset-select").value); registryFillVersions("payload-preset-version", preset); if (preset) { $("payload-preset-name").value = preset.name; $("payload-preset-payload").value = preset.payload; } registryRefreshButtons(); });
+$("payload-preset-select").addEventListener("change", () => { const preset = registryChoosePreset("payload-preset-select", "payload-preset-version", state.run?.payload || ""); if (preset) { $("payload-preset-name").value = preset.name; $("payload-preset-payload").value = preset.payload; } registryRefreshButtons(); });
 $("load-payload-preset").addEventListener("click", () => registryLoadDraft().catch(acquisitionError));
 $("apply-payload-preset").addEventListener("click", () => registryApply().catch(acquisitionError));
 $("save-payload-preset-as").addEventListener("click", () => registrySave(false).catch(acquisitionError));
 $("publish-payload-preset-version").addEventListener("click", () => registrySave(true).catch(acquisitionError));
-$("dataset-preset").addEventListener("change", () => { const preset = registryPreset($("dataset-preset").value); registryFillVersions("dataset-preset-version", preset); registryDatasetSummary(); });
+$("dataset-preset").addEventListener("change", () => { registryChoosePreset("dataset-preset", "dataset-preset-version", registryDatasetScope()); registryDatasetSummary(); });
+$("new-run-payload").addEventListener("change", registryDatasetPayloadChanged);
 $("dataset-preset-version").addEventListener("change", registryDatasetSummary);
 $("reference-spectra").addEventListener("click", () => referenceOpen().catch(referenceError));
 $("close-reference").addEventListener("click", () => $("reference-dialog").close());
@@ -384,7 +429,7 @@ let sourceLibraryLoaded = false;
 let sourceLibraryRequest = null;
 function sourceLibrarySummary() {
   const item = indexedSources.find(item => item.id === $('source-select').value);
-  $('source-summary').textContent = item ? `${item.root} · ${number(item.total_bytes / 1e9, 3)} GB · 索引 ${item.indexed_at} · ${item.errors_count || 0} 项读取错误` : indexedSources.length ? `已保存 ${indexedSources.length} 个只读目录索引` : '尚未保存目录索引。填写原始数据目录后可建立索引。';
+  $('source-summary').textContent = item ? `${item.root}\n${number(item.file_count, 0)} 文件 · ${number(item.total_bytes / 1e9, 3)} GB${item.errors_count ? ` · ${item.errors_count} 项读取错误` : ''}` : '';
 }
 async function sourceLibraryRefresh(force = false) {
   if (sourceLibraryLoaded && !force) { sourceLibrarySummary(); return indexedSources; }
@@ -397,8 +442,11 @@ async function sourceLibraryRefresh(force = false) {
     const result = await api('/api/sources');
     const select = $('source-select'), previousId = select.value;
     indexedSources = result.sources || [];
-    clear(select).append(new Option('选择已索引目录', ''));
-    for (const item of indexedSources) select.append(new Option(`${item.label} · ${item.file_count} 文件`, item.id));
+    clear(select).append(new Option('选择目录', ''));
+    for (const item of indexedSources) {
+      const label = String(item.label || item.root.split(/[\\/]/).filter(Boolean).pop()).split(/\s*[·|]\s*/)[0].replace(/[（(][^）)]*[）)]/g, '').trim();
+      const option = new Option(label, item.id); option.title = item.root; select.append(option);
+    }
     select.value = indexedSources.some(item => item.id === previousId) ? previousId : '';
     sourceLibraryLoaded = true;
     sourceLibrarySummary();
@@ -411,18 +459,18 @@ $('source-library').addEventListener('toggle', () => { if ($('source-library').o
 $('source-select').addEventListener('change', sourceLibrarySummary);
 $('use-source').addEventListener('click', () => {
   const item = indexedSources.find(item => item.id === $('source-select').value);
-  if (!item) { datasetError(new Error('请选择已索引目录。')); return; }
+  if (!item) { datasetError(new Error('请选择目录。')); return; }
   $('dataset-raw-dir').value = item.root; $('dataset-product-dir').value = '';
   scanDatasets().catch(datasetError);
 });
 $('index-source').addEventListener('click', async () => {
   const root = $('dataset-raw-dir').value.trim();
   if (!root) { datasetError(new Error('先填写或浏览选择原始数据目录。')); return; }
-  $('index-source').disabled = true; $('source-status').textContent = '正在读取文件目录信息…';
+  $('index-source').disabled = true; $('source-status').textContent = '正在保存目录记录…';
   try {
     const result = await api('/api/sources/index', {method:'POST', body:{root}});
     await sourceLibraryRefresh(true); $('source-select').value = result.id; sourceLibrarySummary();
-    $('source-status').textContent = `索引已保存 · ${result.file_count} 文件 · ${number(result.total_bytes / 1e9, 3)} GB · ${result.errors_count || 0} 项读取错误`;
+    $('source-status').textContent = `目录已保存 · ${result.file_count} 文件${result.errors_count ? ` · ${result.errors_count} 项读取错误` : ""}`;
   } catch (error) { $('source-status').textContent = error.message; }
   finally { $('index-source').disabled = false; }
 });

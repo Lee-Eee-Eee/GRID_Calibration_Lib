@@ -475,7 +475,10 @@ class Workbench:
         with self.lock:
             for path in sorted(self.runs.glob("*/state.json"), reverse=True):
                 state = json.loads(path.read_text(encoding="utf-8"))
-                runs.append({k: state.get(k) for k in ("id", "payload", "created_at", "name")})
+                runs.append({
+                    **{k: state.get(k) for k in ("id", "payload", "created_at", "name")},
+                    "dataset_id": (state.get("dataset") or {}).get("id"),
+                })
         catalog = self.catalog.saved() or self.catalog.scan()
         self._annotate_datasets(catalog)
         return {

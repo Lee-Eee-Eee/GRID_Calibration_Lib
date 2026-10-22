@@ -14,6 +14,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+PARSER_CHUNK_BYTES = 4 * 1024 * 1024
+
 
 def _find_parser_resource_dir(root_dir: Path) -> Path:
     """Locate the bundled GRID-packet parser resources.
@@ -59,14 +61,29 @@ def _parse_silent(
         options["multi_evt"] = multi_evt
     if multi_step is not None:
         options["multi_step"] = multi_step
-    with contextlib.redirect_stdout(io.StringIO()):
-        return parse_fn(
-            str(path),
-            data_tag=data_tag,
-            endian=endian,
-            xml_file=str(xml_file),
-            **options,
-        )[0]
+    packet = ET.parse(xml_file).getroot().find(data_tag)
+    if packet is None:
+        raise ValueError(f"XML 中没有包标签 {data_tag}")
+    packet_len = int(packet.attrib["packet_len"])
+    # Calibration uses pulse features, not the full waveform. The parser still
+    # records waveform geometry to resolve the timestamp/feature/CRC offsets.
+    options["skip_et"] = ["waveform_data"]
+    pieces: dict[str, list[np.ndarray]] = {}
+    overlap = b""
+    with path.open("rb") as stream:
+        while block := stream.read(max(PARSER_CHUNK_BYTES, packet_len)):
+            buffer = overlap + block
+            with contextlib.redirect_stdout(io.StringIO()):
+                parsed = parse_fn(
+                    str(path), data_tag=data_tag, endian=endian,
+                    xml_file=str(xml_file), data=np.frombuffer(buffer, dtype=np.uint8), **options,
+                )[0]
+            for key, value in parsed.items():
+                pieces.setdefault(key, []).append(np.atleast_1d(value))
+            # A complete packet cannot start inside the last packet_len - 1
+            # bytes; retain just that suffix for a packet split by the next read.
+            overlap = buffer[-(packet_len - 1):] if packet_len > 1 else b""
+    return {key: np.concatenate(values, axis=0) for key, values in pieces.items()}
 
 
 def _extract_time_axis(
@@ -303,17 +320,23 @@ def parse_event_hk_to_dataframe(
             if np.any(ch == c) and (not t_c.size or not v_c.size):
                 raise ValueError(f"HK 缺少通道 {c} 的温度/偏压字段 {t_name!r}/{v_name!r}；请核对字段映射")
             if transform.get("hk_selection", "legacy_tail") == "stable_plateau":
-                target = float(np.nanmedian(v_c[-tail_samples:]))
                 tolerance = float(transform.get("stable_bias_tolerance", 0.2))
-                selected = np.isfinite(v_c) & (np.abs(v_c - target) <= tolerance)
-                indices = np.flatnonzero(selected)
-                if not indices.size or not np.isfinite(target) or target <= float(transform.get("stable_bias_min", 20)):
+                active = np.isfinite(v_c) & (v_c > float(transform.get("stable_bias_min", 20)))
+                if not active.any() and np.any(ch == c):
                     raise ValueError(f"HK 通道 {c} 没有有效稳态偏压；请核对电流修正和稳态阈值")
-                groups = np.split(indices, np.flatnonzero(np.diff(indices) != 1) + 1)
-                steady = max(groups, key=len)
-                v_c = v_c[steady]
-                if t_c.size == v_raw.size:
-                    t_c = t_c[steady]
+                if active.any():
+                    # Acquisition files may continue recording HK through a
+                    # shutdown ramp. Locate the populated operating plateau,
+                    # then retain one continuous interval and its paired T.
+                    levels, counts = np.unique(np.floor(v_c[active] / tolerance), return_counts=True)
+                    anchor = (levels[np.argmax(counts)] + 0.5) * tolerance
+                    target = float(np.median(v_c[active & (np.abs(v_c - anchor) <= tolerance)]))
+                    indices = np.flatnonzero(active & (np.abs(v_c - target) <= tolerance))
+                    groups = np.split(indices, np.flatnonzero(np.diff(indices) != 1) + 1)
+                    steady = max(groups, key=len)
+                    v_c = v_c[steady]
+                    if t_c.size == v_raw.size:
+                        t_c = t_c[steady]
         else:
             t_c = np.asarray([condition_value("temp", c)])
             v_c = np.asarray([condition_value("bias", c)])

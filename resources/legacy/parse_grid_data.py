@@ -11,7 +11,7 @@ import pandas as pd
 
 def find_pattern_in_buffer(buffer, pattern):
     Pattern = re.compile(pattern, re.S)
-    return np.array([(ip.start(), ip.end()) for ip in Pattern.finditer(buffer)]).astype(np.int_)
+    return np.array([(ip.start(), ip.end()) for ip in Pattern.finditer(buffer)], dtype=np.int_).reshape(-1, 2)
 
 def parse_grid_data_new(file_name, xml_file=None, data_tag='wf_packet', 
         multi_evt=None, multi_step=None, endian='MSB', crc_check=True, data=None,
@@ -53,6 +53,8 @@ def parse_grid_data_new(file_name, xml_file=None, data_tag='wf_packet',
     #    index = find_pattern_in_buffer(buffer, pattern)
     buffer = np.fromfile(file_name,dtype=np.uint8) if data is None else data
     index = find_pattern_in_buffer(buffer, pattern)
+    if not index.size:
+        return ({}, index)
     if not tail:
         index = np.array([(v[0],v[0]+packet_len) for v in index])
 
@@ -105,8 +107,14 @@ def parse_grid_data_single(file_name, evt_index, xml_file='grid_packet.xml', dat
 
     data0 = np.fromfile(file_name,'uint8') if data_array is None else data_array
 
-    data_index = np.r_[[np.arange(v[0],v[1]) for v in evt_index ]].astype(np.int_)
-    data0 = data0[data_index].reshape(-1,packet_len)
+    packets = np.empty((len(evt_index), packet_len), dtype=np.uint8)
+    offsets = np.arange(packet_len)
+    # Bound the temporary gather index instead of allocating N x packet_len
+    # int64 indices for the entire acquisition (1.44 GiB for 344,888 waveforms).
+    for first in range(0, len(evt_index), 8192):
+        starts = evt_index[first:first + 8192, 0]
+        packets[first:first + len(starts)] = data0[starts[:, None] + offsets]
+    data0 = packets
     packet_num = data0.shape[0]
 
     data_byte = {}
@@ -116,8 +124,6 @@ def parse_grid_data_single(file_name, evt_index, xml_file='grid_packet.xml', dat
     for et in et_packet.findall('./'):
         name = et.tag
         # print(name)
-        if name in skip_et:
-            continue
         start = int(et.find('start').text)
         if 'vary_wf' in et.find('start').attrib:
             start = (start + int(tag_info[tag_info['name']=='waveform_data'].iloc[0]['start']) + 
@@ -130,6 +136,8 @@ def parse_grid_data_single(file_name, evt_index, xml_file='grid_packet.xml', dat
         if name == 'waveform_data':
             length = np.atleast_1d(data['sample_length'])[0]
         tag_info.loc[len(tag_info.index)] = [name, start, size, length]
+        if name in skip_et:
+            continue
 
         endian_bak = endian
         if 'endian' in et.attrib:

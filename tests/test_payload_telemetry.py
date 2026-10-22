@@ -122,6 +122,31 @@ def test_invalid_hk_crc_cannot_supply_calibration_temperature_bias(tmp_path):
                                     prepare_profile(tmp_path, default_profile("10B")))
 
 
+def test_10b_working_plateau_survives_a_long_shutdown_hk_tail(tmp_path):
+    event, hk = tmp_path / "observe.dat", tmp_path / "hk.dat"
+    event.write_bytes(b"".join(waveform_packet(channel) for channel in range(4)))
+    # More than tail_samples shutdown records used to make the parser select
+    # the low-voltage tail and reject an otherwise valid operating interval.
+    hk.write_bytes(telemetry_packet(100) * 10 + telemetry_packet(2275) * 120 + telemetry_packet(150) * 80)
+    profile = prepare_profile(tmp_path, default_profile("10B"))
+    frame, metadata = parse_event_hk_to_dataframe(event, hk, tmp_path,
+                                                 "grid1x_wf_packet", "hk_grid1x_packet", True, profile)
+    target = 20.57 * 2.5 * 2275 / 4096 - 499 * 2.5 * 10 / (4096 * 548.88)
+    np.testing.assert_allclose(frame.bias, target)
+    assert metadata["channels"]["0"]["bias_n_raw"] == 210
+    assert metadata["channels"]["0"]["bias_n"] == 60
+    assert metadata["hk_crc"]["failed_packets"] == 0
+
+
+def test_10b_events_without_any_operating_hk_bias_still_fail(tmp_path):
+    event, hk = tmp_path / "observe.dat", tmp_path / "hk.dat"
+    event.write_bytes(waveform_packet(0))
+    hk.write_bytes(telemetry_packet(150) * 80)
+    with pytest.raises(ValueError, match="没有有效稳态偏压"):
+        parse_event_hk_to_dataframe(event, hk, tmp_path, "grid1x_wf_packet", "hk_grid1x_packet", True,
+                                    prepare_profile(tmp_path, default_profile("10B")))
+
+
 def test_10b_pairing_uses_metadata_exposure_and_keeps_distinct_source_background(tmp_path):
     names = {"tb_data": ["094_observe_50C_290.dat", "094_hk_50C_290.dat"],
              "x_data": ["253_observe_51_ch2.dat", "253_hk_51_ch2.dat"],
