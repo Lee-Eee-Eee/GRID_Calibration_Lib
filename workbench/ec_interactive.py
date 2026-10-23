@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 
+from ..common.spectral_models import unsupported_spectral_model
 from ..common.utils import read_json, read_parquet, read_parquet_metadata, validated_events
 from ..ec.processors.L2_processor import BIN_WIDTH, ECL2Processor
 from ..ec.processors.L3_processor import (
@@ -301,9 +302,10 @@ class ECInspector:
         lo, hi = float(point["lo"]), float(point["hi"])
         x = prepared["mids"]
         fit_x = x[(x >= lo) & (x <= hi)]
-        gaussian = GaussianModel().eval(
-            x=fit_x, amplitude=point["amplitude"], center=point["center"], sigma=point["sigma"]
-        )
+        pending = (point.get("placeholder") or unsupported_spectral_model(
+            self.adapter.detector_payload(payload) if hasattr(self.adapter, "detector_payload") else payload, ch))
+        gaussian = (np.zeros_like(fit_x) if pending else GaussianModel().eval(
+            x=fit_x, amplitude=point["amplitude"], center=point["center"], sigma=point["sigma"]))
         fitted_background = np.zeros_like(fit_x)
         model_params = point.get("model_parameters", {})
         mode = point.get("fit_mode", "gaus")

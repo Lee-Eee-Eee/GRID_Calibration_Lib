@@ -111,7 +111,7 @@ def test_ec_uses_propagated_signal_and_background_errors_and_retains_manual_boun
     )
     assert fit["lo"] == 15.125 and fit["hi"] == 80.375
     assert abs(fit["center"] - 48) < 3
-    assert fit["peak_detection"]["algorithm"] == "multiscale-snip-v1"
+    assert fit["peak_detection"]["algorithm"] == "multiscale-snip-v2"
     assert fit["fit_quality"]["accepted"] is False
 
 

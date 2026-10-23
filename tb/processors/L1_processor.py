@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -14,7 +16,9 @@ import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 from scipy.signal import savgol_filter
 
-from ...common.peak_finding import detect_photopeak, fit_quality
+from ...common.peak_finding import PeakDetectionError, detect_photopeak, fit_quality, propose_photopeaks
+from ...common.spectral_models import pending_peak_record, unsupported_spectral_model
+from ...common.tb_peak_context import gain_guides
 from ...common.utils import (
     DataLayout,
     get_timestamp,
@@ -68,8 +72,9 @@ class FitResult:
 class TBL1Processor:
     """TB L1层处理器 - 兼容旧流程拟合与绘图。"""
 
-    def __init__(self, payload_name: str, product_root: Path):
+    def __init__(self, payload_name: str, product_root: Path, *, response_payload: str | None = None):
         self.payload_name = payload_name
+        self.response_payload = response_payload or payload_name
         self.layout = DataLayout(product_root, payload_name)
 
     def process(
@@ -136,11 +141,26 @@ class TBL1Processor:
                 or any(type(ch) is not int or ch not in range(4) for ch in selected_channels)):
             raise ValueError("fit_channels must contain channel numbers 0–3")
         selected_channels = sorted(set(selected_channels))
+        skipped = [ch for ch in selected_channels if unsupported_spectral_model(self.response_payload, ch)]
+        results["skipped_channels"] = [{"channel": ch, "reason": unsupported_spectral_model(self.response_payload, ch)}
+                                       for ch in skipped]
+        selected_channels = [ch for ch in selected_channels if ch not in skipped]
+        if not selected_channels:
+            raise ValueError(unsupported_spectral_model(self.response_payload, skipped[0]))
         results["fit_channels"] = selected_channels
+        guides = {}
+        if (not cfg.get("peak_detection", {}).get("expected_center")
+                and (cfg.get("automatic_window") or not manual_windows)):
+            context_paths = cfg.get("peak_context_l0_paths", all_parquets)
+            guide_channels = [ch for ch in range(4) if not unsupported_spectral_model(self.response_payload, ch)]
+            guides = self._learn_peak_guides([Path(path) for path in context_paths], cfg, guide_channels)
+            results["peak_context"] = str(self.layout.get_tb_l1_json("auto_peak_context.json")) if guides else None
         results["n_files"] = len(parquet_files)
         results["file_outcomes"] = []
         results["channels_fitted"] = 0
         results["channels_failed"] = 0
+        results["channels_accepted"] = 0
+        results["channels_rejected"] = 0
         for file_index, parquet_file in enumerate(parquet_files, 1):
             started = perf_counter()
             stem = parquet_file.stem.removesuffix(".l0")
@@ -163,7 +183,8 @@ class TBL1Processor:
                 windows = {} if cfg.get("automatic_window") else manual_windows
                 json_path = self.layout.get_tb_l1_json(f"{stem}_fit_results.l1.json")
                 existing = read_json(json_path) if json_path.exists() else []
-                records = {row["channel"]: row for row in existing if isinstance(row, dict) and "channel" in row}
+                records = {row["channel"]: row for row in existing if isinstance(row, dict) and "channel" in row
+                           and not unsupported_spectral_model(self.response_payload, row["channel"])}
                 fits = {}
                 used_windows.setdefault(stem, {})
                 amplitudes = df["amp"].to_numpy(dtype=float)
@@ -173,13 +194,20 @@ class TBL1Processor:
                         amp_data = amplitudes[channels == ch]
                         if len(amp_data) < 10:
                             raise ValueError(f"Only {len(amp_data)} valid events; at least 10 are required")
+                        settings = dict(cfg.get("peak_detection") or {})
+                        guide = guides.get(stem, {}).get(str(ch)) if not self._is_manual_entry(windows.get(stem, {}).get(str(ch), {})) else None
+                        if guide:
+                            settings.update({key: guide[key] for key in ("expected_center", "expected_tolerance")})
                         fit_res = self._fit_channel(stem, ch, amp_data, windows, auto_window,
-                                                    cfg.get("peak_detection"), histogram)
+                                                    settings, histogram)
+                        if guide:
+                            fit_res.peak_detection["gain_guide"] = guide
                         is_manual = self._is_manual_entry(windows.get(stem, {}).get(str(ch), {}))
                         record = self._fit_record(ch, fit_res, meta, is_manual, len(amp_data), input_quality)
                         record["acquisition_profile_sha256"] = acquisition.get("profile_sha256")
                         records[ch] = record
                         fits[ch] = fit_res
+                        results["channels_accepted" if fit_res.fit_quality["accepted"] else "channels_rejected"] += 1
                         updated.append(ch)
                         used_windows[stem][str(ch)] = {
                             "lo": float(fit_res.lo), "hi": float(fit_res.hi), "manual": is_manual,
@@ -190,6 +218,20 @@ class TBL1Processor:
                         failures.append(failure)
                         results["errors"].append(failure)
                 if updated:
+                    for deferred in range(4):
+                        if not unsupported_spectral_model(self.response_payload, deferred):
+                            continue
+                        empty = pending_peak_record(self.response_payload, deferred)
+                        for key in ("temp", "temp_err", "bias", "bias_err"):
+                            values = meta.get(key, [])
+                            if len(values) > deferred:
+                                empty[key] = float(values[deferred])
+                        empty.update(window_lo=float((histogram or {}).get("min", 0.)),
+                                     window_hi=float((histogram or {}).get("max", 65536.)),
+                                     n_events=int(np.count_nonzero(channels == deferred)),
+                                     window_manual=False, input_quality=input_quality,
+                                     acquisition_profile_sha256=acquisition.get("profile_sha256"))
+                        records[deferred] = empty
                     # A channel edit preserves the other saved channel records.
                     # Failed requests retain their previous fit, while errors
                     # and channels_updated explicitly describe this attempt.
@@ -206,7 +248,9 @@ class TBL1Processor:
                         if ch in fits:
                             self._plot_channel(ax, ch, fits[ch])
                         else:
-                            ax.text(0.5, 0.5, f"CH{ch}: fit failed" if ch in selected_channels else f"CH{ch}: unchanged",
+                            label = (f"CH{ch}: Compton response, model pending" if unsupported_spectral_model(self.response_payload, ch)
+                                     else f"CH{ch}: fit failed" if ch in selected_channels else f"CH{ch}: unchanged")
+                            ax.text(0.5, 0.5, label,
                                     ha="center", va="center", transform=ax.transAxes)
                     fig.suptitle(f"{stem} | Fit mode: auto-select", fontsize=14)
                     # Fixed padding avoids constrained-layout's repeated text
@@ -215,7 +259,7 @@ class TBL1Processor:
                     fig_path = self.layout.get_tb_l1_figure(figure_name)
                     fig.savefig(fig_path, dpi=150, format="jpg")
                     results["outputs"].append({
-                        "stem": stem, "channels_fitted": len(records), "channels_updated": updated,
+                        "stem": stem, "channels_fitted": sum(not row.get("placeholder", False) for row in records.values()), "channels_updated": updated,
                         "channels_failed": [failure["channel"] for failure in failures],
                         "json": json_path.name, "figure": fig_path.name, "input_quality": input_quality,
                     })
@@ -273,6 +317,83 @@ class TBL1Processor:
             write_json(snap_path, used_windows)
             write_json(manifest_path, results)
         return results
+
+    def _learn_peak_guides(self, paths, config, channels):
+        """Cache an independent L0-series search guide in this output run."""
+        if len(paths) < 16:
+            return {}
+        import pyarrow.parquet as pq
+
+        from ...common.peak_finding import ALGORITHM_SHA256
+        from ...workbench.acquisition import tb_histogram_config
+
+        unique = {}
+        for path in paths:
+            unique.setdefault(path.stem.removesuffix(".l0"), path)
+        paths = [unique[stem] for stem in sorted(unique)]
+        inputs = []
+        skipped_inputs = []
+        for path in paths:
+            try:
+                digest = hashlib.sha256()
+                with path.open("rb") as source:
+                    while chunk := source.read(1024 * 1024):
+                        digest.update(chunk)
+                inputs.append({"stem": path.stem.removesuffix(".l0"), "size": path.stat().st_size,
+                               "sha256": digest.hexdigest()})
+            except OSError as exc:
+                inputs.append({"stem": path.stem.removesuffix(".l0"), "unavailable": type(exc).__name__})
+        identity = {"inputs": inputs, "settings": config.get("peak_detection") or {},
+                    "histogram": config.get("histogram_config"), "channels": channels,
+                    "search_sha256": ALGORITHM_SHA256,
+                    "context_sha256": hashlib.sha256(Path(__file__).resolve().parents[2].joinpath(
+                        "common/tb_peak_context.py").read_bytes()).hexdigest()}
+        signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        output = self.layout.get_tb_l1_json("auto_peak_context.json")
+        try:
+            cached = read_json(output) if output.exists() else {}
+        except (OSError, ValueError):
+            cached = {}
+        if cached.get("signature") == signature:
+            return cached["guides"]
+        spectra, temperatures, biases, stems = [], [], [], []
+        reference_profile, histogram = None, None
+        for path in paths:
+            try:
+                parquet = pq.ParquetFile(path)
+                metadata = parquet.schema_arrow.metadata or {}
+                hk = json.loads(metadata.get(b"hk_data", b"{}"))
+                acquisition = json.loads(metadata.get(b"acquisition", b"{}"))
+                profile = acquisition.get("profile_sha256")
+                if len(hk.get("temp", [])) != 4 or len(hk.get("bias", [])) != 4:
+                    continue
+                if histogram is None:
+                    reference_profile = profile
+                    histogram = config.get("histogram_config") or tb_histogram_config(acquisition)
+                    edges = np.arange(histogram["min"], histogram["max"] + histogram["bin_width"], histogram["bin_width"])
+                if profile != reference_profile:
+                    continue
+                columns = [name for name in ("amp", "channel", "crc_check") if name in parquet.schema_arrow.names]
+                frame, _ = validated_events(parquet.read(columns=columns).to_pandas())
+                amplitude, channel = frame["amp"].to_numpy(), frame["channel"].to_numpy()
+                spectra.append([np.histogram(amplitude[channel == ch], edges)[0] for ch in range(4)])
+                temperatures.append(hk["temp"])
+                biases.append(hk["bias"])
+                stems.append(path.stem.removesuffix(".l0"))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                skipped_inputs.append({"stem": path.stem.removesuffix(".l0"), "error": str(exc)})
+        guides = {stem: {} for stem in stems}
+        if spectra:
+            spectra, temperatures, biases = map(np.asarray, (spectra, temperatures, biases))
+            x = (edges[1:] + edges[:-1]) / 2
+            for ch in channels:
+                for stem, guide in zip(stems, gain_guides(x, spectra[:, ch], temperatures[:, ch], biases[:, ch],
+                                                         config.get("peak_detection")), strict=True):
+                    if guide:
+                        guide["anchor_stems"] = [stems[index] for index in guide.pop("anchor_indices")]
+                        guides[stem][str(ch)] = guide
+        write_json(output, {**identity, "signature": signature, "guides": guides, "skipped_inputs": skipped_inputs})
+        return guides
 
     def _fit_record(self, ch, fit_res, meta, is_manual, n_events, input_quality):
         temps = meta.get("temp", [float("nan")] * 4) if isinstance(meta, dict) else [float("nan")] * 4
@@ -397,6 +518,27 @@ class TBL1Processor:
         hist, edges = np.histogram(energy, bins=bins)
         mids = (edges[:-1] + edges[1:]) / 2.0
 
+        return self._fit_histogram(stem, ch, mids, hist, config, auto_window, peak_config, histogram)
+
+    def _fit_histogram(
+        self, stem: str, ch: int, mids: np.ndarray, hist: np.ndarray,
+        config: dict[str, Any], auto_window: bool,
+        peak_config: dict[str, Any] | None = None,
+        histogram: dict[str, float] | None = None,
+    ) -> FitResult:
+        """Fit the same original counting histogram used by the event processor.
+
+        Exposing this step permits repeatable spectral studies without expanding
+        histogram counts back into artificial pulse events.
+        """
+        mids, hist = np.asarray(mids, dtype=float), np.asarray(hist, dtype=float)
+        if reason := unsupported_spectral_model(self.response_payload, ch):
+            raise ValueError(reason)
+        if histogram is None:
+            width = float(np.median(np.diff(mids)))
+            histogram = {"min": float(mids[0] - width / 2),
+                         "max": float(mids[-1] + width / 2), "bin_width": width}
+
         window = 11 if len(hist) >= 11 else max(5, len(hist) // 2 * 2 + 1)
         hist_smooth = np.asarray(
             savgol_filter(hist.astype(float), window_length=window, polyorder=2),
@@ -407,18 +549,79 @@ class TBL1Processor:
         manual = self._is_manual_entry(item)
 
         requested = [float(item["lo"]), float(item["hi"])] if manual else None
-        candidate, detection = detect_photopeak(mids, hist, window=requested, config=peak_config)
-        detection["histogram"] = histogram
-        peak_x = candidate.center
         if manual:
+            candidate, detection = detect_photopeak(mids, hist, window=requested, config=peak_config)
             lo, hi = requested
-        else:
-            lo, hi = candidate.window
-            # A rejected leading noise component must remain outside the auto
-            # fit; an explicit user window is kept byte-for-byte above.
-            if detection["noise_boundary"] is not None:
-                lo = max(lo, detection["noise_boundary"])
-            lo, hi = self._get_fit_window(item, lo, hi, auto_window)
+            detection["histogram"] = histogram
+            return self._fit_candidate(mids, hist, hist_smooth, candidate, detection, lo, hi, histogram)
+
+        # A TB scintillation peak must be resolved at more than the single-bin
+        # scale. These dimensionless response bounds are configurable; no
+        # payload-specific ADC threshold or historical hand window is used.
+        settings = {"min_resolution": .03, "max_resolution": .6, **(peak_config or {})}
+        candidates, detection = propose_photopeaks(mids, hist, config=settings)
+        detection["histogram"] = histogram
+        # Identify the strongest original-count Gaussian contrast before judging
+        # model adequacy. A poor fit of that signal must not silently switch to
+        # a statistically weaker, distant continuum structure.
+        candidate = candidates[0]
+        if (len(candidates) > 1 and candidates[1].score > .82 * candidate.score
+                and abs(candidates[1].center - candidate.center) > 2 * max(candidate.sigma, candidates[1].sigma)):
+            raise PeakDetectionError("Competing photopeaks need an independent gain anchor", detection)
+        trials, rejected = [], []
+        initial_sigma = candidate.sigma
+        for extent in (3., 2.5, 2.):
+            lo = max(float(mids[0]), candidate.center - extent * candidate.sigma)
+            hi = min(float(mids[-1]), candidate.center + extent * candidate.sigma)
+            if settings.get("noise_ceiling") is not None:
+                lo = max(lo, float(settings["noise_ceiling"]))
+            details = copy.deepcopy(detection)
+            details.update(manual_window=False, selected_center=candidate.center,
+                           candidate_origin="original_count_model_comparison",
+                           window_sigma=extent, response_bounds={
+                               "min_resolution": settings["min_resolution"],
+                               "max_resolution": settings["max_resolution"],
+                           })
+            try:
+                fit = self._fit_candidate(mids, hist, hist_smooth, candidate, details, lo, hi, histogram)
+                fraction = fit.fwhm / max(fit.center, 1e-12)
+                if not settings["min_resolution"] <= fraction <= settings["max_resolution"]:
+                    fit.fit_quality["accepted"] = False
+                    fit.fit_quality["status"] = "rejected"
+                    fit.fit_quality["warnings"].append("Fitted width is outside the configured scintillation response range")
+                trials.append(fit)
+                if len(trials) == 1 and fit.sigma < .7 * initial_sigma:
+                    # A coarse-scale shoulder can merge with a neighbour.
+                    # Estimate its width from original counts, then refit
+                    # a conventional interval in those measured sigma units.
+                    candidate.sigma = fit.sigma
+                # Keep the widest accepted interval. This is bounded model
+                # adequacy testing; it does not shrink to an arbitrary set
+                # of bins until an apparently good chi-square is obtained.
+                if fit.fit_quality["accepted"]:
+                    break
+            except (ValueError, RuntimeError) as exc:
+                rejected.append({"center": candidate.center, "window_sigma": extent, "error": str(exc)})
+        if not trials:
+            detection["fit_trials"] = rejected
+            raise PeakDetectionError("No resolved photopeak model could be fitted", detection)
+
+        def score(fit):
+            quality = fit.fit_quality
+            return np.sqrt(max(quality["delta_bic_background"], 0))
+
+        trials.sort(key=lambda fit: (not fit.fit_quality["accepted"], -score(fit)))
+        selected = trials[0]
+        selected.peak_detection["fit_trials"] = [{
+            "center": fit.center, "sigma": fit.sigma, "window": [fit.lo, fit.hi],
+            "score": float(score(fit)), "quality": fit.fit_quality,
+        } for fit in trials]
+        selected.peak_detection["fit_errors"] = rejected
+        selected.peak_detection["selection_status"] = "resolved" if selected.fit_quality["accepted"] else "rejected"
+        return selected
+
+    def _fit_candidate(self, mids, hist, hist_smooth, candidate, detection, lo, hi, histogram):
+        peak_x = candidate.center
 
         cut_mask = (mids >= lo) & (mids <= hi)
         x_cut = mids[cut_mask]
@@ -535,7 +738,7 @@ class TBL1Processor:
         model = GaussianModel(prefix="g_") + LinearModel(prefix="b_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 12), max=max(3.0 * sigma_guess, 2.0))
         params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
         params["b_intercept"].set(value=float(max(np.percentile(y_cut, 20), 0.0)), min=0.0)
         params["b_slope"].set(value=0.0)
@@ -549,10 +752,10 @@ class TBL1Processor:
         model = GaussianModel(prefix="g_") + ExponentialModel(prefix="e_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 12), max=max(3.0 * sigma_guess, 2.0))
         params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
         params["e_amplitude"].set(value=float(max(np.percentile(y_cut, 20), 1.0)), min=0.0)
-        params["e_decay"].set(value=100.0, min=1.0, max=1000.0)
+        params["e_decay"].set(value=max(float(np.ptp(x_cut)), 1.), min=1.0, max=max(float(np.ptp(x_cut)) * 100, 1000.))
 
         weights = 1.0 / np.sqrt(np.maximum(y_cut, 1.0))
         result = model.fit(y_cut, params, x=x_cut, weights=weights)
@@ -563,7 +766,7 @@ class TBL1Processor:
         model = GaussianModel(prefix="g_") + QuadraticModel(prefix="q_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 12), max=max(3.0 * sigma_guess, 2.0))
         params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
         params["q_a"].set(value=0.0)
         params["q_b"].set(value=0.0)
@@ -578,7 +781,7 @@ class TBL1Processor:
         model = GaussianModel(prefix="g_")
         params = model.make_params()
         params["g_center"].set(value=float(peak_x), min=float(lo), max=float(hi))
-        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 3), max=max(3.0 * sigma_guess, 2.0))
+        params["g_sigma"].set(value=max(sigma_guess, 1.0), min=max(0.7, sigma_guess / 12), max=max(3.0 * sigma_guess, 2.0))
         params["g_amplitude"].set(value=float(np.max(y_cut) * sigma_guess * np.sqrt(2.0 * np.pi)), min=0.0)
 
         weights = 1.0 / np.sqrt(np.maximum(y_cut, 1.0))

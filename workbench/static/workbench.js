@@ -23,7 +23,39 @@ const chartHover = { bgcolor: "#ffffff", bordercolor: "#c4ccd4", font: { ...char
 function node(tag, className, value) { const el = document.createElement(tag); if (className) el.className = className; if (value !== undefined && value !== null) el.textContent = String(value); return el; }
 function clear(el) { el.replaceChildren(); return el; }
 function plotTarget(chart) { for (const child of [...chart.children]) if (child.matches("p.chart-loading, table, .window-handle")) child.remove(); return chart; }
-function spectrumChart() { return $(state.layer === "TB_L1" ? "surface-chart" : "spectrum-chart"); }
+function isPeakReviewLayer(layer = state.layer) { return ["TB_L1", "EC_L2"].includes(layer); }
+function detectorPayload() { return state.run?.acquisition_preset?.payload || state.run?.dataset?.profile || state.run?.dataset?.source_payload || state.run?.payload || ""; }
+function hasPlasticChannel() { return ["10B", "11B"].includes(String(detectorPayload()).toUpperCase()); }
+function supportedFitChannels() { return hasPlasticChannel() ? [0, 1, 2] : [0, 1, 2, 3]; }
+function unsupportedSpectralModel(channel = state.channel, point = state.point, spectrum = state.spectrum) {
+  if (!["TB_L1", "TB_L2", "EC_L2", "EC_L3"].includes(state.layer)) return "";
+  if (hasPlasticChannel() && channel === 3) return "塑料闪烁体 · 康普顿响应，拟合方案待定";
+  const value = spectrum?.unsupported_spectral_model || point?.unsupported_spectral_model;
+  return typeof value === "string" ? value : value?.reason || "";
+}
+function spectrumChart() { return $(isPeakReviewLayer() ? "surface-chart" : "spectrum-chart"); }
+function fitFeedback(text = "", status = "neutral") { const holder = $("fit-result-status"); holder.textContent = text; holder.dataset.status = status; holder.hidden = !text; }
+function fitCompletionFeedback(job, automatic, channel) {
+  const pending = job?.status === "partial" || state.spectrum?.fit?.fit_quality?.accepted === false;
+  fitFeedback(pending ? "拟合完成 · 峰质量待复核" : `${automatic ? "自动选窗" : "当前窗口拟合"}完成 · CH ${channel}`, pending ? "attention" : "success");
+}
+function updateSpectralModelControls() {
+  const reason = unsupportedSpectralModel(), holder = $("spectral-model-note");
+  holder.hidden = !reason; holder.textContent = reason;
+  for (const id of ["fit-spectrum", "auto-fit-spectrum", "refit-tb", "run-layer"]) {
+    if ($(id).dataset.unsupportedReason && $(id).title === $(id).dataset.unsupportedReason) $(id).title = "";
+    delete $(id).dataset.unsupportedReason;
+  }
+  if (reason) {
+    for (const id of ["fit-spectrum", "auto-fit-spectrum", "refit-tb"]) { $(id).disabled = true; $(id).title = reason; $(id).dataset.unsupportedReason=reason; }
+    if (isPeakReviewLayer() && $("run-scope").value !== "full") { $("run-layer").disabled = true; $("run-layer").title = reason; $("run-layer").dataset.unsupportedReason=reason; }
+    $("peak-diagnostics").hidden = true;
+    clear($("spectrum-params"));
+  }
+  $("l1-fit-all-channels").textContent = hasPlasticChannel() ? "拟合此文件 · CH 0–2" : "拟合此文件 · 四通道";
+  $("fit-next-step").hidden = !isPeakReviewLayer();
+  $("review-next-layer").textContent = state.layer === "TB_L1" ? "TB L2 · 曲面拟合 →" : "EC L3 · 能量刻度 →";
+}
 function chartMessage(id, text) { const chart = $(id); if (window.Plotly && chart.data) Plotly.purge(chart); clear(chart).append(node("p", "chart-loading", text)); }
 function valueText(value) { return value === null || value === undefined ? "—" : Array.isArray(value) ? value.join(" · ") : typeof value === "object" ? JSON.stringify(value) : String(value); }
 function versionText(value) { return !value ? "历史基线" : typeof value === "object" ? `${value.filename || value.version || "TB"}${value.sha256 ? ` · ${value.sha256.slice(0, 8)}` : ""}` : String(value); }
@@ -194,6 +226,10 @@ function currentLayerJob() {
 function datasetMatchesPayload(dataset, payload) { return dataset.payload === payload || dataset.acquisition_preset_match?.reference?.payload === payload || (state.bootstrap?.runs || []).some(run => run.dataset_id === dataset.id && run.payload === payload); }
 function renderCurrentStatus() {
   if (!state.run) return;
+  if (unsupportedSpectralModel()) {
+    $("stage-status").replaceWith(Object.assign(badge("idle", "拟合方案待定"), {id: "stage-status"}));
+    return;
+  }
   const job = currentLayerJob(), stage = state.run.stages?.[state.layer] || {};
   let status = job?.status || "idle", label;
   if (state.layer === "TB_L1" && state.point) {
@@ -453,6 +489,29 @@ function filteredL1Files() {
   return (state.l1Overview?.files || []).filter(file => file.has_l0 && (!search || `${file.stem} ${file.channels[state.channel]?.temp ?? ""} ${file.channels[state.channel]?.bias ?? ""}`.toLowerCase().includes(search)) && (filter === "all" || file.status === filter));
 }
 
+function filteredEcReviewPoints() {
+  const search = $("peak-file-search").value.trim().toLowerCase();
+  return (state.ecOverview?.points || []).filter(point => !search || `${point.stem || point.source_name || ""} ${point.E ?? ""}`.toLowerCase().includes(search));
+}
+
+function renderEcReviewFiles() {
+  if (state.layer !== "EC_L2") return;
+  const points = filteredEcReviewPoints(), select = clear($("point-select"));
+  for (const point of points) select.append(new Option(`${number(point.E, 3)} keV · ${point.stem || point.source_name || "能线"}`, point.id));
+  select.value = state.point?.id || "";
+  const index = points.findIndex(point => point.id === state.point?.id);
+  $("peak-file-position").textContent = `${index < 0 ? "—" : index + 1} / ${points.length}`;
+  $("peak-file-prev").disabled = state.selecting || state.busy || index <= 0;
+  $("peak-file-next").disabled = state.selecting || state.busy || !points.length || index === points.length - 1;
+  $("point-count").textContent = `${(state.ecOverview?.points || []).length} 条能线`;
+}
+
+async function moveEcReviewFile(offset) {
+  const points = filteredEcReviewPoints(), index = points.findIndex(point => point.id === state.point?.id);
+  const point = points[index + offset];
+  if (point) await selectEcPoint(point);
+}
+
 function renderL1Workspace() {
   if (state.layer !== "TB_L1") return;
   const files = filteredL1Files(), all = state.l1Overview?.files || [], holder = $("l1-file-list"), scroll = holder.scrollTop || 0, previous = holder.dataset.selectedStem;
@@ -463,7 +522,8 @@ function renderL1Workspace() {
     button.title = file.stem;
     button.setAttribute("aria-current", String(file.stem === state.point?.stem));
     const channel = file.channels[state.channel] || {}, condition = Number.isFinite(channel.temp) ? `${number(channel.temp, 1)} °C · ${number(channel.bias, 3)} V` : "";
-    button.append(node("span", "l1-file-name", file.stem), node("span", "l1-file-condition", condition), node("span", "l1-file-state", `${file.fitted} / 4 已拟合${file.status === "attention" ? " · 待复核" : ""}`));
+    const supported = supportedFitChannels(), fittedCount = file.channels.length ? supported.filter(ch => file.channels[ch]?.fit_status === "fitted").length : file.fitted;
+    button.append(node("span", "l1-file-name", file.stem), node("span", "l1-file-condition", condition), node("span", "l1-file-state", `${fittedCount} / ${supported.length} 已拟合${file.status === "attention" ? " · 待复核" : ""}`));
     button.addEventListener("click", handleError(() => selectPoint({ ...channel, stem:file.stem, id:channel.id || `${state.run.payload}:${file.stem}:${state.channel}` })));
     holder.append(button);
   }
@@ -477,14 +537,14 @@ function renderL1Workspace() {
   $("point-count").textContent = `${all.filter(file => file.has_l0).length} 个文件`;
   const channels = all.find(file => file.stem === state.point?.stem)?.channels || [], summary = clear($("l1-channel-summary"));
   for (const channel of channels) {
-    const attention = ["failed", "rejected"].includes(channel.fit_status), fitted = channel.fit_status === "fitted" && !channel.pending_window;
+    const unsupported = unsupportedSpectralModel(channel.channel, channel, null), attention = !unsupported && ["failed", "rejected"].includes(channel.fit_status), fitted = !unsupported && channel.fit_status === "fitted" && !channel.pending_window;
     const card = node("button", `l1-channel-card${channel.channel === state.channel ? " active" : ""} status-${attention ? "attention" : fitted ? "success" : "pending"}`);
     card.type = "button"; card.dataset.l1Channel = channel.channel;
     card.setAttribute("aria-pressed", String(channel.channel === state.channel));
-    const heading = node("span", "channel-heading"); heading.append(node("span", "channel-name", `CH ${channel.channel}`), node("span", "channel-state", channel.pending_window ? "待重拟合" : attention ? "待复核" : fitted ? "已拟合" : "未拟合"));
-    const value = node("span", "channel-value", number(channel.center, 2)); value.append(node("small", "", " ADC"));
-    card.append(heading, value, node("span", "channel-quality", `R² ${number(channel.rsquared, 4)}`));
-    card.title = channel.error ? jobErrorText(channel.error) : `CH ${channel.channel} · 峰位 ${number(channel.center, 3)} ± ${number(channel.center_err, 3)} ADC`;
+    const heading = node("span", "channel-heading"); heading.append(node("span", "channel-name", `CH ${channel.channel}`), node("span", "channel-state", unsupported ? "待定" : channel.pending_window ? "待重拟合" : attention ? "待复核" : fitted ? "已拟合" : "未拟合"));
+    const value = node("span", "channel-value", unsupported ? "—" : number(channel.center, 2)); if (!unsupported) value.append(node("small", "", " ADC"));
+    card.append(heading, value, node("span", "channel-quality", unsupported ? "康普顿响应" : `R² ${number(channel.rsquared, 4)}`));
+    card.title = unsupported || (channel.error ? jobErrorText(channel.error) : `CH ${channel.channel} · 峰位 ${number(channel.center, 3)} ± ${number(channel.center_err, 3)} ADC`);
     card.addEventListener("click", handleError(() => selectChannel(channel.channel))); summary.append(card);
   }
   renderL1Progress();
@@ -518,7 +578,10 @@ function renderL1Progress(job = [...(state.run?.jobs || [])].reverse().find(item
   const holder = $("l1-progress"); holder.hidden = !job; if (!job) return;
   let progress;
   for (const line of (job.log || "").split("\n")) if (line.includes("L1_PROGRESS ")) { try { progress = JSON.parse(line.split("L1_PROGRESS ").at(-1)); } catch {} }
-  const summary = job.result?.summary, outcome = summary ? `${summary.channels_succeeded ?? summary.fitted ?? 0} 通道完成 · ${summary.channels_failed ?? summary.failed ?? 0} 通道待复核` : "";
+  const summary = job.result?.summary, processor = job.result?.processor;
+  const outcome = summary ? processor?.channels_accepted != null
+    ? `${summary.channels_succeeded ?? summary.fitted ?? 0} 通道已拟合 · ${processor.channels_accepted} 通过 · ${(processor.channels_rejected || 0) + (summary.channels_failed ?? summary.failed ?? 0)} 待复核`
+    : `${summary.channels_succeeded ?? summary.fitted ?? 0} 通道完成 · ${summary.channels_failed ?? summary.failed ?? 0} 通道待复核` : "";
   holder.dataset.status = job.status;
   holder.textContent = ["最近计算", statusNames[job.status] || (job.status === "partial" ? "部分完成" : job.status), progress ? `${progress.completed} / ${progress.total} 文件 · ${progress.stem}` : job.config?.only?.join(", ") || "全部文件", outcome].filter(Boolean).join(" · ");
 }
@@ -572,7 +635,7 @@ async function selectPoint(point) {
   catch (error) { if (token === state.spectrumToken) { state.selecting = false; setBusy(state.busy); } throw error; }
   if (token !== state.spectrumToken) return;
   if (state.point?.id !== point.id) { $("peak-noise-ceiling").value=""; $("peak-expected-center").value=""; }
-  $("auto-fit-status").textContent="";
+  $("auto-fit-status").textContent=""; fitFeedback();
   state.point = point; state.spectrum = null; state.dirty = false; $("point-select").value = point.id || point.stem;
   renderL1Workspace();
   if (state.layer === "TB_L1") { chartMessage("surface-chart", `正在读取 ${point.stem} · CH ${state.channel}…`); chartMessage("residual-chart", "读取拟合残差…"); $("surface-caption").textContent = `${point.stem} · CH ${state.channel} · 读取中`; $("residual-metric").textContent = ""; $("peak-diagnostics").hidden = true; }
@@ -610,7 +673,7 @@ async function selectPoint(point) {
     displayWindowValue("window-lo", override?.lo ?? fit.window_lo ?? fit.lo ?? spectrum.histogram_config?.min ?? "");
     displayWindowValue("window-hi", override?.hi ?? fit.window_hi ?? fit.hi ?? spectrum.histogram_config?.max ?? "");
     $("window-lo").disabled = state.busy; $("window-hi").disabled = state.busy;
-    $("window-status").textContent = (state.run.pending_windows || []).includes(point.id) ? "修订已保存 · 待拟合" : override ? "已应用修订窗" : spectrum.fit ? "当前拟合窗" : "尚未拟合 · 可自动寻峰或设置窗口";
+    $("window-status").textContent = unsupportedSpectralModel() ? "康普顿响应 · 拟合方案待定" : (state.run.pending_windows || []).includes(point.id) ? "修订已保存 · 待拟合" : override ? "已应用修订窗" : spectrum.fit ? "当前拟合窗" : "尚未拟合 · 可自动寻峰或设置窗口";
     const params = clear($("spectrum-params"));
     for (const [label, value] of [["峰位 / ADC", `${number(fit.center, 3)} ± ${number(fit.center_err, 3)}`], ["σ / ADC", number(fit.sigma, 3)], ["分辨率", fit.resolution === undefined ? "—" : `${number(fit.resolution * (fit.resolution > 1 ? 1 : 100), 2)}%`], ["R²", number(fit.rsquared, 5)], ["拟合模型", fit.fit_mode || fit.mode || "—"]]) {
       const item = node("div", "param-item"); item.append(node("span", "", label), node("strong", "", value)); params.append(item);
@@ -631,10 +694,11 @@ async function renderSpectrum() {
   const context = plotContext();
   const data = state.spectrum; if (!data) return;
   if (["TB_L0", "EC_L0", "EC_L1"].includes(state.layer)) { $("spectrum-chart").hidden = true; return; }
-  $("spectrum-chart").hidden = state.layer === "TB_L1";
+  $("spectrum-chart").hidden = isPeakReviewLayer();
   const chart = spectrumChart();
-  const traces = [{ type: "scatter", mode: "lines", x: data.x || [], y: (data.y || []).map((v) => v > 0 ? v : null), line: { color: chartColors.ink, width: 1.2, shape: "hv" }, name: "真实计数谱", hovertemplate: "ADC %{x:.1f}<br>计数 %{y:.0f}<extra></extra>" }];
-  const curve = ["TB_L0", "EC_L0", "EC_L1"].includes(state.layer) ? {} : data.curve || {};
+  const rateSpectrum = state.layer.startsWith("EC") && state.layer !== "EC_L0";
+  const traces = [{ type: "scatter", mode: "lines", x: data.x || [], y: (data.y || []).map((v) => v > 0 ? v : null), line: { color: chartColors.ink, width: 1.2, shape: "hv" }, name: rateSpectrum ? "净计数率" : "真实计数谱", hovertemplate: rateSpectrum ? "ADC %{x:.1f}<br>净计数率 %{y:.5g}<extra></extra>" : "ADC %{x:.1f}<br>计数 %{y:.0f}<extra></extra>" }];
+  const curve = ["TB_L0", "EC_L0", "EC_L1"].includes(state.layer) || unsupportedSpectralModel() ? {} : data.curve || {};
   if (curve.x?.length && curve.y?.length) traces.push({ type: "scatter", mode: "lines", x: curve.x, y: curve.y, line: { color: chartColors.fit, width: 2.1 }, name: "峰 + 背景拟合", hovertemplate: "ADC %{x:.1f}<br>拟合 %{y:.2f}<extra></extra>" });
   else if (curve.x?.length && curve.gaussian?.length) traces.push({ type: "scatter", mode: "lines", x: curve.x, y: curve.gaussian, line: { color: chartColors.fit, width: 1.8, dash: "dash" }, name: "高斯峰分量（历史背景参数缺失）", hovertemplate: "ADC %{x:.1f}<br>高斯分量 %{y:.2f}<extra></extra>" });
   if (curve.x?.length && curve.background?.length) traces.push({ type: "scatter", mode: "lines", x: curve.x, y: curve.background.map((v) => v > 0 ? v : null), line: { color: "#89939d", width: 1.3, dash: "dash" }, name: "背景", hoverinfo: "skip" });
@@ -647,25 +711,31 @@ async function renderSpectrum() {
   const peak = peakPlotDetails(data); traces.push(...peak.traces);
   await Plotly.react(plotTarget(chart), traces, { margin: { l: 55, r: 16, t: editable ? 28 : 14, b: 41 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, xaxis: { ...axisStyle, title: { text: state.layer.startsWith("EC") && state.layer !== "EC_L0" ? "校正 ADC" : "ADC", standoff: 5 }, range }, yaxis: { ...axisStyle, title: { text: data.y_label || "计数 / bin", standoff: 6 }, type: hasNegative ? "linear" : "log", exponentformat: "power" }, shapes: [...(editable ? windowShapes(lo, hi) : []), ...peak.shapes], hovermode: "closest", uirevision: `${state.run.id}-${state.channel}-${state.point.id || state.point.stem}` }, plotConfig);
   if (context !== plotContext()) return;
-  if (state.layer === "TB_L1") {
-    $("surface-caption").textContent = `${state.point.stem} · CH ${state.channel} · 拖动蓝色边界改窗`;
+  if (isPeakReviewLayer()) {
+    $("surface-caption").textContent = `${state.point.stem}${state.layer === "EC_L2" ? ` · ${number(state.point.E, 3)} keV` : ""} · CH ${state.channel} · 拖动蓝色边界改窗`;
+    $("observed-spectrum-label").textContent = rateSpectrum ? "净计数率" : "计数谱";
+    $("fitted-spectrum-label").textContent = curve.y?.length ? "峰 + 背景拟合" : "高斯峰分量";
+    $("l1-spectrum-legend").dataset.fitAvailable = String(Boolean(curve.y?.length || curve.gaussian?.length));
+    $("l1-spectrum-legend").dataset.backgroundAvailable = String(Boolean(curve.background?.length));
     await Plotly.relayout(chart, {"margin.l":65,"margin.r":22});
     if (context !== plotContext()) return;
-    await renderL1Residual(data, range);
+    await renderL1Residual(unsupportedSpectralModel() ? { ...data, curve:null } : data, range);
     if (context !== plotContext()) return;
   }
   renderPeakDiagnostics(data);
   installWindowHandles();
-  if (state.layer === "TB_L1") bindL1Axes();
+  if (isPeakReviewLayer()) bindL1Axes();
+  updateSpectralModelControls();
 }
 
 function l1Residual(data) {
-  const curve = data.curve || {}, observed = new Map((data.x || []).map((x, index) => [x, data.y[index]]));
+  const curve = data.curve || {}, observed = new Map((data.x || []).map((x, index) => [x, {count:data.y[index], error:data.yerr?.[index]}]));
   const x = [], y = [];
   for (let i = 0; i < (curve.x || []).length; i++) {
-    const prediction = curve.y?.[i], count = observed.get(curve.x[i]);
+    const prediction = curve.y?.[i], entry = observed.get(curve.x[i]), count = entry?.count;
     if (!Number.isFinite(prediction) || !Number.isFinite(count)) continue;
-    x.push(curve.x[i]); y.push((count - prediction) / Math.sqrt(Math.max(prediction, 1)));
+    const error = Number.isFinite(entry.error) && entry.error > 0 ? entry.error : Math.sqrt(Math.max(prediction, 1));
+    x.push(curve.x[i]); y.push((count - prediction) / error);
   }
   return { x, y };
 }
@@ -674,12 +744,12 @@ async function renderL1Residual(data, range) {
   const context = plotContext();
   const residual = l1Residual(data), chart = $("residual-chart");
   chart.classList.remove("metadata-chart");
-  if (!residual.x.length) { chartMessage("residual-chart", "拟合后显示当前窗口的逐 bin 残差"); $("residual-metric").textContent=""; return; }
+  if (!residual.x.length) { chartMessage("residual-chart", unsupportedSpectralModel() ? "康普顿响应 · 拟合方案待定" : "按当前窗口拟合后显示逐 bin 残差"); $("residual-metric").textContent=""; $("residual-caption").textContent=""; return; }
   const guides = [0, -3, 3].map(value => ({type:"line",xref:"paper",yref:"y",x0:0,x1:1,y0:value,y1:value,line:{color:value ? "#c7cfd7" : "#728294",width:1,dash:value ? "dot" : "solid"}}));
   await Plotly.react(plotTarget(chart), [{type:"scatter",mode:"markers",...residual,marker:{size:3,color:chartColors.blue},hovertemplate:"ADC %{x:.1f}<br>标准化残差 %{y:.2f}<extra></extra>"}], basicPlotLayout("ADC", "标准化残差", {margin:{l:65,r:22,t:8,b:38},xaxis:{...axisStyle,title:{text:"ADC"},range},shapes:guides,uirevision:`${state.run.id}-${state.channel}-${state.point.stem}-residual`}), plotConfig);
   if (context !== plotContext()) return;
   $("residual-metric").textContent = `RMS ${number(Math.sqrt(residual.y.reduce((sum,y)=>sum+y*y,0)/residual.y.length),2)}`;
-  $("residual-caption").textContent = "(计数 − 拟合) / √max(拟合, 1) · 虚线 ±3 · 横轴与主谱联动";
+  $("residual-caption").textContent = state.layer === "EC_L2" ? "(净计数率 − 拟合) / 传播误差 · 虚线 ±3 · 横轴联动" : "(计数 − 拟合) / √max(拟合, 1) · 虚线 ±3 · 横轴联动";
 }
 
 function bindL1Axes() {
@@ -688,7 +758,7 @@ function bindL1Axes() {
     if (!chart.data || typeof chart.on !== "function") continue;
     if (chart.l1RangeHandler) chart.removeListener?.("plotly_relayout", chart.l1RangeHandler);
     chart.l1RangeHandler = event => {
-      if (state.layer !== "TB_L1" || state.axisSync || !$(target).data) return;
+      if (!isPeakReviewLayer() || state.axisSync || !$(target).data) return;
       const range = event["xaxis.range"] || (event["xaxis.range[0]"] !== undefined ? [event["xaxis.range[0]"],event["xaxis.range[1]"]] : null);
       if (!range && !event["xaxis.autorange"]) return;
       state.axisSync = true;
@@ -699,6 +769,7 @@ function bindL1Axes() {
 }
 
 function peakPlotDetails(data) {
+  if (unsupportedSpectralModel()) return {traces:[],shapes:[]};
   const detection = data.fit?.peak_detection || data.peak_detection, traces = [], shapes = [];
   if (!detection) return { traces, shapes };
   if (Number.isFinite(detection.noise_boundary)) shapes.push({type:"rect",xref:"x",yref:"paper",x0:0,x1:detection.noise_boundary,y0:0,y1:1,fillcolor:"rgba(155,126,66,.09)",line:{width:0},layer:"below"});
@@ -710,7 +781,7 @@ function peakPlotDetails(data) {
 
 function renderPeakDiagnostics(data) {
   const fit=data.fit || data, detection=fit.peak_detection, quality=fit.fit_quality || {}, details=$("peak-diagnostics"), holder=clear($("peak-diagnostics-content"));
-  details.hidden=!detection; if(!detection) return;
+  details.hidden=!detection || !!unsupportedSpectralModel(); if(details.hidden) return;
   holder.append(node("p","",`${detection.algorithm || "自动寻峰"} · ${detection.manual_window ? "人工范围内检验" : "自动范围"} · 噪声边界 ${number(detection.noise_boundary,2)} ADC`));
   if(Object.keys(quality).length) holder.append(node("p","",`峰面积 SNR ${number(quality.amplitude_snr,2)} · ΔBIC(背景) ${number(quality.delta_bic_background,2)} · ${quality.accepted===false?"未通过峰质量检查":quality.status || "已记录"}`));
   for(const warning of new Set([...(detection.warnings||[]),...(quality.warnings||[])])) holder.append(node("p","peak-evidence-warning",warning));
@@ -721,7 +792,7 @@ function renderPeakDiagnostics(data) {
 
 function updateAutoFitControls() {
   const raw=["TB_L0","EC_L0","EC_L1"].includes(state.layer); $("automatic-peak-controls").hidden=raw;
-  $("auto-fit-spectrum").disabled=state.busy || !state.spectrum || !state.point || raw || !!state.run?.stages?.[state.layer]?.unavailable_reason;
+  $("auto-fit-spectrum").disabled=state.busy || state.selecting || !state.spectrum || !state.point || raw || !!unsupportedSpectralModel() || !!state.run?.stages?.[state.layer]?.unavailable_reason;
   for(const id of ["peak-noise-ceiling","peak-expected-center","peak-min-significance"]) $(id).disabled=state.busy;
 }
 
@@ -733,15 +804,17 @@ function updateCapabilityControls() {
 
 async function autoFitSpectrum() {
   if(!state.point) return;
+  const unsupported = unsupportedSpectralModel(); if (unsupported) throw new Error(unsupported);
   const settings={min_significance:Number($("peak-min-significance").value)}, ec=state.layer.startsWith("EC");
   for(const [id,key] of [["peak-noise-ceiling","noise_ceiling"],["peak-expected-center","expected_center"]]) if($(id).value.trim()!=="") settings[key]=Number($(id).value);
   if(ec && settings.expected_center !== undefined) settings.expected_energy_keV=Number(state.point.E);
   if(Object.values(settings).some(v=>!Number.isFinite(v))) throw new Error("请填写有效的自动寻峰约束。");
   if (state.selecting || !state.spectrum) throw new Error("谱文件正在切换，请等待载入完成。");
-  const selected=ec?{point_id:state.point.id,channel:state.channel}:{stem:state.point.stem,channel:state.channel,fit_channels:[state.channel]};
-  state.dirty=false; $("auto-fit-status").textContent=`正在拟合 CH ${state.channel}…`;
-  try { await executeJob(ec?"EC_L2":"TB_L1",{...selected,automatic_window:true,peak_detection:settings}); $("auto-fit-status").textContent="自动拟合已完成。请检查候选、噪声边界及统计证据。"; }
-  catch(error) { $("auto-fit-status").textContent=error.message; throw error; }
+  const runId=state.run.id, point=state.point, channel=state.channel;
+  const selected=ec?{point_id:point.id,channel}:{stem:point.stem,channel,fit_channels:[channel]};
+  state.dirty=false; $("auto-fit-status").textContent=""; fitFeedback(`正在自动选窗并拟合 · CH ${channel}…`, "running");
+  try { const job=await executeJob(ec?"EC_L2":"TB_L1",{...selected,automatic_window:true,peak_detection:settings}); if (state.run.id===runId && state.point?.id===point.id && state.channel===channel) fitCompletionFeedback(job,true,channel); }
+  catch(error) { if (state.run.id===runId && state.point?.id===point.id && state.channel===channel) fitFeedback(error.message,"error"); throw error; }
 }
 
 async function loadEcSpectrum() {
@@ -765,7 +838,7 @@ async function loadEcSpectrum() {
 function windowShapes(lo, hi) { if (!(hi > lo)) return []; return [{ type: "rect", xref: "x", yref: "paper", x0: lo, x1: hi, y0: 0, y1: 1, fillcolor: "rgba(36,87,167,0.045)", line: { width: 0 }, layer: "below" }, ...[lo, hi].map((value) => ({ type: "line", xref: "x", yref: "paper", x0: value, x1: value, y0: 0, y1: 1, line: { color: "#6b84a6", width: 1, dash: "dash" } }))]; }
 function renderRunBadge() { $("run-state").textContent = state.loading ? "载入中" : !state.run ? "未选择试算" : state.busy ? "运行中" : state.dirty ? "有未保存修改" : "已保存"; $("run-state").className = `badge ${state.busy ? "running" : state.dirty ? "stale" : "neutral"}`; }
 function updateExcludedButton() { const excluded = isExcluded(state.point); $("toggle-excluded").textContent = excluded ? "恢复此点" : "屏蔽此点"; $("toggle-excluded").className = `button${excluded ? "" : " danger"}`; $("toggle-excluded").disabled = !state.point || state.busy; }
-function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit-tb", "save-run", "new-run", "dataset-settings", "acquisition-settings", "run-select", "payload"].forEach((id) => { $(id).disabled = busy || (!state.run && !["new-run", "dataset-settings", "payload"].includes(id) && !(id === "run-select" && state.bootstrap?.runs?.length)); }); ["fit-spectrum", "window-lo", "window-hi","l1-fit-all-channels"].forEach((id) => { $(id).disabled = busy || state.selecting || !state.spectrum; }); $("apply-tb-version").disabled = busy || !$("tb-version-select").value; $("channel").disabled = state.loading; $("point-select").disabled = state.loading || busy; updateAutoFitControls(); if (state.selecting) $("auto-fit-spectrum").disabled = true; updateExcludedButton(); renderRunBadge(); updateCapabilityControls(); updateUnpackControls(); }
+function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit-tb", "save-run", "new-run", "dataset-settings", "acquisition-settings", "run-select", "payload"].forEach((id) => { $(id).disabled = busy || (!state.run && !["new-run", "dataset-settings", "payload"].includes(id) && !(id === "run-select" && state.bootstrap?.runs?.length)); }); ["fit-spectrum", "window-lo", "window-hi","l1-fit-all-channels"].forEach((id) => { $(id).disabled = busy || state.selecting || !state.spectrum; }); $("review-next-layer").disabled = busy || state.selecting || state.loading; $("apply-tb-version").disabled = busy || !$("tb-version-select").value; $("channel").disabled = state.loading; $("point-select").disabled = state.loading || busy; updateAutoFitControls(); if (state.selecting) $("auto-fit-spectrum").disabled = true; updateExcludedButton(); renderRunBadge(); updateCapabilityControls(); updateSpectralModelControls(); renderEcReviewFiles(); updateUnpackControls(); }
 
 async function resizeCharts() {
   if (!window.Plotly) return;
@@ -967,18 +1040,23 @@ async function executeJob(layer, extra = {}, manageBusy = true) {
 
 async function fitSpectrum() {
   if (!state.point || state.selecting) throw new Error("谱文件正在切换，请等待载入完成。");
+  const unsupported = unsupportedSpectralModel(); if (unsupported) throw new Error(unsupported);
+  if (!state.spectrum) throw new Error("请先读取当前谱并选择拟合窗口。");
   const runId = state.run.id, point = state.point, channel = state.channel, ec = state.layer.startsWith("EC"), patch = windowPatch(); setBusy(true);
+  fitFeedback(`正在按当前窗口拟合 · CH ${channel}…`, "running");
   try {
     await saveRevision(patch, true);
     if (runId !== state.run.id) throw new Error("试算已切换，请在当前试算重新选择拟合。");
-    const job = await executeJob(ec ? "EC_L2" : "TB_L1", ec ? { point_id:point.id,channel } : { stem:point.stem,channel,fit_channels:[channel] }, false);
+    const job = await executeJob(ec ? "EC_L2" : "TB_L1", ec ? { point_id:point.id,channel,automatic_window:false } : { stem:point.stem,channel,fit_channels:[channel],automatic_window:false }, false);
+    if (state.run.id===runId && state.point?.id===point.id && state.channel===channel) fitCompletionFeedback(job,false,channel);
     if (job?.status !== "partial") notify(`${point.stem} · CH ${channel} 拟合已完成。`, "success");
-  } finally { setBusy(false); }
+  } catch(error) { if (state.run.id===runId && state.point?.id===point.id && state.channel===channel) fitFeedback(error.message,"error"); throw error; }
+  finally { setBusy(false); }
 }
 
 async function fitAllL1Channels() {
   if (!state.point || state.selecting) throw new Error("谱文件正在切换，请等待载入完成。");
-  const runId = state.run.id, selected = {stem:state.point.stem,channel:state.channel,representative:false};
+  const runId = state.run.id, selected = {stem:state.point.stem,channel:state.channel,representative:false,fit_channels:supportedFitChannels()};
   setBusy(true);
   try {
     if (state.dirty) await saveRevision({},true);
@@ -989,8 +1067,10 @@ async function fitAllL1Channels() {
 
 async function runCurrentLayer() {
   const runId = state.run.id, layer = state.layer, point = state.point, channel = state.channel, full = $("run-scope").value === "full";
+  if (!full && isPeakReviewLayer(layer)) return fitSpectrum();
   if (!full && ["TB_L0","TB_L1","EC_L0","EC_L1","EC_L2"].includes(layer) && (!point || state.selecting)) throw new Error("请等待所选文件载入完成。");
   const extra = point && !full ? ["TB_L0","TB_L1","EC_L0","EC_L1"].includes(layer) ? {stem:point.stem,channel} : layer === "EC_L2" ? {point_id:point.id,channel} : {} : {};
+  if (layer==="TB_L1" && hasPlasticChannel()) extra.fit_channels=supportedFitChannels();
   setBusy(true);
   try {
     if (state.dirty) await saveRevision({},true);
@@ -1001,46 +1081,51 @@ async function runCurrentLayer() {
 
 function configureLayerPanels() {
   const ec = state.layer.startsWith("EC"), raw = ["TB_L0", "EC_L0", "EC_L1"].includes(state.layer);
-  const titles = { TB_L0: "工况原始脉冲谱", TB_L1: "当前工况能谱与拟合", TB_L2: "温度–偏压响应与残差", EC_L0: "EC 原始脉冲谱", EC_L1: "EC 温度–偏压校正谱", EC_L2: "能线峰位与分辨率", EC_L3: "能量刻度与拟合残差" };
+  const titles = { TB_L0: "工况原始脉冲谱", TB_L1: "当前工况能谱与拟合", TB_L2: "温度–偏压响应与残差", EC_L0: "EC 原始脉冲谱", EC_L1: "EC 温度–偏压校正谱", EC_L2: "当前能线谱与拟合", EC_L3: "能量刻度与拟合残差" };
   $("tb-analysis").dataset.layer = state.layer;
-  const l1 = state.layer === "TB_L1";
-  for (const id of ["l1-workbench","l1-channel-overview","l1-fit-all-channels","l1-spectrum-legend"]) $(id).hidden = !l1;
+  const l1 = state.layer === "TB_L1", review = isPeakReviewLayer(), ec2 = state.layer === "EC_L2";
+  $("tb-analysis").dataset.peakReview = String(review);
+  for (const id of ["l1-workbench","l1-channel-overview","l1-fit-all-channels"]) $(id).hidden = !l1;
+  $("l1-spectrum-legend").hidden = !review;
+  for (const id of ["peak-file-search","peak-file-controls"]) $(id).hidden = !ec2;
   $("point-select").closest?.(".point-field")?.classList.toggle("l1-hidden",l1);
   $("point-select").hidden = l1;
   $("point-field-label").hidden = l1;
-  $("analysis-tab-comparison").hidden = l1;
-  if (l1) showAnalysisView("residual");
-  $("fit-spectrum").textContent = l1 ? "拟合当前通道" : "保存窗口并拟合";
+  $("analysis-tab-comparison").hidden = review;
+  if (review) showAnalysisView("residual");
+  $("fit-spectrum").textContent = "按当前窗口拟合";
   $("main-chart-title").textContent = titles[state.layer]; $("tb-analysis").dataset.layer = state.layer;
+  $("surface-chart").setAttribute("aria-label", titles[state.layer]);
   $("inspector-title").textContent = isUnpackLayer() ? "解包结果详情" : ec ? raw ? "数据文件详情" : "能峰复核" : l1 ? "拟合详情" : "工况能谱";
   $("point-field-label").textContent = ec ? raw ? "数据文件" : "能线 / 源峰" : "工况文件";
   $("surface-mode").hidden = state.layer !== "TB_L2";
   $("ec-detail-mode").hidden = state.layer !== "EC_L3";
-  $("spectrum-chart").hidden = raw || state.layer === "TB_L1";
+  $("spectrum-chart").hidden = raw || review;
   $("dependency-toolbar").hidden = !ec || state.layer === "EC_L0";
   $("window-section").hidden = raw;
   $("automatic-peak-controls").hidden = raw;
   if(raw) $("peak-diagnostics").hidden = true;
-  document.querySelector(".spectrum-legend").hidden = raw || state.layer === "TB_L1";
+  document.querySelector(".spectrum-legend").hidden = raw || review;
   $("refit-tb").hidden = raw;
-  $("refit-tb").textContent = ec ? "重新拟合 EC L3" : l1 ? "更新 TB L2" : "重新拟合 TB";
-  $("fitting-help").textContent = ec ? "窗口用于当前通道、当前能峰。屏蔽能峰后重新拟合 EC L3。" : l1 ? "拖动蓝色边界调整当前通道窗口。需要重新计算所有通道时，点击“拟合此文件 · 四通道”。" : "拖动边界调整当前通道窗口，拟合后点击“重新拟合 TB”更新曲面。";
-  $("analysis-tab-residual").firstChild.textContent = raw ? "数据与元信息 " : ec && state.layer === "EC_L2" ? "能量分辨率 " : "拟合残差 ";
+  $("refit-tb").textContent = ec ? "计算 EC L3" : l1 ? "计算 TB L2" : "重新拟合 TB";
+  $("fitting-help").textContent = review ? `窗口只用于当前文件、当前通道。拟合后从“下一层”进入${l1 ? "曲面" : "能量刻度"}复核。` : "窗口只用于当前文件、当前通道；修改后重新拟合标定结果。";
+  $("analysis-tab-residual").firstChild.textContent = raw ? "数据与元信息 " : "拟合残差 ";
   $("analysis-tab-comparison").textContent = raw ? "输入与依赖" : ec ? "刻度参数" : "参数比较";
   $("residual-caption").textContent = raw ? "当前通道的真实输入数据与文件来源" : ec ? "点击能线点，联动右侧校正谱与拟合窗口" : state.layer === "TB_L1" ? "点击工况点，下钻真实 L0 谱与当前 L1 峰拟合" : "相对曲面的偏差 · 点击测量点定位工况";
-  $("main-chart-legend").hidden = raw || state.layer === "TB_L1";
+  $("main-chart-legend").hidden = raw || review;
   const unpack = isUnpackLayer();
   document.body.classList.toggle("l0-workspace", unpack);
   $("unpack-workspace").hidden = !unpack;
   for (const id of ["run-scope", "run-scope-label", "run-layer"]) $(id).hidden = unpack;
   $("run-scope").options[0].textContent = ["TB_L0", "TB_L1", "EC_L0", "EC_L1"].includes(state.layer) ? "当前文件" : state.layer === "EC_L2" ? "当前能峰" : "代表样例";
   updateRunScopeCaption();
+  updateSpectralModelControls();
   if (state.spectrum && ec && state.layer !== "EC_L0") renderSpectrumProvenance(state.spectrum);
   else { $("spectrum-evidence-status").hidden = true; $("spectrum-provenance").hidden = true; }
   if (ec && state.layer !== "EC_L0") loadTbVersions().catch(messageError);
 }
 
-function updateRunScopeCaption() { const full = $("run-scope").value === "full", fileLayer = ["TB_L1", "EC_L1"].includes(state.layer); $("run-layer").textContent = full ? "运行本层全部数据" : state.layer === "EC_L1" ? "校正当前文件" : state.layer === "TB_L1" ? "拟合当前文件 · 四通道" : state.layer === "EC_L2" ? "拟合当前能峰" : "运行本层"; $("run-layer").title = full ? "处理本层全部适用输入" : fileLayer ? "仅处理当前选中文件" : "使用当前层的处理器"; }
+function updateRunScopeCaption() { const full = $("run-scope").value === "full", fileLayer = ["TB_L1", "EC_L1"].includes(state.layer); $("run-layer").textContent = full ? "运行本层全部数据" : state.layer === "EC_L1" ? "校正当前文件" : isPeakReviewLayer() ? "拟合当前窗口" : "运行本层"; $("run-layer").title = full ? "处理本层全部适用输入" : isPeakReviewLayer() ? `当前文件 · CH ${state.channel} · 使用图中窗口` : fileLayer ? "仅处理当前选中文件" : "使用当前层的处理器"; }
 
 
 function basicPlotLayout(x, y, extra = {}) { return { margin: { l: 65, r: 25, t: 20, b: 46 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, hovermode: "closest", xaxis: { ...axisStyle, title: { text: x, standoff: 7 } }, yaxis: { ...axisStyle, title: { text: y, standoff: 7 } }, ...extra }; }
@@ -1093,9 +1178,9 @@ async function renderRawMain() {
 }
 
 async function loadEcAnalysis() {
-  const token = ++state.loadToken, runId = state.run.id, layer = state.layer;
+  const token = ++state.loadToken, runId = state.run.id, layer = state.layer, selection = state.spectrumToken;
   const overview = await api(runPath(`/ec-overview?channel=${state.channel}&layer=${layer}`));
-  if (token !== state.loadToken || runId !== state.run.id || layer !== state.layer) return;
+  if (token !== state.loadToken || runId !== state.run.id || layer !== state.layer || selection !== state.spectrumToken) return;
   state.ecOverview = overview;
   const raw = ["EC_L0", "EC_L1"].includes(layer);
   let points = overview.points || [];
@@ -1107,7 +1192,7 @@ async function loadEcAnalysis() {
   const previousId = state.point?.id || preferredPoint().id, previousStem = state.point?.stem || preferredPoint().stem; const select = clear($("point-select"));
   for (const p of points) select.append(new Option(raw ? p.stem : `${number(p.E, 3)} keV · ${p.stem || p.source_name || "能线"}${isExcluded(p) ? " · 已屏蔽" : ""}`, p.id));
   if (!raw) await renderEcOverview();
-  if (token !== state.loadToken || runId !== state.run.id || layer !== state.layer) return;
+  if (token !== state.loadToken || runId !== state.run.id || layer !== state.layer || selection !== state.spectrumToken) return;
   const selected = points.find((p) => p.id === previousId) || points.find((p) => p.stem === previousStem) || points.find((p) => !isExcluded(p)) || points[0];
   renderUnpackWorkspace();
   if (selected) await selectEcPoint(selected); else { state.point = null; state.spectrum = null; chartMessage("spectrum-chart", "本通道没有可用能峰或数据文件，请检查目录或运行上游层。"); if (raw) chartMessage("surface-chart", "本层暂无可用 Parquet 输入。"); }
@@ -1123,6 +1208,7 @@ async function renderEcOverview() {
   const context = plotContext();
   const data = state.ecOverview || {}, points = data.points || [], l3 = state.layer === "EC_L3";
   if (["EC_L0", "EC_L1"].includes(state.layer)) return renderRawMain();
+  if (state.layer === "EC_L2") { renderEcReviewFiles(); return; }
   $("residual-chart").classList.remove("metadata-chart");
   const traces = [];
   if (l3 && data.curve?.x?.length) traces.push({ type: "scatter", mode: "lines", x: data.curve.x, y: data.curve.y, line: { color: chartColors.fit, width: 1.8 }, name: "E = f(ADC)", hoverinfo: "skip" });
@@ -1161,24 +1247,32 @@ function renderEcParams() {
 }
 
 async function selectEcPoint(point) {
-  if (state.dirty) await saveRevision({}, true);
-  if (state.point?.id !== point.id) { $("peak-noise-ceiling").value=""; $("peak-expected-center").value=""; }
-  $("auto-fit-status").textContent="";
   const token = ++state.spectrumToken, layer = state.layer, raw = ["EC_L0", "EC_L1"].includes(layer);
+  state.selecting = true;
+  for (const id of ["fit-spectrum","auto-fit-spectrum","window-lo","window-hi"]) $(id).disabled=true;
+  try { if (state.dirty) await saveRevision({}, true); }
+  catch(error) { if (token===state.spectrumToken) { state.selecting=false; setBusy(state.busy); } throw error; }
+  if (token !== state.spectrumToken || layer !== state.layer) return;
+  if (state.point?.id !== point.id) { $("peak-noise-ceiling").value=""; $("peak-expected-center").value=""; }
+  $("auto-fit-status").textContent=""; fitFeedback();
   state.point = point; state.spectrum = null; state.dirty = false; $("point-select").value = point.id; $("selected-channel").textContent = `CH ${state.channel}`;
+  renderEcReviewFiles();
+  if (isPeakReviewLayer()) { chartMessage("surface-chart", `正在读取 ${point.stem} · CH ${state.channel}…`); chartMessage("residual-chart", "读取拟合残差…"); }
   if (raw) { chartMessage("surface-chart", "正在读取所选文件的真实脉冲谱…"); $("surface-caption").textContent = `${point.stem} · CH ${state.channel} · 读取中`; }
   rememberView(); renderCurrentStatus(); renderUnpackWorkspace();
   if (layer === "EC_L0" && point.fit_status === "not_parsed") {
     chartMessage("surface-chart", `${point.stem} 尚未生成 L0。点击上方“解包选中文件”调用实际解包器。`);
     chartMessage("residual-chart", `事件：${point.event || "—"}\n遥测：${point.hk || "—"}`);
     renderMetadata({source:"raw",source_path:point.event,stem:point.stem,metadata:{状态:"待解包"}});
-    setBusy(state.busy); return;
+    state.selecting=false; setBusy(state.busy); return;
   }
   $("spectrum-evidence-status").hidden = true; $("spectrum-provenance").hidden = true;
-  const conditions = clear($("point-condition")); for (const [key, value] of raw ? [["通道", `CH ${state.channel}`]] : [["能量", `${number(point.E, 3)} keV`], ["峰位", `${number(point.center, 3)} ADC`]]) { const item = node("span", "", key); item.append(node("strong", "", value)); conditions.append(item); }
-  chartMessage("spectrum-chart", "正在读取真实校正谱…");
+  const conditions = clear($("point-condition")); for (const [key, value] of raw ? [["通道", `CH ${state.channel}`]] : unsupportedSpectralModel() ? [["能量", `${number(point.E, 3)} keV`]] : [["能量", `${number(point.E, 3)} keV`], ["峰位", `${number(point.center, 3)} ADC`]]) { const item = node("span", "", key); item.append(node("strong", "", value)); conditions.append(item); }
+  chartMessage(isPeakReviewLayer() ? "surface-chart" : "spectrum-chart", "正在读取真实校正谱…");
   const query = raw ? `layer=${layer}&stem=${encodeURIComponent(point.stem)}&channel=${state.channel}` : `layer=EC_L2&point_id=${encodeURIComponent(point.id)}&channel=${state.channel}`;
-  const spectrum = await api(runPath(`/ec-spectrum?${query}`));
+  let spectrum;
+  try { spectrum = await api(runPath(`/ec-spectrum?${query}`)); }
+  catch(error) { if (token===state.spectrumToken && layer===state.layer) { state.selecting=false; chartMessage(isPeakReviewLayer() ? "surface-chart" : "spectrum-chart", error.message); setBusy(state.busy); } throw error; }
   if (token !== state.spectrumToken || state.layer !== layer) return;
   state.spectrum = spectrum;
   const fit = spectrum.fit || point, override = fit.peak_detection?.manual_window === false && !(state.run.pending_ec_windows || []).includes(point.id) ? null : state.run.config?.ec_windows?.[point.id];
@@ -1189,7 +1283,7 @@ async function selectEcPoint(point) {
   if (!raw && spectrum.curve?.note) { const item = node("div", "param-item wide"); item.append(node("span", "", "历史曲线说明"), node("strong", "", "历史记录缺少背景参数，图中仅显示高斯峰分量；重拟合后保存完整曲线。")); holder.append(item); }
   if (!raw && point.quality_reasons?.length) { const item = node("div", "param-item wide"); item.append(node("span", "", "L3 质量筛选"), node("strong", "", point.quality_reasons.join(" · "))); holder.append(item); }
   renderSpectrumProvenance(spectrum);
-  await renderSpectrum(); if (token !== state.spectrumToken || layer !== state.layer) return; if (raw) await renderRawMain(); else await renderEcOverview(); setBusy(state.busy);
+  await renderSpectrum(); if (token !== state.spectrumToken || layer !== state.layer) return; if (raw) await renderRawMain(); else await renderEcOverview(); state.selecting=false; setBusy(state.busy);
 }
 
 function renderSpectrumProvenance(spectrum) {
@@ -1237,7 +1331,14 @@ function installWindowHandles() {
 
 function boundedWindowValue(id, value) { const histogram = state.spectrum?.histogram_config || {}, min = state.layer.startsWith("EC") ? 0 : histogram.min ?? 0, max = state.layer.startsWith("EC") ? 65536 : histogram.max ?? 1200, other = windowValue(id === "window-lo" ? "window-hi" : "window-lo"); return id === "window-lo" ? Math.floor(Math.max(min, Math.min(value, other - 8, max - 8)) * 1000) / 1000 : Math.ceil(Math.min(max, Math.max(value, other + 8, min + 8)) * 1000) / 1000; }
 
-function setEditedWindow(id, value) { const input = $(id); input.value = Number(value).toFixed(3); input.dataset.edited = "true"; input.title = ""; state.dirty = true; $("window-status").textContent = "窗口已修改 · 未拟合"; renderRunBadge(); if (spectrumChart().data) Plotly.relayout(spectrumChart(), { shapes: [...windowShapes(windowValue("window-lo"), windowValue("window-hi")), ...peakPlotDetails(state.spectrum || {}).shapes] }); }
+function setEditedWindow(id, value) { const input = $(id); input.value = Number(value).toFixed(3); input.dataset.edited = "true"; input.title = ""; state.dirty = true; $("window-status").textContent = "窗口已修改 · 未拟合"; fitFeedback(unsupportedSpectralModel() ? "窗口已修改" : "窗口已修改 · 点击“按当前窗口拟合”"); renderRunBadge(); if (spectrumChart().data) Plotly.relayout(spectrumChart(), { shapes: [...windowShapes(windowValue("window-lo"), windowValue("window-hi")), ...peakPlotDetails(state.spectrum || {}).shapes] }); }
+
+async function reviewNextLayer() {
+  if (!isPeakReviewLayer()) return;
+  const next = state.layer === "TB_L1" ? "TB_L2" : "EC_L3";
+  if (state.dirty) await saveRevision({},true);
+  await selectLayer(next);
+}
 
 function renderPayloadOptions() {
   const current = state.run?.payload || $("payload").value, runs = state.bootstrap?.runs || [], payloads = new Set();
@@ -1340,12 +1441,15 @@ function openPipelineDialog() {
   renderPipelinePlan(); $("pipeline-dialog").showModal();
 }
 async function runPipeline(plan, mode) {
+  const channel=state.channel, selectedPointId=state.point?.id;
   setBusy(true); notify("正在运行流程…","info");
   try {
     if (state.dirty) await saveRevision({},true);
     for (const step of plan) {
       if (mode==="all" && step.layer==="EC_L1") { if (!state.run.tb_version?.path) throw new Error("TB 曲面参数尚未生成。"); const binding=await api(runPath("/dependency"),{method:"PATCH",body:{path:state.run.tb_version.path}}); state.run=binding.run || binding; }
+      if (mode!=="all") { state.channel=channel; $("channel").value=channel; }
       await selectLayer(step.layer);
+      if (mode!=="all" && isPeakReviewLayer() && unsupportedSpectralModel()) throw new Error(unsupportedSpectralModel());
       if (step.stem && step.layer!=="EC_L2") {
         const items = step.layer.startsWith("TB") ? state.surface?.points : state.ecOverview?.files;
         const selected = items?.find(point=>point.stem===step.stem);
@@ -1354,8 +1458,10 @@ async function runPipeline(plan, mode) {
       if (step.layer==="EC_L2" && step.stem) {
         const points=(state.ecOverview?.points || []).filter(point=>point.stem===step.stem);
         if (!points.length) throw new Error(`未找到 ${step.stem} 的能峰输入，请检查 EC L1 输出。`);
-        for (const point of points) { await selectEcPoint(point); await executeJob(step.layer,{point_id:point.id,channel:state.channel,representative:false},false); }
-      } else { const {layer,...spec}=step; const job = await executeJob(layer,spec,false); if (job?.status === "partial") { notify(`${layer.replace("_"," ")} 有通道待复核，后续步骤已暂停。`,"warning"); return; } }
+        for (const point of points) { await selectEcPoint(point); await executeJob(step.layer,{point_id:point.id,channel,representative:false},false); }
+        const current=(state.ecOverview?.points || []).filter(point=>point.stem===step.stem);
+        if (current.length) await selectEcPoint(current.find(point=>point.id===selectedPointId) || current[0]);
+      } else { const {layer,...spec}=step; const job = await executeJob(layer,{...spec,...(mode!=="all"?{channel,...(layer==="TB_L1"?{fit_channels:[channel]}:{})}:{})},false); if (job?.status === "partial") { notify(`${layer.replace("_"," ")} 有通道待复核，后续步骤已暂停。`,"warning"); return; } }
     }
     notify("流程已完成。","success");
   } finally { setBusy(false); }
@@ -1552,14 +1658,18 @@ $("l1-next").addEventListener("click", handleError(() => moveL1File(1)));
 $("l1-file-list").addEventListener("keydown", handleError(async event => { if (["ArrowUp","ArrowDown"].includes(event.key)) { event.preventDefault(); await moveL1File(event.key === "ArrowUp" ? -1 : 1); $("l1-file-list").querySelector(".active")?.focus(); } }));
 $("l1-fit-all-channels").addEventListener("click", handleError(fitAllL1Channels));
 $("point-select").addEventListener("change", handleError(async (event) => { const collection = state.layer.startsWith("EC") ? ["EC_L0", "EC_L1"].includes(state.layer) ? state.ecOverview?.files : state.ecOverview?.points : state.surface?.points; const point = collection?.find((p) => (p.id || p.stem) === event.target.value); if (point) await selectPoint(point); }));
-for (const id of ["window-lo", "window-hi"]) $(id).addEventListener("input", () => { $(id).dataset.edited = "true"; $(id).title = ""; state.dirty = true; $("window-status").textContent = "窗口已修改 · 未拟合"; renderRunBadge(); if (window.Plotly && spectrumChart().data) Plotly.relayout(spectrumChart(), { shapes: [...windowShapes(windowValue("window-lo"), windowValue("window-hi")), ...peakPlotDetails(state.spectrum || {}).shapes] }); });
+$("peak-file-search").addEventListener("input",renderEcReviewFiles);
+$("peak-file-prev").addEventListener("click",handleError(()=>moveEcReviewFile(-1)));
+$("peak-file-next").addEventListener("click",handleError(()=>moveEcReviewFile(1)));
+$("review-next-layer").addEventListener("click",handleError(reviewNextLayer));
+for (const id of ["window-lo", "window-hi"]) $(id).addEventListener("input", () => { $(id).dataset.edited = "true"; $(id).title = ""; state.dirty = true; $("window-status").textContent = "窗口已修改 · 未拟合"; fitFeedback(unsupportedSpectralModel() ? "窗口已修改" : "窗口已修改 · 点击“按当前窗口拟合”"); renderRunBadge(); if (window.Plotly && spectrumChart().data) Plotly.relayout(spectrumChart(), { shapes: [...windowShapes(windowValue("window-lo"), windowValue("window-hi")), ...peakPlotDetails(state.spectrum || {}).shapes] }); });
 $("save-run").addEventListener("click", handleError(() => saveRevision()));
 $("fit-spectrum").addEventListener("click", handleError(fitSpectrum));
 $("auto-fit-spectrum").addEventListener("click", handleError(autoFitSpectrum));
 $("toggle-excluded").addEventListener("click", handleError(toggleExcluded));
-$("refit-tb").addEventListener("click", handleError(async () => { if (state.dirty) await saveRevision({}, true); await executeJob(state.layer.startsWith("EC") ? "EC_L3" : "TB_L2"); }));
+$("refit-tb").addEventListener("click", handleError(async () => { if (unsupportedSpectralModel()) throw new Error(unsupportedSpectralModel()); if (state.dirty) await saveRevision({}, true); await executeJob(state.layer.startsWith("EC") ? "EC_L3" : "TB_L2"); }));
 $("run-layer").addEventListener("click", handleError(runCurrentLayer));
-$("run-scope").addEventListener("change", updateRunScopeCaption);
+$("run-scope").addEventListener("change", () => { updateRunScopeCaption(); setBusy(state.busy); });
 $("run-pipeline").textContent="运行流程…"; $("run-pipeline").title="选择输入文件与处理步骤";
 document.querySelector(".pipeline-menu p").textContent="选择输入文件与处理步骤";
 $("run-pipeline").addEventListener("click", handleError(openPipelineDialog));

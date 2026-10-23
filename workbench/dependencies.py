@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 
 
-def tb_package(path: Path, origin="historical") -> dict:
+def tb_package(path: Path, origin="historical", *, required_channels=(0, 1, 2, 3)) -> dict:
     path = Path(path).resolve()
     if not path.is_file() or path.suffix.lower() != ".json":
         raise ValueError("请选择存在的 TB L2 JSON 文件")
@@ -31,7 +31,8 @@ def tb_package(path: Path, origin="historical") -> dict:
         channels.add(channel)
         if any(key not in row or not math.isfinite(float(row[key])) for key in required):
             raise ValueError("TB L2 缺少有限的 G0/k/V0/b/c 参数")
-        if float(row["G0"]) <= 0:
+        placeholder = channel not in required_channels and all(float(row[key]) == 0 for key in required)
+        if float(row["G0"]) <= 0 and not placeholder:
             raise ValueError("TB L2 的 G0 须大于零")
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
     identity = hashlib.sha256((str(path) + sha).encode("utf-8")).hexdigest()[:20]

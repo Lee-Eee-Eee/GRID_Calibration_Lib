@@ -6,12 +6,12 @@ from calibration_lib.workbench.l1_review import overview
 
 
 def test_overview_attributes_batch_failures_to_the_correct_file_and_channel(tmp_path):
-    products = tmp_path / "products" / "10B" / "tb" / "L1" / "json"
+    products = tmp_path / "products" / "12B" / "tb" / "L1" / "json"
     products.mkdir(parents=True)
     records = [{"channel": ch, "center": 1700 + ch, "rsquared": .99} for ch in range(4)]
     (products / "101_fit_results.l1.json").write_text(json.dumps(records))
     state = {
-        "payload": "10B", "config": {}, "pending_windows": ["10B:101:0"],
+        "payload": "12B", "config": {}, "pending_windows": ["12B:101:0"],
         "jobs": [{"id": "job1", "layer": "TB_L1", "scope": "all", "config": {},
                   "status": "partial", "result": {"errors": [{
                       "stem": "101", "channel": 3, "error": "ambiguous peak",
@@ -54,7 +54,7 @@ def test_overview_reads_old_job_result_for_a_failed_batch(tmp_path):
     (directory / "result.json").write_text(json.dumps({"errors": [
         {"file": "101.l0.parquet", "error": "unresolved"},
     ]}))
-    state = {"payload": "10B", "config": {}, "jobs": [
+    state = {"payload": "12B", "config": {}, "jobs": [
         {"id": "old", "layer": "TB_L1", "status": "failed", "scope": "all", "config": {}},
     ]}
     adapter = SimpleNamespace(tb_files=lambda *_: {"101": Path("l0")},

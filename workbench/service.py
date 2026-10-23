@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+from ..common.spectral_models import detector_identity, photopeak_channels, unsupported_spectral_model
 from .acquisition_store import freeze_profile, load_profile, prepare_profile, presets, profile_digest
 from .compute import ComputeAdapter
 from .datasets import DatasetCatalog, validate_payload
@@ -44,6 +45,10 @@ PURPOSES = {
     "EC_L2": ("能线谱峰拟合", "EC L1 矫正谱", "能线峰参数 JSON、拟合图"),
     "EC_L3": ("能量关系与分辨率", "EC L2 能线峰参数", "EC 系数 JSON、拟合图"),
 }
+
+
+def _response_payload(state):
+    return detector_identity(state["payload"], state.get("dataset"), state.get("acquisition_preset"))
 
 
 def now():
@@ -104,6 +109,7 @@ def peak_job_settings(layer, spec):
         "min_significance",
         "min_sigma_bins",
         "max_resolution",
+        "min_resolution",
         "noise_ceiling",
         "expected_center",
         "expected_energy_keV",
@@ -118,7 +124,7 @@ def peak_job_settings(layer, spec):
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f"自动寻峰参数 {key} 必须为有限数值")
-        if value < 0 or (value == 0 and key != "noise_ceiling"):
+        if value < 0 or (value == 0 and key not in ("noise_ceiling", "min_resolution")):
             raise ValueError(f"自动寻峰参数 {key} 必须为正数")
         if key == "expected_tolerance" and value > 1:
             raise ValueError("expected_tolerance 必须在 (0, 1] 内")
@@ -191,8 +197,9 @@ class Workbench:
 
     def adapter_for(self, state):
         if state.get("acquisition"):
-            return ComputeAdapter(self.workspace, state.get("dataset"), load_profile(state["acquisition"]))
-        return ComputeAdapter(self.workspace, state["dataset"]) if state.get("dataset") else self.adapter
+            return ComputeAdapter(self.workspace, state.get("dataset"), load_profile(state["acquisition"]),
+                                  response_payload=_response_payload(state))
+        return ComputeAdapter(self.workspace, state["dataset"], response_payload=_response_payload(state)) if state.get("dataset") else self.adapter
 
     def acquisition_defaults(self, profile=None):
         return {"profile": prepare_profile(self.workspace, payload_profile=profile), "presets": presets()}
@@ -257,6 +264,8 @@ class Workbench:
                 inventory=inventory,
                 acquisition_products={},
                 acquisition_l1_channels={},
+                acquisition_ec_l2_points={},
+                ec_l2_provenance={},
                 tb_l1_failures={},
                 acquisition_pending_layers=list(LAYERS),
                 pending_windows=[],
@@ -435,7 +444,7 @@ class Workbench:
     def acquisition_coverage(self, state, layer):
         if not state.get("acquisition"):
             return None
-        rows = state["inventory"].get("raw", {}).get("reading_preview", {}).get("rows", [])
+        rows = (state["inventory"].get("raw", {}).get("reading_preview") or {}).get("rows", [])
         if layer.startswith("TB_"):
             expected = {row["stem"] for row in rows if row["kind"] == "tb"}
         else:
@@ -541,6 +550,8 @@ class Workbench:
         if selected_preset:
             adapter = ComputeAdapter(self.workspace, dataset, selected_preset["profile"])
             inventory = adapter.inventory(payload)
+        required_channels = photopeak_channels(detector_identity(
+            payload, dataset, selected_preset["reference"] if selected_preset else None))
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
         root = self.runs / run_id
         root.mkdir()
@@ -571,7 +582,7 @@ class Workbench:
         import_warnings = []
         for candidate in reversed(tb_files):
             try:
-                tb_package(candidate)
+                tb_package(candidate, required_channels=required_channels)
                 tb = candidate
                 break
             except (ValueError, TypeError, KeyError, OSError) as exc:
@@ -612,7 +623,7 @@ class Workbench:
             "ec_l2_provenance": {},
         }
         write(root / "imports.json", imported)
-        state["selected_tb"] = snapshot(tb_package(tb), root) if tb else None
+        state["selected_tb"] = snapshot(tb_package(tb, required_channels=required_channels), root) if tb else None
         if dataset and state["selected_tb"] and self._imported_ec_matches(state, adapter):
             state["ec_dependency"] = {**state["selected_tb"], "input_origin": "imported_metadata_verified"}
             state["ec_scope"] = "all"
@@ -641,7 +652,7 @@ class Workbench:
         files = list(adapter.historical_layer(state["payload"], "EC_L1").glob("parquet/*_corr.l1.parquet"))
         if not files:
             return False
-        expected = ECL1Processor(state["payload"], self.runs)._load_tb_params(Path(selected["path"]))
+        expected = ECL1Processor(state["payload"], self.runs, response_payload=_response_payload(state))._load_tb_params(Path(selected["path"]))
         for path in files:
             actual = read_parquet_metadata(path, "tb_correction").get("tb_params_used", {})
             if any(actual.get(str(ch)) != params for ch, params in expected.items()):
@@ -812,7 +823,7 @@ class Workbench:
                 continue
         for path, origin in candidates:
             try:
-                package = tb_package(path, origin)
+                package = tb_package(path, origin, required_channels=photopeak_channels(_response_payload(state)))
                 if selected and digest(path) == selected["sha256"] and str(path) == selected["path"]:
                     package = {**package, **selected}
                 package["selected"] = bool(selected and package["id"] == selected.get("id"))
@@ -834,7 +845,7 @@ class Workbench:
             if any(job["status"] in ("queued", "running") for job in state["jobs"]):
                 raise ValueError("计算进行中，请等待完成后再切换 TB 依赖")
             package = (
-                tb_package(Path(path), "external")
+                tb_package(Path(path), "external", required_channels=photopeak_channels(_response_payload(state)))
                 if path
                 else next(
                     (item for item in self.tb_versions(run_id)["versions"] if item["id"] == version_id), None
@@ -871,6 +882,14 @@ class Workbench:
             provenance = state.get("ec_l2_provenance", {}).get(rel)
             selected = self.selected_tb(state)
             fresh = bool(provenance and selected and provenance["tb_version"]["sha256"] == selected["sha256"])
+            if fresh and "point_versions" in provenance:
+                records = json.loads(path.read_text(encoding="utf-8"))
+                energy = path.name.removesuffix("_fit_results.l2.json")
+                expected = self._expected_ec_points(state, energy, records)
+                fresh = bool(expected) and all(
+                    provenance["point_versions"].get(point, {}).get("sha256") == selected["sha256"]
+                    for point in expected
+                )
             sources.append(
                 {
                     "file": rel,
@@ -890,6 +909,30 @@ class Workbench:
             "description": f"{fresh_count}/{len(sources)} 份能峰文件绑定当前 TB；"
             + ("其余沿用历史或旧版本，L3 使用混合输入。" if mixed else "全部绑定当前 TB。"),
         }
+
+    @staticmethod
+    def _expected_ec_points(state, energy, records):
+        """The configured input defines coverage, including points not fitted yet."""
+        supported = photopeak_channels(_response_payload(state))
+        rows = (state["inventory"].get("raw", {}).get("reading_preview") or {}).get("rows", [])
+        expected = set()
+        for row in rows:
+            kind = row.get("kind")
+            if kind not in ("xray", "source"):
+                continue
+            key = f"{row['energy_keV']:g}keV" if kind == "xray" else f"src_{row['source']}"
+            if key != energy:
+                continue
+            energies = [row["energy_keV"]] if kind == "xray" else row.get("peak_energies_keV", [])
+            channels = [row["channel"]] if kind == "xray" and row.get("channel") is not None else supported
+            expected.update(f"{state['payload']}:ec:{energy}:{ch}:{float(value):g}"
+                            for ch in channels if ch in supported for value in energies)
+        if not expected:
+            # Imported products can predate reading previews. Each recorded
+            # energy line still requires the detector's supported channels.
+            expected = {f"{state['payload']}:ec:{energy}:{ch}:{float(row['E']):g}"
+                        for row in records if not row.get("placeholder") for ch in supported}
+        return expected
 
     def submit(self, run_id, spec):
         with self.lock:
@@ -911,6 +954,8 @@ class Workbench:
                     )
             if layer == "TB_L2" and "TB_L1" in state["dirty_layers"]:
                 unresolved = set(state.get("pending_windows", [])) - set(state["config"].get("excluded", []))
+                unresolved = {point for point in unresolved
+                              if not unsupported_spectral_model(_response_payload(state), int(point.rsplit(":", 1)[1]))}
                 unresolved.difference_update(state.get("tb_l1_failures", {}))
                 if unresolved or not (state.get("tb_l1_failures") or state["config"].get("excluded")):
                     raise ValueError("窗口修订尚未拟合，请先执行 TB L1")
@@ -1056,6 +1101,7 @@ class Workbench:
             f"{state['payload']}:{row['stem']}:{channel}"
             for row in rows if row["kind"] == "tb"
             for channel in range(4)
+            if not unsupported_spectral_model(_response_payload(state), channel)
             if channel not in coverage.get(row["stem"], [0, 1, 2, 3] if row["stem"] in completed else [])
             and f"{state['payload']}:{row['stem']}:{channel}" not in excluded
         }
@@ -1064,7 +1110,8 @@ class Workbench:
         """Keep failed old fits inspectable, but prevent their reuse in L2."""
         result = job.get("result", {})
         processor = result.get("processor", {})
-        requested_channels = job["config"].get("fit_channels", [0, 1, 2, 3])
+        requested_channels = [ch for ch in job["config"].get("fit_channels", [0, 1, 2, 3])
+                              if not unsupported_spectral_model(_response_payload(state), ch)]
         stems = job["config"].get("only") or result.get("scope", {}).get("only")
         if stems is None:
             if job.get("scope") == "representative":
@@ -1092,6 +1139,9 @@ class Workbench:
                     failures.setdefault(point, job.get("error") or "Fit failed")
         failures = {point: error for point, error in failures.items() if point not in succeeded}
         latest = state.setdefault("tb_l1_failures", {})
+        for point in list(latest):
+            if unsupported_spectral_model(_response_payload(state), int(point.rsplit(":", 1)[1])):
+                latest.pop(point)
         for point in succeeded:
             latest.pop(point, None)
         latest.update({point: {"job_id": job["id"], "error": error} for point, error in failures.items()})
@@ -1251,6 +1301,7 @@ class Workbench:
                     }.get(layer)
                     completed = set(state.setdefault("acquisition_products", {}).get(layer, []))
                     if layer == "TB_L1":
+                        supported = {ch for ch in range(4) if not unsupported_spectral_model(_response_payload(state), ch)}
                         channel_coverage = state.setdefault("acquisition_l1_channels", {})
                         # Existing fully completed stems predate channel-level
                         # reruns and already belong to this reading revision.
@@ -1261,12 +1312,27 @@ class Workbench:
                             channels.update(item.get("channels_updated", []))
                             channel_coverage[item["stem"]] = sorted(channels)
                         completed = {stem for stem, channels in channel_coverage.items()
-                                     if set(channels) == {0, 1, 2, 3}}
+                                     if set(channels) >= supported}
+                    if layer == "EC_L2":
+                        point_coverage = state.setdefault("acquisition_ec_l2_points", {})
+                        ready = set()
+                        for item in job.get("result", {}).get("processor", {}).get("outputs", []):
+                            energy = item["energy"]
+                            records = json.loads((target_dir / "json" / item["json"]).read_text(encoding="utf-8"))
+                            expected_points = self._expected_ec_points(state, energy, records)
+                            prior = set(point_coverage.get(energy, expected_points if energy in completed else []))
+                            prior.update(item.get("points_updated", expected_points))
+                            point_coverage[energy] = sorted(prior)
+                            if expected_points and expected_points <= prior:
+                                ready.add(energy)
+                            else:
+                                completed.discard(energy)
+                        completed.update(ready)
                     completed.update(
                         Path(item["path"]).name.removesuffix(suffix)
                         for item in job["outputs"]
                         if suffix and item["path"].endswith(suffix)
-                        and layer != "TB_L1"
+                        and layer not in ("TB_L1", "EC_L2")
                     )
                     if layer in ("TB_L2", "EC_L3"):
                         completed.add("aggregate")
@@ -1296,10 +1362,13 @@ class Workbench:
                         for a in job["outputs"]
                         if a["path"].endswith("_fit_results.l2.json")
                     }
+                    updated_points = {point for item in job.get("result", {}).get("processor", {}).get("outputs", [])
+                                      for point in item.get("points_updated", [])}
                     state["pending_ec_windows"] = [
                         point
                         for point in state.get("pending_ec_windows", [])
-                        if point.split(":")[2] not in fitted_energies
+                        if point not in updated_points and (job["config"].get("ec_point_id")
+                                                           or point.split(":")[2] not in fitted_energies)
                     ]
                     if state["pending_ec_windows"]:
                         dirty.add("EC_L2")
@@ -1353,6 +1422,11 @@ class Workbench:
                         )
                         if not self.acquisition_coverage(state, downstream_layer)["current"]:
                             pending.add(downstream_layer)
+                    if "EC_L2" in subsets:
+                        for energy in subsets["EC_L2"]:
+                            state.setdefault("acquisition_ec_l2_points", {}).pop(energy, None)
+                            state.setdefault("ec_l2_provenance", {}).pop(
+                                f"{state['payload']}/ec/L2/json/{energy}_fit_results.l2.json", None)
                     state["acquisition_pending_layers"] = sorted(pending)
                 state["dirty_layers"] = sorted(dirty)
                 if layer == "TB_L2":
@@ -1390,7 +1464,20 @@ class Workbench:
                     provenance = state.setdefault("ec_l2_provenance", {})
                     for artifact in job["outputs"]:
                         if artifact["path"].endswith("_fit_results.l2.json"):
-                            provenance[artifact["path"]] = {"job_id": job_id, "tb_version": job["tb_version"]}
+                            rel = artifact["path"]
+                            energy = Path(rel).name.removesuffix("_fit_results.l2.json")
+                            rows = json.loads((root / "products" / rel).read_text(encoding="utf-8"))
+                            all_points = {f"{state['payload']}:ec:{energy}:{row['channel']}:{float(row['E']):g}"
+                                          for row in rows if not row.get("placeholder")}
+                            previous = provenance.get(rel, {})
+                            point_versions = dict(previous.get("point_versions", {
+                                point: previous["tb_version"] for point in all_points
+                            } if previous.get("tb_version") else {}))
+                            updates = {point for item in result.get("processor", {}).get("outputs", [])
+                                       if item["json"] == Path(rel).name for point in item.get("points_updated", all_points)}
+                            point_versions.update({point: job["tb_version"] for point in updates})
+                            provenance[rel] = {"job_id": job_id, "tb_version": job["tb_version"],
+                                               "point_versions": point_versions}
             state["jobs"] = [job if j["id"] == job_id else j for j in state["jobs"]]
             state["updated_at"] = now()
             write(job_root / "job.json", job)
@@ -1631,6 +1718,10 @@ class Workbench:
             result["excluded"] = point_id in state["config"].get("ec_excluded", [])
         else:
             raise ValueError("请选择 EC 层及有效能峰")
+        if reason := unsupported_spectral_model(_response_payload(state), channel):
+            result.update(unsupported_spectral_model=reason)
+            if layer in ("EC_L2", "EC_L3"):
+                result.update(fit=None, curve=None)
         result["tb_version"] = state.get("ec_dependency") if layer != "EC_L0" else None
         if layer != "EC_L0":
             from ..common.utils import read_parquet_metadata
@@ -1638,7 +1729,7 @@ class Workbench:
 
             selected = self.selected_tb(state)
             expected = (
-                ECL1Processor(state["payload"], self.runs)._load_tb_params(Path(selected["path"]))
+                ECL1Processor(state["payload"], self.runs, response_payload=_response_payload(state))._load_tb_params(Path(selected["path"]))
                 if selected
                 else None
             )

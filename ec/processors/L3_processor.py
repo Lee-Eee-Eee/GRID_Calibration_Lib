@@ -33,11 +33,13 @@ def _empty_channel_result(channel: int) -> Dict[str, Any]:
 class ECL3Processor:
     """EC L3层处理器 - 能量标定与分辨率拟合。每个通道独立。"""
 
-    def __init__(self, payload_name: str, product_root: Path):
+    def __init__(self, payload_name: str, product_root: Path, *, response_payload: str | None = None):
         self.payload_name = payload_name
+        self.response_payload = response_payload or payload_name
         self.layout = DataLayout(product_root, payload_name)
 
     def process(self, ec_l2_dir: Path, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from ...common.spectral_models import unsupported_spectral_model
         cfg = config or {}
         e_cut = float(cfg.get("energy_split_low", 50.2))
 
@@ -63,6 +65,9 @@ class ECL3Processor:
             ts = get_timestamp()
 
             for ch in range(4):
+                if unsupported_spectral_model(self.response_payload, ch):
+                    results["calibration_params"][str(ch)] = _empty_channel_result(ch)
+                    continue
                 ch_data_raw = [d for d in fit_data_all if d["channel"] == ch]
                 if not ch_data_raw:
                     results["calibration_params"][str(ch)] = _empty_channel_result(ch)

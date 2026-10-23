@@ -8,6 +8,7 @@ import matplotlib.tri as mtri
 import numpy as np
 from scipy.optimize import curve_fit
 
+from ...common.spectral_models import unsupported_spectral_model
 from ...common.utils import DataLayout, get_timestamp, read_json, read_parquet_metadata, write_json
 
 
@@ -47,8 +48,9 @@ class TBL2Processor:
     # L1 拟合质量低于此 R² 的点不参与曲面拟合（仍作 outlier 提示）
     MIN_RSQUARED = 0.5
 
-    def __init__(self, payload_name: str, product_root: Path):
+    def __init__(self, payload_name: str, product_root: Path, *, response_payload: str | None = None):
         self.payload_name = payload_name
+        self.response_payload = response_payload or payload_name
         self.layout = DataLayout(product_root, payload_name)
 
     def process(
@@ -84,6 +86,9 @@ class TBL2Processor:
             files_list = []
 
             for ch in range(4):
+                if unsupported_spectral_model(self.response_payload, ch):
+                    params_list.append(None)
+                    continue
                 ch_data = [d for d in fit_data if d["channel"] == ch]
                 if len(ch_data) < 8:
                     print(f"Channel {ch} has too few data points ({len(ch_data)}) for L2 fit.")
@@ -166,6 +171,8 @@ class TBL2Processor:
             per_ch_tv: Dict[int, Dict[str, float]] = {}
             for rec in channel_records:
                 ch = int(rec.get("channel", -1))
+                if unsupported_spectral_model(self.response_payload, ch):
+                    continue
                 if ch < 0:
                     continue
                 t = rec.get("temp")
@@ -182,6 +189,8 @@ class TBL2Processor:
                     temps = meta.get("temp", []) if isinstance(meta, dict) else []
                     biases = meta.get("bias", []) if isinstance(meta, dict) else []
                     for ch in range(4):
+                        if unsupported_spectral_model(self.response_payload, ch):
+                            continue
                         t = temps[ch] if ch < len(temps) else float("nan")
                         b = biases[ch] if ch < len(biases) else float("nan")
                         if isinstance(t, (int, float)) and np.isfinite(t) and isinstance(b, (int, float)) and np.isfinite(b):
@@ -193,6 +202,8 @@ class TBL2Processor:
             for rec in channel_records:
                 ch = int(rec.get("channel", -1))
                 if ch not in per_ch_tv:
+                    continue
+                if unsupported_spectral_model(self.response_payload, ch):
                     continue
                 if rec.get("fit_quality", {}).get("accepted") is False:
                     continue

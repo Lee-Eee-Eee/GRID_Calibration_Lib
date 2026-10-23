@@ -210,7 +210,7 @@ test('fit submission keeps the file and channel whose window was saved', async (
   `);
   await ui.run('pending');
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(patch)')), { windows: { '101': { '0': { lo: 20, hi: 80 } } } });
-  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(submitted)')), { layer: 'TB_L1', stem: '101', channel: 0, fit_channels: [0] });
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(submitted)')), { layer: 'TB_L1', stem: '101', channel: 0, fit_channels: [0], automatic_window: false });
 });
 
 test('the main layer action keeps its original layer, file, channel and scope while saving', async () => {
@@ -218,6 +218,7 @@ test('the main layer action keeps its original layer, file, channel and scope wh
   ui.run(`
     state.layer = 'TB_L1'; state.channel = 0; state.dirty = true;
     state.point = { id: '14B:101:0', stem: '101' }; $('run-scope').value = 'representative';
+    state.spectrum = {x:[0,100],y:[1,20]}; $('window-lo').value='20'; $('window-hi').value='80';
     const saved = deferred(); let submitted, busyStates = [];
     saveRevision = async () => { await saved.promise; };
     setBusy = value => { busyStates.push(value); };
@@ -342,6 +343,18 @@ test('a partial L1 job refreshes its usable results and reports successful and f
   assert.match(completion.message, /1/);
   assert.notEqual(completion.type, 'success');
   assert.notEqual(completion.type, 'error');
+});
+
+test('L1 progress includes rejected models even when every channel produced parameters', () => {
+  const ui = controller();
+  ui.run(`
+    state.layer = 'TB_L1';
+    renderL1Progress({ status: 'succeeded', config: {}, result: {
+      summary: { channels_succeeded: 192, channels_failed: 0 },
+      processor: { channels_accepted: 179, channels_rejected: 13 }
+    }});
+  `);
+  assert.match(ui.run('$("l1-progress").textContent'), /192 通道已拟合 · 179 通过 · 13 待复核/);
 });
 
 test('L1 residuals use matching histogram bins and finite model counts with Poisson scaling', () => {
@@ -757,8 +770,8 @@ test('a TB workflow keeps the explicit file through unpack and fit without repre
   `);
   await ui.run(`runPipeline(plan, 'tb')`);
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(submitted)')), [
-    { layer: 'TB_L0', stem: '094_observe_50C_290', representative: false },
-    { layer: 'TB_L1', stem: '094_observe_50C_290', representative: false },
+    { layer: 'TB_L0', stem: '094_observe_50C_290', representative: false, channel: 0 },
+    { layer: 'TB_L1', stem: '094_observe_50C_290', representative: false, channel: 0, fit_channels: [0] },
   ]);
   assert.throws(() => ui.run(`pipelinePlan('tb', '', '')`), /请选择 TB 文件/);
 });
@@ -802,7 +815,8 @@ test('EC workflow fitting submits only points from the chosen file and channel',
     { layer: 'EC_L2', point_id: 'chosen:2:511', channel: 2, representative: false },
     { layer: 'EC_L2', point_id: 'chosen:2:1275', channel: 2, representative: false },
   ]);
-  assert.equal(ui.run('selected.join()'), 'chosen:2:511,chosen:2:1275');
+  assert.equal(ui.run('selected.join()'), 'chosen:2:511,chosen:2:1275,chosen:2:511');
+  assert.equal(ui.run('state.point.id'), 'chosen:2:511');
 });
 
 test('a missing EC workflow spectrum fails instead of fitting another available spectrum', async () => {
@@ -933,4 +947,152 @@ test('saving XML without opening the lazy metadata tab preserves rules, manifest
   assert.equal(ui.element('profile-manifest-rows').rows.length, 0);
   assert.equal(ui.run('JSON.stringify(saved.discovery)'), ui.run('JSON.stringify(profile.discovery)'));
   assert.equal(ui.run('saved.xml.event.text'), '<event changed="true"/>');
+});
+
+test('plastic CH3 leaves window editing available while every current-channel Gaussian entry is blocked', async () => {
+  for (const payload of ['10B', '11B']) {
+    const ui = controller();
+    ui.run(`
+      state.run.payload='${payload}'; state.layer='TB_L1'; state.channel=3;
+      state.point={id:'plastic:3',stem:'plastic',channel:3}; state.spectrum={x:[0,100],y:[2,20]};
+      let submissions=0; executeJob=async()=>{submissions++;};
+      setBusy=productionSetBusy; setBusy(false);
+    `);
+    assert.equal(ui.element('fit-spectrum').disabled, true);
+    assert.equal(ui.element('auto-fit-spectrum').disabled, true);
+    assert.equal(ui.element('run-layer').disabled, true);
+    assert.equal(ui.element('window-lo').disabled, false);
+    assert.equal(ui.element('window-hi').disabled, false);
+    assert.equal(ui.element('spectral-model-note').textContent, '塑料闪烁体 · 康普顿响应，拟合方案待定');
+    await assert.rejects(ui.run('fitSpectrum()'), /康普顿响应/);
+    await assert.rejects(ui.run('autoFitSpectrum()'), /康普顿响应/);
+    assert.equal(ui.run('submissions'), 0);
+  }
+});
+
+test('plastic spectrum shows counts and draggable bounds without its old Gaussian or peak candidates', async () => {
+  const ui = controller();
+  ui.run(`
+    state.run.payload='10B'; state.layer='TB_L1'; state.channel=3;
+    state.point={id:'plastic:3',stem:'plastic',channel:3};
+    $('window-lo').value='20'; $('window-hi').value='80';
+    state.spectrum={x:[0,50,100],y:[2,20,4],curve:{x:[50],y:[19],background:[3]},fit:{peak_detection:{candidates:[{center:50}]}}};
+    let drawn=[];
+    globalThis.Plotly=window.Plotly={react:async(chart,traces,layout)=>{chart.data=traces;drawn.push({id:chart.id,traces,layout});},relayout:async()=>{}};
+  `);
+  await ui.run('renderSpectrum()');
+  assert.equal(ui.run('drawn[0].id'), 'surface-chart');
+  assert.equal(ui.run('drawn[0].traces.length'), 1);
+  assert.equal(ui.run('drawn[0].layout.shapes.length'), 3);
+  assert.equal(ui.run(`$('l1-spectrum-legend').dataset.fitAvailable`), 'false');
+  assert.equal(ui.element('spectrum-params').children.length, 0);
+});
+
+test('renaming an output payload retains the detector response from its preset or dataset', async () => {
+  for (const identity of [
+    {dataset:{profile:'10B',source_payload:'10B'}},
+    {dataset:{source_payload:'11B'}},
+    {dataset:{profile:'14B'},acquisition_preset:{payload:'10B'}},
+  ]) {
+    const ui = controller();
+    ui.run(`
+      Object.assign(state.run, ${JSON.stringify(identity)}, {payload:'TEST-10'});
+      state.layer='TB_L1'; state.channel=3;
+      state.point={id:'TEST-10:case:3',stem:'case',channel:3}; state.spectrum={x:[0,100],y:[2,20]};
+      let submissions=0; executeJob=async()=>{submissions++;};
+      setBusy=productionSetBusy; setBusy(false);
+    `);
+    assert.equal(ui.run('supportedFitChannels().join()'), '0,1,2');
+    assert.equal(ui.element('fit-spectrum').disabled, true);
+    assert.equal(ui.element('window-lo').disabled, false);
+    await assert.rejects(ui.run('fitSpectrum()'), /康普顿响应/);
+    assert.equal(ui.run('submissions'), 0);
+  }
+  const ui = controller();
+  ui.run(`state.run.payload='TEST-10'; state.run.dataset.profile='10B'; state.run.acquisition_preset={payload:'14B'};`);
+  assert.equal(ui.run('detectorPayload()'), '14B');
+  assert.equal(ui.run('supportedFitChannels().join()'), '0,1,2,3');
+});
+
+test('EC manual fitting sends the displayed point and window with automatic selection explicitly disabled', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer='EC_L2'; state.channel=2; state.point={id:'source:2:59.5',stem:'source',E:59.5};
+    state.spectrum={x:[0,100],y:[2,10]}; $('window-lo').value='25'; $('window-hi').value='75';
+    let patch,submitted; saveRevision=async extra=>{patch=extra;};
+    executeJob=async(layer,config)=>{submitted={layer,...config};}; notify=()=>{};
+  `);
+  await ui.run('fitSpectrum()');
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(patch)')), {ec_windows:{'source:2:59.5':{lo:25,hi:75}}});
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(submitted)')), {layer:'EC_L2',point_id:'source:2:59.5',channel:2,automatic_window:false});
+  assert.match(ui.element('fit-result-status').textContent, /当前窗口拟合完成/);
+});
+
+test('EC file filtering and previous-next navigation retain the current physical channel', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer='EC_L2'; state.channel=2; state.ecOverview={points:[
+      {id:'a',stem:'tube-50',E:50},{id:'b',stem:'tube-60',E:60},{id:'c',stem:'source-Cs137',E:661.7}
+    ]}; state.point=state.ecOverview.points[0];
+    $('peak-file-search').value='tube'; let picked=[];
+    selectEcPoint=async point=>{state.point=point;picked.push(point.id);};
+  `);
+  await ui.run('moveEcReviewFile(1)');
+  assert.equal(ui.run('state.point.id'), 'b');
+  await ui.run('moveEcReviewFile(1)');
+  assert.equal(ui.run('picked.join()'), 'b');
+  assert.equal(ui.run('state.channel'), 2);
+  ui.run(`$('peak-file-search').value='661.7'; renderEcReviewFiles();`);
+  assert.equal(ui.element('point-select').options.length, 1);
+  assert.equal(ui.element('point-select').options[0].value, 'c');
+});
+
+test('EC file switches cannot restore an older file when saves finish in reverse order', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer='EC_L2'; state.channel=1; state.dirty=true; state.point={id:'old',stem:'old'};
+    const firstSave=deferred(), secondSave=deferred(); let saves=0;
+    saveRevision=async()=>{await (++saves===1 ? firstSave.promise : secondSave.promise);};
+    api=async()=>({x:[0,100],y:[1,2],lo:10,hi:90});
+    renderSpectrum=async()=>{}; renderSpectrumProvenance=()=>{}; renderEcOverview=async()=>{}; renderCurrentStatus=()=>{};
+    const first=selectEcPoint({id:'first',stem:'first',E:50});
+    const second=selectEcPoint({id:'second',stem:'second',E:60});
+    secondSave.resolve();
+  `);
+  await ui.run('second');
+  ui.run('firstSave.resolve()');
+  await ui.run('first');
+  assert.equal(ui.run('state.point.id'), 'second');
+});
+
+test('EC spectrum residuals use propagated signal-background errors', () => {
+  const ui = controller();
+  ui.run(`const actual=l1Residual({x:[1,2],y:[12,-2],yerr:[2,4],curve:{x:[1,2],y:[8,2]}});`);
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(actual.y)')), [2,-1]);
+});
+
+test('next-layer navigation saves a changed window and opens the layer without running a processor', async () => {
+  for (const [layer,next] of [['TB_L1','TB_L2'],['EC_L2','EC_L3']]) {
+    const ui = controller();
+    ui.run(`
+      state.layer='${layer}';state.dirty=true;let actions=[];
+      saveRevision=async()=>{actions.push('save');}; selectLayer=async layer=>{actions.push(layer);};
+      executeJob=async()=>{actions.push('compute');};
+    `);
+    await ui.run('reviewNextLayer()');
+    assert.equal(ui.run('actions.join()'), `save,${next}`);
+  }
+});
+
+test('a single-file pipeline keeps its entry channel when another channel is viewed during processing', async () => {
+  const ui = controller();
+  ui.run(`
+    state.channel=2; let submitted=[];
+    selectLayer=async layer=>{state.layer=layer;};
+    executeJob=async(layer,spec)=>{submitted.push({layer,...spec});state.channel=1;};
+  `);
+  await ui.run(`runPipeline(pipelinePlan('tb','chosen',''),'tb')`);
+  assert.equal(ui.run('submitted[0].channel'), 2);
+  assert.equal(ui.run('submitted[1].channel'), 2);
+  assert.equal(ui.run('submitted[1].fit_channels.join()'), '2');
 });

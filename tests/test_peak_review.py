@@ -9,31 +9,18 @@ import pytest
 from calibration_lib.common.peak_finding import (
     PeakDetectionError,
     detect_photopeak,
-    fit_quality,
 )
 from calibration_lib.ec.processors.L2_processor import ECL2Processor
 from calibration_lib.ec.processors.L3_processor import ECL3Processor
-from calibration_lib.tb.processors.L1_processor import TBL1Processor
 
 
-def test_high_r_squared_exponential_fluctuation_is_rejected_as_a_photopeak(tmp_path):
-    """A curved continuum can give R² > .99 without evidence for a line."""
+def test_exponential_fluctuation_is_rejected_before_peak_fitting():
+    """A curved continuum must not be accepted as a photopeak."""
     x = np.arange(300) + 0.5
     y = np.random.default_rng(12).poisson(500 * np.exp(-x / 20) + 2)
-    candidate, _ = detect_photopeak(x, y)
-    mask = (x >= candidate.window[0]) & (x <= candidate.window[1])
-    processor = TBL1Processor("Review", tmp_path)
-    result, _, _, rsquared = processor._select_best_fit(
-        x[mask], y[mask], candidate.center,
-        candidate.center - 1.5 * candidate.sigma,
-        candidate.center + 1.5 * candidate.sigma,
-        candidate.sigma,
-    )
-    quality = fit_quality(result, x[mask], y[mask], np.sqrt(np.maximum(y[mask], 1)))
-    assert rsquared > 0.99
-    assert quality["accepted"] is False
-    assert quality["delta_bic_background"] < 6
-    json.dumps(quality, allow_nan=False)
+    with pytest.raises(PeakDetectionError, match="No resolved photopeak") as error:
+        detect_photopeak(x, y)
+    json.dumps(error.value.diagnostics, allow_nan=False)
 
 
 def test_ec_keeps_per_bin_propagated_errors_instead_of_a_median_floor(tmp_path, monkeypatch):
@@ -119,11 +106,11 @@ def test_actual_14b_weak_photopeak_never_silently_locks_to_the_dark_component():
                          .read_text(encoding="utf8"))
     y = np.asarray(fixture["counts"], dtype=float)
     x = fixture["bin_lo"] + (np.arange(len(y)) + 0.5) * fixture["bin_width"]
-    with pytest.raises(PeakDetectionError, match="unresolved") as error:
-        detect_photopeak(x, y)
-    diagnostics = error.value.diagnostics
-    assert diagnostics["selected_center"] is None
-    assert any(abs(row["center"] - 84.5) < 1 for row in diagnostics["candidates"])
+    # Wider scales now resolve the weak signal; neither success nor ambiguity
+    # may return the large dark component as the calibration peak.
+    candidate, diagnostics = detect_photopeak(x, y)
+    assert 190 < candidate.center < 220
+    assert any(abs(row["center"] - 84.5) < 2 for row in diagnostics["candidates"])
     assert any(190 < row["center"] < 220 for row in diagnostics["candidates"])
     # An independent center makes the intended signal candidate identifiable;
     # subsequent model quality still decides whether it can enter calibration.

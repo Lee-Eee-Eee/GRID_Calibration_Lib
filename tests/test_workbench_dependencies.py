@@ -399,6 +399,16 @@ def test_partial_import_allows_matching_xray_local_refit_despite_unrelated_stale
     windows = mixed_ec_history(dependency_workspace)
     run = default_run(dependency_service)
     assert run["ec_dependency"] is None  # The global import cannot claim all files match.
+    target = dependency_service.root(run["id"]) / "products/14B/ec/L2/json/40keV_fit_results.l2.json"
+    before = json.loads(target.read_text(encoding="utf-8"))
+    original_fit = ECL2Processor._fit_energy_spectrum
+    fitted_channels = []
+
+    def capture_fit(processor, **kwargs):
+        fitted_channels.append(kwargs["channel"])
+        return original_fit(processor, **kwargs)
+
+    monkeypatch.setattr(ECL2Processor, "_fit_energy_spectrum", capture_fit)
     dependency_service.patch(run["id"], {"ec_windows": windows})
     result = settled(
         dependency_service,
@@ -415,11 +425,18 @@ def test_partial_import_allows_matching_xray_local_refit_despite_unrelated_stale
     assert result["status"] == "succeeded", result.get("error")
     state = dependency_service.view(run["id"])
     assert state["ec_dependency"] is None  # Local success does not upgrade the global claim.
-    assert state["ec_coverage"]["computed_files"] == 1
+    assert state["ec_coverage"]["computed_files"] == 0
     assert state["ec_coverage"]["total"] == 4 and state["ec_coverage"]["mixed"]
-    assert state["pending_ec_windows"] == []
-    assert "EC_L2" not in state["dirty_layers"]
+    assert set(state["pending_ec_windows"]) == set(windows) - {"14B:ec:40keV:0:40"}
+    assert "EC_L2" in state["dirty_layers"]
     assert "EC_L3" in state["dirty_layers"]
+    assert fitted_channels == [0]
+    assert result["result"]["processor"]["outputs"][0]["points_updated"] == ["14B:ec:40keV:0:40"]
+    after = json.loads(target.read_text(encoding="utf-8"))
+    assert after[0]["channel"] == 0
+    assert after[0]["center"] == pytest.approx(300.0, abs=2.0)
+    assert after[0]["window_manual"] is True
+    assert after[1:] == before[1:]
 
 
 @pytest.mark.parametrize("kind", ["xray", "source_background"])

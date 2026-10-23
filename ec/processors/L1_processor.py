@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ...common.spectral_models import unsupported_spectral_model
 from ...common.utils import (
     DataLayout,
     get_timestamp,
@@ -28,8 +29,9 @@ class ECL1Processor:
     REF_TEMP = 25.0
     REF_BIAS = 28.5
 
-    def __init__(self, payload_name: str, product_root: Path):
+    def __init__(self, payload_name: str, product_root: Path, *, response_payload: str | None = None):
         self.payload_name = payload_name
+        self.response_payload = response_payload or payload_name
         self.layout = DataLayout(product_root, payload_name)
 
     def process(
@@ -46,6 +48,11 @@ class ECL1Processor:
             "n_processed": 0,
             "outputs": [],
             "errors": [],
+            "skipped_channels": [
+                {"channel": ch, "reason": reason}
+                for ch in range(4)
+                if (reason := unsupported_spectral_model(self.response_payload, ch))
+            ],
         }
 
         tb_params = self._load_tb_params(tb_l2_json_path)
@@ -208,6 +215,8 @@ class ECL1Processor:
             if not isinstance(row, dict):
                 continue
             ch = int(row["channel"]) if "channel" in row else i
+            if unsupported_spectral_model(self.response_payload, ch):
+                continue
             G0 = float(row.get("G0", 0.0))
             if G0 == 0.0:
                 continue
@@ -218,7 +227,8 @@ class ECL1Processor:
                 "b": float(row["b"]),
                 "c": float(row["c"]),
             }
-        if set(out) != {0, 1, 2, 3}:
+        required = {ch for ch in range(4) if not unsupported_spectral_model(self.response_payload, ch)}
+        if set(out) != required:
             raise ValueError(f"Incomplete TB parameters in {tb_l2_json_path}")
         return out
 
@@ -245,6 +255,8 @@ class ECL1Processor:
         amp_corr = np.full_like(amp_arr, np.nan, dtype=float)
 
         for ch in range(4):
+            if unsupported_spectral_model(self.response_payload, ch):
+                continue
             mask = ch_arr == ch
             if not np.any(mask):
                 continue

@@ -8,7 +8,7 @@ not an identification of a particular SiPM noise process.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,7 @@ from lmfit.models import ExponentialModel
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
-ALGORITHM = "multiscale-snip-v1"
+ALGORITHM = "multiscale-snip-v2"
 ALGORITHM_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
@@ -41,6 +41,14 @@ class PeakCandidate:
     scales: int
     noise_candidate: bool = False
     score: float = 0.0
+    scale_values: list[float] = field(default_factory=list)
+    representative_scale: float = 1.0
+    center_spread_sigma: float = 0.0
+    width_relative_spread: float = 0.0
+    shape_significance: float = 0.0
+    shape_delta_chi2: float = 0.0
+    banks: list[str] = field(default_factory=list)
+    curvature_significance: float | None = None
 
 
 def _snip(y: np.ndarray, radius: int) -> np.ndarray:
@@ -54,14 +62,37 @@ def _snip(y: np.ndarray, radius: int) -> np.ndarray:
     return np.maximum(np.expm1(np.expm1(baseline)) ** 2 - 1.0, 0.0)
 
 
-def detect_photopeak(
+def _gaussian_contrast(x, y, errors, center, sigma):
+    """Fixed Gaussian contrast after projecting out local smooth curvature.
+
+    This weighted linear contrast propagates the nuisance-background covariance.
+    Its significance is local to an already searched center/width, not a global
+    discovery p-value. The original counts/net counts and errors are untouched.
+    """
+    use = np.abs(x - center) <= max(3.5 * sigma, 4 * float(np.median(np.diff(x))))
+    if np.count_nonzero(use) < 7:
+        return 0., 0.
+    z = (x[use] - center) / sigma
+    nuisance = np.column_stack([np.ones(len(z)), z, z**2]) / errors[use, None]
+    template = np.exp(-0.5 * z**2) / errors[use]
+    perpendicular = template - nuisance @ np.linalg.lstsq(nuisance, template, rcond=None)[0]
+    norm = float(perpendicular @ perpendicular)
+    if norm <= np.finfo(float).eps:
+        return 0., 0.
+    significance = float(perpendicular @ (y[use] / errors[use]) / np.sqrt(norm))
+    return significance, max(significance, 0.)**2
+
+
+def _search_photopeaks(
     x: np.ndarray,
     y: np.ndarray,
     errors: np.ndarray | None = None,
     *,
     window: tuple[float, float] | list[float] | None = None,
     config: dict[str, Any] | None = None,
-) -> tuple[PeakCandidate, dict[str, Any]]:
+    proposals_only: bool = False,
+    include_noise: bool = False,
+) -> tuple[PeakCandidate | list[PeakCandidate], dict[str, Any]]:
     """Return a resolved peak and serializable evidence for the recommendation.
 
     ``noise_ceiling`` is an optional measured threshold in the same ADC units as
@@ -75,12 +106,12 @@ def detect_photopeak(
         value = settings.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0:
             raise PeakDetectionError(f"{key} must be finite and positive")
-    for key in ("noise_ceiling", "expected_center", "expected_energy_keV"):
+    for key in ("noise_ceiling", "expected_center", "expected_energy_keV", "min_resolution"):
         value = settings.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
                                   or not np.isfinite(value) or value < 0
-                                  or key != "noise_ceiling" and value == 0):
-            raise PeakDetectionError(f"{key} must be a finite {'nonnegative' if key == 'noise_ceiling' else 'positive'} value")
+                                  or key not in ("noise_ceiling", "min_resolution") and value == 0):
+            raise PeakDetectionError(f"{key} must be a finite {'nonnegative' if key in ('noise_ceiling', 'min_resolution') else 'positive'} value")
     x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
     if x.ndim != 1 or y.shape != x.shape or x.size < 9:
         raise PeakDetectionError("No resolved photopeak: histogram has fewer than nine bins")
@@ -105,13 +136,20 @@ def detect_photopeak(
     # SNIP is scale normalized so count-rate and count histograms have identical
     # peak positions. Subtracted EC spectra retain their propagated uncertainties.
     norm = max(floor, np.finfo(float).eps)
-    continuum = _snip(np.maximum(y, 0.0) / norm, min(80, max(12, x.size // 8))) * norm
+    # Geometric scales follow the sampled span, rather than an ADC cutoff.
+    # The background window must span the widest supported peak. An 80-bin
+    # window otherwise absorbs broad, high-gain photopeaks into its continuum.
+    largest_scale = max(4., min(128., x.size / 24.))
+    smoothing_scales = 2. ** np.arange(int(np.floor(np.log2(largest_scale))) + 1)
+    snip_radius = min(max(12, x.size // 4), max(80, int(4 * smoothing_scales[-1])))
+    continuum = _snip(np.maximum(y, 0.0) / norm, snip_radius) * norm
     residual = y - continuum
     proposed: list[PeakCandidate] = []
-    for scale in (1.0, 2.0, 4.0):
+    samples: dict[int, list[tuple[float, float, float]]] = {}
+    for scale in smoothing_scales:
         smooth = gaussian_filter1d(residual, scale, mode="nearest")
         # Gaussian smoothing propagates independent-bin variance using k**2.
-        radius = max(2, int(np.ceil(4 * scale)))
+        radius = min((len(y) - 1) // 2, max(2, int(np.ceil(4 * scale))))
         grid = np.arange(-radius, radius + 1, dtype=float)
         kernel = np.exp(-0.5 * (grid / scale) ** 2)
         kernel /= kernel.sum()
@@ -125,6 +163,8 @@ def detect_photopeak(
             width = float(props["widths"][i]) * dx / 2.354820045
             sigma = float(np.sqrt(max(width**2 - (scale * dx)**2, (0.8 * dx)**2)))
             if sigma < min_sigma or sigma > float(settings.get("max_resolution", 1.2)) * max(x[index], dx) / 2.354820045:
+                continue
+            if 2.354820045 * sigma / max(abs(x[index]), dx) < float(settings.get("min_resolution") or 0.):
                 continue
             core = np.abs(x - x[index]) <= 2.0 * sigma
             side = (np.abs(x - x[index]) >= 2.5 * sigma) & (np.abs(x - x[index]) <= 4.5 * sigma)
@@ -142,18 +182,102 @@ def detect_photopeak(
             summed_basis = basis[core].sum(axis=0)
             area_variance = float(np.sum(err[core] ** 2) + summed_basis @ covariance @ summed_basis)
             significance = area / max(float(np.sqrt(area_variance)), np.finfo(float).eps)
-            if significance < minimum:
+            shape_significance, shape_delta_chi2 = _gaussian_contrast(x, y, err, float(x[index]), sigma)
+            if shape_significance < minimum:
                 continue
             match = next((c for c in proposed if abs(c.center - x[index]) < max(3 * dx, 1.25 * c.sigma)), None)
             if match is not None:
-                match.scales += 1
+                # Multiple maxima at one scale are not independent scale
+                # confirmations. Retain scale samples for stability evidence.
+                if scale not in match.scale_values:
+                    match.scale_values.append(float(scale))
+                    match.scales = len(match.scale_values)
+                    samples[id(match)].append((float(x[index]), sigma, float(scale)))
+                # Prefer the broadest smoothing still narrower than the
+                # intrinsic peak. Correct Gaussian broadening before taking
+                # this width; do not inherit a noisy one-bin estimate forever.
+                if scale * dx <= sigma and scale >= match.representative_scale:
+                    match.center = float(x[index])
+                    match.sigma = sigma
+                    match.significance = significance
+                    match.prominence = prominence
+                    match.shape_significance = shape_significance
+                    match.shape_delta_chi2 = shape_delta_chi2
+                    match.representative_scale = float(scale)
+                    half_window = max(3.5 * sigma, 4 * dx)
+                    match.window = [max(float(x[0]), float(x[index] - half_window)),
+                                    min(float(x[-1]), float(x[index] + half_window))]
                 continue
-            proposed.append(PeakCandidate(
+            candidate = PeakCandidate(
                 center=float(x[index]), sigma=sigma, significance=significance,
                 prominence=prominence,
-                window=[max(float(x[0]), float(x[index] - 3.5 * sigma)),
-                        min(float(x[-1]), float(x[index] + 3.5 * sigma))], scales=1,
-            ))
+                window=[max(float(x[0]), float(x[index] - max(3.5 * sigma, 4 * dx))),
+                        min(float(x[-1]), float(x[index] + max(3.5 * sigma, 4 * dx)))], scales=1,
+                scale_values=[float(scale)], representative_scale=float(scale),
+                shape_significance=shape_significance, shape_delta_chi2=shape_delta_chi2,
+                banks=["snip_local_maximum"],
+            )
+            proposed.append(candidate)
+            samples[id(candidate)] = [(float(x[index]), sigma, float(scale))]
+    # A weak peak on a steep dark/Compton tail need not be a local maximum
+    # after smoothing. A zero-sum difference-of-Gaussians removes a constant
+    # and linear continuum; propagate the same measured counting errors with
+    # kernel**2. Original-count Gaussian-vs-quadratic evidence confirms it.
+    for scale in smoothing_scales:
+        radius = min((len(y) - 1) // 2, max(2, int(np.ceil(8 * scale))))
+        grid = np.arange(-radius, radius + 1, dtype=float)
+        narrow = np.exp(-0.5 * (grid / scale)**2)
+        broad = np.exp(-0.5 * (grid / (2 * scale))**2)
+        kernel = narrow / narrow.sum() - broad / broad.sum()
+        contrast = np.convolve(y, kernel, mode="same")
+        variance = np.convolve(err**2, kernel**2, mode="same")
+        snr = contrast / np.sqrt(np.maximum(variance, np.finfo(float).eps))
+        indices, _ = find_peaks(snr, height=minimum)
+        sigma = float(scale * dx)
+        for index in indices:
+            resolution = 2.354820045 * sigma / max(abs(x[index]), dx)
+            if (sigma < min_sigma or resolution > float(settings.get("max_resolution", 1.2))
+                    or resolution < float(settings.get("min_resolution") or 0.)):
+                continue
+            shape_significance, delta = _gaussian_contrast(x, y, err, float(x[index]), sigma)
+            if shape_significance < minimum:
+                continue
+            match = next((c for c in proposed if abs(c.center - x[index]) < max(3 * dx, 1.25 * c.sigma)), None)
+            half_window = max(3.5 * sigma, 4 * dx)
+            fit_window = [max(float(x[0]), float(x[index] - half_window)),
+                          min(float(x[-1]), float(x[index] + half_window))]
+            if match is not None:
+                if "curvature" not in match.banks:
+                    match.banks.append("curvature")
+                if scale not in match.scale_values:
+                    match.scale_values.append(float(scale))
+                    match.scales = len(match.scale_values)
+                    samples[id(match)].append((float(x[index]), sigma, float(scale)))
+                if ("snip_local_maximum" not in match.banks
+                        and shape_significance > match.shape_significance):
+                    match.center = float(x[index])
+                    match.sigma = sigma
+                    match.significance = shape_significance
+                    match.shape_significance = shape_significance
+                    match.shape_delta_chi2 = delta
+                    match.window = fit_window
+                    match.representative_scale = float(scale)
+                match.curvature_significance = max(float(snr[index]), match.curvature_significance or 0.)
+                continue
+            candidate = PeakCandidate(
+                center=float(x[index]), sigma=sigma, significance=shape_significance,
+                prominence=float(contrast[index]), window=fit_window, scales=1,
+                scale_values=[float(scale)], representative_scale=float(scale),
+                shape_significance=shape_significance, shape_delta_chi2=delta,
+                banks=["curvature"], curvature_significance=float(snr[index]),
+            )
+            proposed.append(candidate)
+            samples[id(candidate)] = [(float(x[index]), sigma, float(scale))]
+    for candidate in proposed:
+        supported = [sample for sample in samples[id(candidate)] if sample[2] * dx <= sample[1]]
+        if len(supported) >= 2:
+            candidate.center_spread_sigma = float(np.std([sample[0] for sample in supported]) / max(candidate.sigma, dx))
+            candidate.width_relative_spread = float(np.std([sample[1] for sample in supported]) / max(candidate.sigma, dx))
     proposed.sort(key=lambda candidate: candidate.center)
     stable = [candidate for candidate in proposed if candidate.scales >= 2]
     # A measured noise ceiling takes precedence. A heuristic leading component
@@ -198,15 +322,16 @@ def detect_photopeak(
             noise_boundary = None
     candidates = []
     eligible = list(stable)
-    if window is not None or expected is not None:
+    if window is not None or expected is not None or proposals_only:
         eligible.extend(candidate for candidate in proposed if candidate.scales < 2
-                        and candidate.significance >= minimum * 1.1)
+                        and candidate.shape_significance >= minimum * 1.1)
     for candidate in eligible:
-        if candidate.noise_candidate or not lower <= candidate.center <= upper:
+        if ((candidate.noise_candidate and not (proposals_only and include_noise and settings.get("noise_ceiling") is None))
+                or not lower <= candidate.center <= upper):
             continue
         if candidate.center - lower < dx or upper - candidate.center < dx:
             continue
-        candidate.score = candidate.significance
+        candidate.score = candidate.shape_significance
         if expected is not None:
             distance = abs(candidate.center - float(expected)) / max(abs(float(expected)) * tolerance, 2 * dx)
             if distance > 1.5:
@@ -222,6 +347,15 @@ def detect_photopeak(
              "warnings": warnings, "selected_center": None, "min_significance": minimum},
         )
     candidates.sort(key=lambda candidate: candidate.score, reverse=True)
+    if proposals_only:
+        return candidates, {
+            "algorithm": ALGORITHM, "algorithm_sha256": ALGORITHM_SHA256,
+            "manual_window": window is not None, "noise_boundary": noise_boundary,
+            "selected_center": None, "candidate_origin": "multiscale_search",
+            "selection_status": "unselected", "candidates": [asdict(candidate) for candidate in proposed],
+            "warnings": warnings, "min_significance": minimum,
+            "snip_half_window_bins": snip_radius, "smoothing_scales_bins": smoothing_scales.tolist(),
+        }
     selected = candidates[0]
     if selected.scales < 2:
         warnings.append("Single-scale candidate admitted by the explicit window/independent center; inspect its fitted uncertainty")
@@ -241,7 +375,10 @@ def detect_photopeak(
         )
     if len(candidates) > 1:
         other = candidates[1]
-        if other.score > 0.82 * selected.score and abs(other.center - selected.center) > 2 * max(other.sigma, selected.sigma):
+        comparable_area = (expected is None and other.significance > 0.82 * selected.significance
+                           and selected.significance > 0.82 * other.significance)
+        if ((other.score > 0.82 * selected.score or comparable_area)
+                and abs(other.center - selected.center) > 2 * max(other.sigma, selected.sigma)):
             raise PeakDetectionError(
                 f"Ambiguous photopeak candidates at {selected.center:g} and {other.center:g} ADC; "
                 "narrow the window or provide an independently calibrated expected center",
@@ -261,8 +398,34 @@ def detect_photopeak(
         "noise_boundary": noise_boundary, "selected_center": selected.center,
         "candidates": [asdict(candidate) for candidate in proposed], "warnings": warnings,
         "min_significance": minimum,
+        "snip_half_window_bins": snip_radius, "smoothing_scales_bins": smoothing_scales.tolist(),
     }
     return selected, diagnostics
+
+
+def detect_photopeak(
+    x: np.ndarray, y: np.ndarray, errors: np.ndarray | None = None, *,
+    window: tuple[float, float] | list[float] | None = None,
+    config: dict[str, Any] | None = None,
+) -> tuple[PeakCandidate, dict[str, Any]]:
+    """Select a unique candidate; preserve ambiguity instead of guessing a line."""
+    return _search_photopeaks(x, y, errors, window=window, config=config)
+
+
+def propose_photopeaks(
+    x: np.ndarray, y: np.ndarray, errors: np.ndarray | None = None, *,
+    window: tuple[float, float] | list[float] | None = None,
+    config: dict[str, Any] | None = None, include_noise: bool = False,
+) -> tuple[list[PeakCandidate], dict[str, Any]]:
+    """Return unselected candidates for bounded, original-count model comparison.
+
+    Candidates are not energy identities or independent calibration anchors.
+    ``include_noise`` retains empirical noise flags for contextual review; a
+    measured ``noise_ceiling`` is always applied. Fits still need their usual
+    counting-error, background and physical-consistency checks.
+    """
+    return _search_photopeaks(x, y, errors, window=window, config=config,
+                             proposals_only=True, include_noise=include_noise)
 
 
 def fit_quality(result: Any, x: np.ndarray, y: np.ndarray, errors: np.ndarray) -> dict[str, Any]:

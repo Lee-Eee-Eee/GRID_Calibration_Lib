@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..common.spectral_models import detector_identity, unsupported_spectral_model
+
 
 def _read(path, default=None):
     try:
@@ -16,6 +18,7 @@ def _read(path, default=None):
 def overview(workbench, run_id):
     state = workbench.read(run_id)
     payload, root = state["payload"], workbench.root(run_id)
+    response_payload = detector_identity(payload, state.get("dataset"), state.get("acquisition_preset"))
     adapter = workbench.adapter_for(state)
     l0 = adapter.tb_files(payload, root / "products")
     records = {}
@@ -60,6 +63,9 @@ def overview(workbench, run_id):
             attempt = attempts.get((stem, channel), {})
             quality = record.get("fit_quality", {})
             status = "failed" if attempt.get("error") else "rejected" if quality.get("accepted") is False else "fitted" if record.get("center") is not None else "not_fitted"
+            reason = unsupported_spectral_model(response_payload, channel)
+            if reason:
+                record, quality, status, attempt = {}, {}, "model_pending", {}
             channels.append({
                 **{key: record.get(key) for key in (
                     "center", "center_err", "sigma", "resolution", "rsquared", "temp", "bias",
@@ -69,12 +75,14 @@ def overview(workbench, run_id):
                 "pending_window": point_id in pending,
                 "error": attempt.get("error"), "attempt": attempt or None,
                 "excluded": point_id in state.get("config", {}).get("excluded", []),
+                "unsupported_spectral_model": reason,
             })
-        fitted = sum(item["fit_status"] == "fitted" and not item["pending_window"] for item in channels)
-        attention = any(item["fit_status"] in ("failed", "rejected") for item in channels)
-        needs_fit = any(item["pending_window"] for item in channels)
+        supported = [item for item in channels if not item["unsupported_spectral_model"]]
+        fitted = sum(item["fit_status"] == "fitted" and not item["pending_window"] for item in supported)
+        attention = any(item["fit_status"] in ("failed", "rejected") for item in supported)
+        needs_fit = any(item["pending_window"] for item in supported)
         files.append({"stem": stem, "has_l0": stem in l0, "channels": channels,
-                      "fitted": fitted, "status": "attention" if attention else "fitted" if fitted == 4 and not needs_fit else "pending"})
+                      "fitted": fitted, "status": "attention" if attention else "fitted" if fitted == len(supported) and not needs_fit else "pending"})
     return {"files": files, "layer": "TB_L1", "payload": payload}
 
 

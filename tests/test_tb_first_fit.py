@@ -63,11 +63,13 @@ def test_l0_only_points_supply_real_hk_and_selectable_unfitted_spectra(tmp_path)
     assert len(points) == 4
     assert {p["channel"] for p in points} == {0, 1, 2, 3}
     for point in points:
-        assert point["fit_status"] == "not_fitted" and point["used"] is False
+        assert point["fit_status"] == ("model_pending" if point["channel"] == 3 else "not_fitted")
+        assert point["used"] is False
         assert point["center"] is point["gain"] is point["l1_path"] is None
         assert point["l0_path"] == str(path)
         assert point["temp"] == 20 + point["channel"]
         assert point["bias"] == 27 + point["channel"] * 0.5
+    assert points[3]["unsupported_spectral_model"] == "塑料闪烁体 · 康普顿响应，拟合方案待定"
     spectrum = adapter.spectrum("10B", products, "10B:case:2")
     assert spectrum["fit"] is None and spectrum["curve"] is None
     assert spectrum["n_events"] == sum(spectrum["y"]) == count
@@ -114,7 +116,8 @@ def test_l0_union_preserves_fitted_rows_and_never_counts_unfitted_points_in_surf
     assert len(points) == 8
     assert all(points[0][key] == value for key, value in record.items())
     assert points[0]["id"] == "10B:case:0"
-    assert sum(p["fit_status"] == "not_fitted" for p in points) == 7
+    assert sum(p["fit_status"] == "not_fitted" for p in points) == 5
+    assert sum(p["fit_status"] == "model_pending" for p in points) == 2
     surface = adapter.surface("10B", products, 0)
     assert surface["diagnostics"]["n_points"] == 1
     assert len(surface["points"]) == 2

@@ -23,6 +23,7 @@ matplotlib.use("Agg")
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 
+from ..common.spectral_models import detector_identity, photopeak_channels, unsupported_spectral_model
 from ..common.utils import (
     DataLayout,
     read_json,
@@ -71,7 +72,8 @@ def _clean(value: Any) -> Any:
 
 
 class ComputeAdapter:
-    def __init__(self, workspace: Path, dataset: dict | None = None, acquisition: dict | None = None):
+    def __init__(self, workspace: Path, dataset: dict | None = None, acquisition: dict | None = None,
+                 *, response_payload: str | None = None):
         self.workspace = Path(workspace).resolve()
         self.dataset = DatasetCatalog(self.workspace).resolve(dataset) if dataset is not None else None
         self.source_payload = self.dataset["source_payload"] if self.dataset else None
@@ -82,6 +84,10 @@ class ComputeAdapter:
         )
         self.resources = Path(__file__).resolve().parents[1] / "resources"
         self.acquisition = validate_profile(acquisition) if acquisition is not None else None
+        self.response_payload = response_payload
+
+    def detector_payload(self, payload):
+        return self.response_payload or detector_identity(payload, self.dataset)
 
     def unavailable_reason(self, layer):
         capabilities = (self.acquisition or {}).get("processing_capabilities", {})
@@ -414,6 +420,10 @@ class ComputeAdapter:
                         "histogram_config": histogram,
                     }
                 )
+        for row in rows:
+            if reason := unsupported_spectral_model(self.detector_payload(payload), row["channel"]):
+                row.update(unsupported_spectral_model=reason, fit_status="model_pending", used=False,
+                           center=None, gain=None, fit_quality={"accepted": False, "status": "model_pending"})
         return _clean(rows)
 
     def tb_files(self, payload: str, product_root: Path) -> dict[str, Path]:
@@ -543,12 +553,15 @@ class ComputeAdapter:
             "hk_data": metadata["hk_data"],
             "histogram_config": histogram,
             "input_quality": input_quality,
+            "unsupported_spectral_model": unsupported_spectral_model(self.detector_payload(payload), channel),
             "window_bounds": {"min": histogram["min"], "max": histogram["max"], "minimum_width": 8},
             "default_window": {
                 "lo": (record or {}).get("window_lo", histogram["min"]),
                 "hi": (record or {}).get("window_hi", histogram["max"]),
             },
         }
+        if common["unsupported_spectral_model"] and layer == "TB_L1":
+            return _clean({**common, "fit": None, "curve": None})
         if layer == "TB_L0" or record is None:
             return _clean({**common, "fit": record, "curve": None})
         if input_quality.get("excluded_crc_count", 0) and not record.get("input_quality"):
@@ -597,7 +610,7 @@ class ComputeAdapter:
         selected_path, params = None, None
         for path in reversed(paths):
             try:
-                tb_package(path)
+                tb_package(path, required_channels=photopeak_channels(self.detector_payload(payload)))
                 records = read_json(path)
                 if isinstance(records, dict):
                     records = records["fit_params"]
@@ -612,7 +625,7 @@ class ComputeAdapter:
                 continue
         if selected_path is None:
             return {"params": None, "points": rows, "grid": None, "diagnostics": {}, "version": None}
-        evaluator = ECL1Processor(payload, product_root)._gain_temp_bias_model
+        evaluator = ECL1Processor(payload, product_root, response_payload=self.detector_payload(payload))._gain_temp_bias_model
         manifest_path = self._layer_dir(product_root, payload, "TB_L2") / "json" / "L2_manifest.json"
         manifest = read_json(manifest_path) if manifest_path.exists() else {}
         excluded = set(manifest.get("excluded_points", []))
@@ -892,7 +905,7 @@ class ComputeAdapter:
             hydrated = self._hydrate(payload, product_root, "TB_L0", selection)
             self._verify_acquisition_inputs(payload, product_root, "TB_L0", selection)
             windows = self._windows(payload, config, product_root)
-            result = TBL1Processor(payload, product_root).process(
+            result = TBL1Processor(payload, product_root, response_payload=self.detector_payload(payload)).process(
                 layout.get_tb_l0_dir(),
                 {
                     **TB_PROCESS_PARAMS,
@@ -900,6 +913,8 @@ class ComputeAdapter:
                     "automatic_window": config.get("automatic_window", False),
                     "peak_detection": config.get("peak_detection", {}),
                     "fit_channels": config.get("fit_channels", [0, 1, 2, 3]),
+                    "peak_context_l0_paths": [str(path) for path in self.tb_files(payload, product_root).values()
+                                              if path is not None],
                 },
                 only_stems=[f"{stem}.l0" for stem in selection] if selection is not None else None,
             )
@@ -912,7 +927,7 @@ class ComputeAdapter:
                     if path.name.removesuffix("_fit_results.l1.json") not in allowed:
                         path.unlink()
             (layout.get_tb_l0_dir() / "parquet").mkdir(parents=True, exist_ok=True)
-            result = TBL2Processor(payload, product_root).process(
+            result = TBL2Processor(payload, product_root, response_payload=self.detector_payload(payload)).process(
                 layout.get_tb_l1_dir(), layout.get_tb_l0_dir(), excluded_points=config.get("excluded", [])
             )
             selection = None  # A surface always uses the full current L1 snapshot.
@@ -986,7 +1001,7 @@ class ComputeAdapter:
                 selection = sorted(set(selection) | backgrounds)
             hydrated = self._hydrate(payload, product_root, "EC_L0", selection)
             self._verify_acquisition_inputs(payload, product_root, "EC_L0", selection)
-            result = ECL1Processor(payload, product_root).process(cfg, Path(tb_path), only_stems=selection)
+            result = ECL1Processor(payload, product_root, response_payload=self.detector_payload(payload)).process(cfg, Path(tb_path), only_stems=selection)
         elif layer == "EC_L2":
             if tb_path is None or not Path(tb_path).is_file():
                 raise ValueError("EC L2 requires the explicitly selected TB L2 dependency")
@@ -1015,7 +1030,7 @@ class ComputeAdapter:
                 raise ValueError(
                     "EC L1 input is incomplete for this scope; compute EC L1 with the selected TB version first"
                 )
-            expected = ECL1Processor(payload, product_root)._load_tb_params(Path(tb_path))
+            expected = ECL1Processor(payload, product_root, response_payload=self.detector_payload(payload))._load_tb_params(Path(tb_path))
             for path in selected_files:
                 actual = read_parquet_metadata(path, "tb_correction").get("tb_params_used", {})
                 if any(actual.get(str(ch)) != params for ch, params in expected.items()):
@@ -1030,7 +1045,7 @@ class ComputeAdapter:
                 if selection is not None
                 else None
             )
-            processor = ECL2Processor(payload, product_root)
+            processor = ECL2Processor(payload, product_root, response_payload=self.detector_payload(payload))
             profile = self.dataset.get("profile") if self.dataset else payload
             if profile and profile != payload:
                 window_source = ECL2Processor(profile, product_root)
@@ -1048,6 +1063,7 @@ class ComputeAdapter:
                     "background_stem": f"src_bkg_{float(cfg.bkg_exposure_minutes):g}m"
                     if cfg.bkg_exposure_minutes
                     else None,
+                    "only_point": config.get("ec_point_id"),
                 },
             )
         else:
@@ -1060,7 +1076,7 @@ class ComputeAdapter:
                 for path in (layout.get_ec_l2_dir() / "json").glob("*_fit_results.l2.json"):
                     if path.name.removesuffix("_fit_results.l2.json") not in allowed:
                         path.unlink()
-            result = ECL3Processor(payload, product_root).process(
+            result = ECL3Processor(payload, product_root, response_payload=self.detector_payload(payload)).process(
                 layout.get_ec_l2_dir(), {**EC_PROCESS_PARAMS, "ec_excluded": config.get("ec_excluded", [])}
             )
             selection = None
@@ -1116,7 +1132,7 @@ class ComputeAdapter:
             errors.append("Not every selected raw TB file was parsed successfully")
         if layer == "TB_L1":
             for item in result.get("outputs", []):
-                requested = set(config.get("fit_channels", [0, 1, 2, 3]))
+                requested = set(result.get("fit_channels", config.get("fit_channels", [0, 1, 2, 3])))
                 updated = set(item.get("channels_updated", range(item.get("channels_fitted", 0))))
                 if requested - updated and not any(
                     isinstance(error, dict) and error.get("stem") == item["stem"] for error in errors
@@ -1126,12 +1142,20 @@ class ComputeAdapter:
         if layer == "EC_L2":
             for item in result.get("outputs", []):
                 records = read_json(directory / "json" / item["json"])
-                if {record.get("channel") for record in records} != {0, 1, 2, 3}:
+                if config.get("ec_point_id"):
+                    if config["ec_point_id"] not in item.get("points_updated", []):
+                        errors.append(f"Requested EC point was not fitted: {config['ec_point_id']}")
+                    continue
+                expected_channels = {ch for ch in range(4) if not unsupported_spectral_model(self.detector_payload(payload), ch)}
+                if {record.get("channel") for record in records if not record.get("placeholder")} != expected_channels:
                     errors.append(f"Incomplete EC L2 channels for {item['energy']}")
-        if layer == "TB_L2" and any(not params for params in (result.get("fit_params") or [None] * 4)):
+        if layer == "TB_L2" and any(not params for ch, params in enumerate(result.get("fit_params") or [None] * 4)
+                                   if not unsupported_spectral_model(self.detector_payload(payload), ch)):
             errors.append("TB surface fit did not produce all four channels")
         if layer == "EC_L3":
             for channel in range(4):
+                if unsupported_spectral_model(self.detector_payload(payload), channel):
+                    continue
                 record = result.get("calibration_params", {}).get(str(channel))
                 if not record or record.get("EC_low") is None:
                     errors.append(f"No valid energy coefficients for channel {channel}")
