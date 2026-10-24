@@ -7,6 +7,7 @@
   <title>GRID · 标定工作台</title>
   <link rel="stylesheet" href="/static/workbench.css">
   <script defer src="/static/plotly.min.js"></script>
+  <script defer src="/static/l1_quality.js"></script>
   <script defer src="/static/workbench.js"></script>
   <script defer src="/static/registry.js"></script>
 </head>
@@ -68,6 +69,14 @@
         </section>
         <div id="dependency-banner" class="dependency-banner" hidden></div>
         <div id="dependency-toolbar" class="dependency-toolbar" hidden><label for="tb-version-select">EC 校正依据 · TB L2</label><select id="tb-version-select"><option value="">正在读取参数包…</option></select><button id="apply-tb-version" class="button small">采用此版本</button><span id="tb-binding-state"></span><details class="tb-import"><summary>导入其他参数包</summary><div class="path-input"><input id="tb-import-path" aria-label="TB L2 JSON 完整路径" placeholder="其他时间 TB L2 JSON 的完整路径"><button id="import-tb-version" class="button small">导入并采用</button></div></details></div>
+        <section id="l1-quality-panel" class="panel l1-quality-panel" aria-label="TB L1 拟合质量总览" hidden>
+          <div class="panel-heading quality-heading"><div><h3>拟合质量总览 <span id="l1-quality-channel" class="badge neutral">CH 0</span></h3><p>实测温度与偏压 · 点击工况打开能谱、窗口和残差</p></div><div class="quality-controls"><label for="l1-quality-metric">显示量<select id="l1-quality-metric"><option value="status">质量状态</option><option value="rsquared">R²</option><option value="redchi">约化 χ²</option></select></label><label for="l1-quality-filter">当前通道筛选<select id="l1-quality-filter"><option value="all">全部工况</option><option value="attention">需复核</option><option value="accepted">质量通过</option><option value="rejected">质量拒绝</option><option value="pending">待拟合 / 未判定</option><option value="excluded">已屏蔽</option></select></label></div></div>
+          <div id="l1-quality-counts" class="quality-counts" role="status" aria-live="polite"></div>
+          <div id="l1-quality-chart" class="chart l1-quality-chart" aria-label="当前通道温度偏压拟合质量散点图"></div>
+          <p id="l1-quality-note" class="quality-note" hidden></p>
+          <div id="l1-quality-selected" class="quality-selected" role="status" aria-live="polite">选择工况查看能谱</div>
+          <details class="quality-details"><summary id="l1-quality-details-title">工况明细</summary><div class="quality-table-wrap"><table class="quality-table"><thead><tr><th scope="col">工况文件</th><th scope="col">温度 / °C</th><th scope="col">偏压 / V</th><th scope="col">质量状态</th><th scope="col">R²</th><th scope="col">约化 χ²</th></tr></thead><tbody id="l1-quality-rows"></tbody></table></div></details>
+        </section>
         <section id="tb-analysis" class="analysis-grid">
           <aside id="l1-workbench" class="panel l1-files-panel" aria-label="L1 工况文件" hidden>
             <div class="l1-files-heading"><h3>工况文件</h3><span id="l1-file-position">—</span></div>
@@ -91,7 +100,7 @@
           </div>
 
           <aside class="panel spectrum-panel" aria-label="工况详情与谱拟合">
-            <div class="panel-heading inspector-heading"><h3 id="inspector-title">工况能谱</h3><span id="selected-channel" class="badge neutral">CH 0</span></div>
+            <div class="panel-heading inspector-heading"><h3 id="inspector-title">工况能谱</h3><button id="l1-back-to-quality" class="text-button" hidden>返回质量总览 ↑</button><span id="selected-channel" class="badge neutral">CH 0</span></div>
             <div class="inspector-body">
               <label id="point-field-label" class="field-label" for="point-select">工况文件</label><input id="peak-file-search" class="full-width peak-file-search" type="search" placeholder="筛选文件名或能量…" aria-label="筛选能线文件" hidden><select id="point-select" class="full-width"><option value="">选择工况</option></select><div id="peak-file-controls" class="peak-file-controls" hidden><button id="peak-file-prev" class="button small" disabled>← 上一个</button><span id="peak-file-position">—</span><button id="peak-file-next" class="button small" disabled>下一个 →</button></div>
               <div id="point-condition" class="condition-row"></div>

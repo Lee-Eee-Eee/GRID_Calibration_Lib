@@ -795,3 +795,40 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
   .dataset-run-section { border-left: 0; border-top: 1px solid var(--line-light); padding-left: 0; padding-top: 20px; }
   .run-select-label { display: none; }
 }
+
+/* Per-channel TB L1 quality at measured temperature and bias. */
+.l1-quality-panel { margin: 0 0 16px; min-width: 0; scroll-margin-top: 72px; }
+.quality-heading { align-items: center; flex-wrap: wrap; gap: 12px; }
+.quality-heading h3 { display: flex; align-items: center; gap: 10px; }
+.quality-controls { display: flex; flex-wrap: wrap; gap: 12px; }
+.quality-controls label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--secondary); }
+.quality-controls select { font-size: 12px; padding: 5px 25px 5px 7px; }
+.quality-counts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px 0; font-size: 12px; }
+.quality-count { display: inline-flex; align-items: center; gap: 6px; color: var(--secondary); }
+.quality-count + .quality-count { border-left: 1px solid var(--line); padding-left: 10px; }
+.quality-count strong { font-variant-numeric: tabular-nums; color: var(--text); }
+.quality-count[data-tone="accepted"] strong { color: var(--green); }
+.quality-count[data-tone="rejected"] strong, .quality-count[data-tone="failed"] strong { color: var(--red); }
+.l1-quality-chart { height: 310px; min-height: 240px; }
+.quality-note { margin: 0; padding: 2px 16px 10px; color: var(--secondary); font-size: 12px; }
+.quality-selected { padding: 10px 16px; border-top: 1px solid var(--line-light); font-size: 12px; color: var(--secondary); overflow-wrap: anywhere; }
+.quality-selected strong { color: var(--text); font-weight: 600; }
+.quality-details { padding: 0 16px; font-size: 12px; }
+.quality-details > summary { cursor: pointer; padding: 9px 0 11px; color: var(--blue); }
+.quality-table-wrap { max-height: 270px; overflow: auto; margin-bottom: 12px; }
+.quality-table { border-collapse: collapse; width: 100%; font-size: 12px; text-align: left; font-variant-numeric: tabular-nums; }
+.quality-table th { position: sticky; top: 0; z-index: 1; background: #f6f8fa; color: var(--secondary); font-weight: 500; white-space: nowrap; }
+.quality-table th, .quality-table td { padding: 8px 10px; border-bottom: 1px solid var(--line-light); }
+.quality-table tr[aria-selected="true"] td { background: var(--blue-tint); }
+.quality-table button { font-size: 12px; padding: 2px 0; text-align: left; white-space: nowrap; }
+.quality-table td:nth-child(4) { white-space: nowrap; }
+#tb-analysis[data-layer="TB_L1"] { scroll-margin-top: 72px; }
+#l1-back-to-quality { font-size: 12px; padding: 3px 0; }
+@media (max-width: 700px) {
+  .quality-controls { width: 100%; gap: 8px; }
+  .quality-controls label { flex: 1; flex-wrap: wrap; }
+  .quality-controls select { width: 100%; }
+  .l1-quality-chart { height: 300px; }
+  .quality-counts { gap: 6px; }
+  .quality-heading h3 { font-size: 14px; }
+}

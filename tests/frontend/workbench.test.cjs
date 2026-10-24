@@ -14,7 +14,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function controller() {
+function controller(withQuality = false) {
   const elements = new Map();
   const stored = new Map();
   class Element {
@@ -57,6 +57,7 @@ function controller() {
     localStorage: { getItem(key) { return stored.get(key) ?? null; }, setItem(key, value) { stored.set(key, String(value)); } },
     setTimeout, clearTimeout, requestAnimationFrame() {}, console, deferred,
   });
+  if (withQuality) vm.runInContext(readFileSync(path.resolve(__dirname, '../../workbench/static/l1_quality.js'), 'utf8'), context);
   vm.runInContext(readFileSync(path.resolve(__dirname, '../../workbench/static/workbench.js'), 'utf8'), context);
   vm.runInContext(`
     state.run = { id: 'run-a', payload: '14B', dataset: { raw_dir: 'raw-a' }, inventory: {}, config: {}, jobs: [] };
@@ -68,6 +69,29 @@ function controller() {
     chartMessage = () => {}; messageError = error => { state.testError = error.message; };
   `, context);
   return { run: source => vm.runInContext(source, context), element };
+}
+
+function qualityController() {
+  const ui = controller(true);
+  ui.run(`
+    state.layer = 'TB_L1'; state.run.pending_windows = []; state.run.config = {excluded: []};
+    state.l1Overview = {payload: '14B', files: ['warm', 'cold'].map((stem, index) => ({
+      stem, has_l0: true, status: 'fitted', channels: [0, 1].map(channel => ({
+        id: '14B:' + stem + ':' + channel, stem, channel, temp: index ? -10 : 25,
+        bias: 28 + channel / 10, center: 100, rsquared: .98,
+        fit_status: 'fitted', fit_quality: {accepted: true, redchi: 1.1},
+      })),
+    }))};
+    let selected = [], plotCalls = [], qualityClick;
+    selectPoint = async point => { state.point = point; selected.push(point.id); };
+    const qualityChart = $('l1-quality-chart');
+    qualityChart.on = (name, handler) => { if (name === 'plotly_click') qualityClick = handler; };
+    qualityChart.removeAllListeners = () => { qualityClick = null; };
+    window.Plotly = globalThis.Plotly = {react: async (chart, traces, layout) => {
+      plotCalls.push({traces, layout}); chart.data = traces;
+    }};
+  `);
+  return ui;
 }
 
 test('TB layer switch while rendering cannot select a point from the old layer', async () => {
@@ -1095,4 +1119,172 @@ test('a single-file pipeline keeps its entry channel when another channel is vie
   assert.equal(ui.run('submitted[0].channel'), 2);
   assert.equal(ui.run('submitted[1].channel'), 2);
   assert.equal(ui.run('submitted[1].fit_channels.join()'), '2');
+});
+
+test('quality-map clicks open the stable condition ID in the current channel', async () => {
+  const ui = qualityController();
+  ui.run('state.channel = 1;');
+  await ui.run('renderL1Quality()');
+  await ui.run(`qualityClick({points: [{customdata: '14B:cold:1'}]})`);
+  assert.equal(ui.run('selected.join()'), '14B:cold:1');
+  assert.equal(ui.run('state.point.stem'), 'cold');
+  assert.equal(ui.run('state.point.channel'), 1);
+  await ui.run(`qualityClick({points: [{customdata: '14B:cold:0'}]})`);
+  assert.equal(ui.run('selected.length'), 1);
+  assert.equal(ui.element('l1-quality-channel').textContent, 'CH 1');
+});
+
+test('quality-map events from an old run, layer, channel or load cannot select a spectrum', async () => {
+  for (const change of [
+    `state.run.id = 'run-b';`, `state.layer = 'TB_L2';`,
+    `state.channel = 1;`, `++state.loadToken;`,
+  ]) {
+    const ui = qualityController();
+    await ui.run('renderL1Quality()');
+    ui.run(`const oldClick = qualityClick; ${change}`);
+    await ui.run(`oldClick({points: [{customdata: '14B:warm:0'}]})`);
+    assert.equal(ui.run('selected.length'), 0, change);
+  }
+});
+
+test('quality-map selection stays disabled while the run is loading or computing', async () => {
+  for (const flag of ['loading', 'busy']) {
+    const ui = qualityController();
+    await ui.run('renderL1Quality()');
+    ui.run(`state.${flag} = true;`);
+    await ui.run(`qualityClick({points: [{customdata: '14B:warm:0'}]})`);
+    assert.equal(ui.run('selected.length'), 0, flag);
+  }
+});
+
+test('quality-map status merges current run windows and exclusions without changing saved results', async () => {
+  const ui = qualityController();
+  ui.run(`
+    state.run.pending_windows = ['14B:warm:0']; state.run.config.excluded = ['14B:cold:0'];
+    const originalOverview = JSON.stringify(state.l1Overview);
+  `);
+  await ui.run('renderL1Quality()');
+  assert.equal(ui.run('state.qualityModel.counts.pending_window'), 1);
+  assert.equal(ui.run('state.qualityModel.counts.excluded'), 1);
+  assert.equal(ui.run('state.qualityModel.counts.accepted'), 0);
+  assert.equal(ui.run('JSON.stringify(state.l1Overview) === originalOverview'), true);
+  ui.run(`
+    state.run.pending_windows = []; state.run.config.excluded = [];
+    state.l1Overview.files[1].channels[0].excluded = true;
+    state.l1Overview.files[0].channels[0].pending_window = true;
+    state.point = state.l1Overview.files[1].channels[0]; state.dirty = true;
+  `);
+  await ui.run('renderL1Quality()');
+  assert.equal(ui.run('state.qualityModel.counts.pending_window'), 1);
+  assert.equal(ui.run('state.qualityModel.counts.excluded'), 0);
+  assert.equal(ui.run('state.qualityModel.allRows.find(row => row.stem === "warm").status'), 'accepted');
+});
+
+test('quality-map renders serialize so an earlier Plotly operation cannot overwrite the latest channel', async () => {
+  const ui = qualityController();
+  ui.run(`
+    const firstStarted = deferred(), releaseFirst = deferred();
+    Plotly.react = async (chart, traces, layout) => {
+      plotCalls.push({traces, layout});
+      if (plotCalls.length === 1) { firstStarted.resolve(); await releaseFirst.promise; }
+      chart.data = traces;
+    };
+    const earlierRender = renderL1Quality();
+  `);
+  await ui.run('firstStarted.promise');
+  ui.run(`state.channel = 1; const latestRender = renderL1Quality();`);
+  assert.equal(ui.run('plotCalls.length'), 1);
+  ui.run('releaseFirst.resolve();');
+  await ui.run('Promise.all([earlierRender, latestRender])');
+  assert.equal(ui.run('plotCalls.length'), 2);
+  assert.equal(ui.run(`$('l1-quality-chart').data.flatMap(trace => trace.customdata).every(id => id.endsWith(':1'))`), true);
+  assert.equal(ui.run('state.qualityModel.channel'), 1);
+  await ui.run(`qualityClick({points: [{customdata: '14B:warm:1'}]})`);
+  assert.equal(ui.run('selected.join()'), '14B:warm:1');
+});
+
+test('an obsolete queued quality-map render is skipped before touching Plotly', async () => {
+  const ui = qualityController();
+  ui.run(`
+    const blockRender = deferred(); state.qualityRenderPromise = blockRender.promise;
+    const earlierRender = renderL1Quality();
+    state.channel = 1; const latestRender = renderL1Quality();
+    blockRender.resolve();
+  `);
+  await ui.run('Promise.all([earlierRender, latestRender])');
+  assert.equal(ui.run('plotCalls.length'), 1);
+  assert.equal(ui.run('plotCalls[0].traces.flatMap(trace => trace.customdata).every(id => id.endsWith(":1"))'), true);
+});
+
+test('quality-map status and filename filters retain the full channel temperature-bias axes', async () => {
+  const ui = qualityController();
+  ui.run(`
+    state.l1Overview.files[1].channels[0].bias = 28.6;
+    state.l1Overview.files[1].channels[0].fit_quality = {accepted: false, redchi: 6};
+  `);
+  await ui.run('renderL1Quality()');
+  const fullRanges = JSON.parse(ui.run('JSON.stringify([plotCalls[0].layout.xaxis.range, plotCalls[0].layout.yaxis.range])'));
+  ui.run(`$('l1-quality-filter').value = 'rejected';`);
+  await ui.run('renderL1Quality()');
+  assert.equal(ui.run('state.qualityModel.rows.length'), 1);
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify([plotCalls[1].layout.xaxis.range, plotCalls[1].layout.yaxis.range])')), fullRanges);
+  ui.run(`$('l1-quality-filter').value = 'all'; $('l1-file-search').value = 'warm';`);
+  await ui.run('renderL1Quality()');
+  assert.equal(ui.run('state.qualityModel.rows.length'), 1);
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify([plotCalls[2].layout.xaxis.range, plotCalls[2].layout.yaxis.range])')), fullRanges);
+  assert.ok(fullRanges[0][0] < -10 && fullRanges[0][1] > 25);
+  assert.ok(fullRanges[1][0] < 28 && fullRanges[1][1] > 28.6);
+});
+
+test('quality-map axis ranges use finite placed rows and pad a single physical condition', () => {
+  const ui = qualityController();
+  const range = JSON.parse(ui.run('JSON.stringify(qualityAxisRange([{placed: false, temp: null}, {placed: true, temp: 20}], "temp", 0.5))'));
+  assert.deepEqual(range, [19.5, 20.5]);
+  assert.equal(ui.run('qualityAxisRange([{placed: false, temp: null}], "temp", 0.5)'), undefined);
+});
+
+test('quality-map records without L0 remain inspectable without requesting an unavailable spectrum', async () => {
+  const ui = qualityController();
+  ui.run(`
+    state.l1Overview.files[0].has_l0 = false;
+    let notices = [], requests = 0;
+    api = async () => { requests++; throw new Error('Unexpected spectrum request'); };
+    notify = message => notices.push(message);
+  `);
+  await ui.run('renderL1Quality()');
+  await ui.run(`qualityClick({points: [{customdata: '14B:warm:0'}]})`);
+  assert.equal(ui.run('state.qualityModel.rows.length'), 2);
+  assert.equal(ui.run('requests'), 0);
+  assert.equal(ui.run('selected.length'), 0);
+  assert.match(ui.run('notices.join()'), /尚无 L0 能谱/);
+  assert.equal(ui.element('l1-quality-rows').children[0].children[0].children[0].disabled, true);
+});
+
+test('single-channel refitting refreshes the quality overview from the new saved result', async () => {
+  const ui = qualityController();
+  ui.run(`
+    state.l1Overview.files[0].channels[0].fit_quality = {accepted: false, redchi: 6};
+    const updatedOverview = JSON.parse(JSON.stringify(state.l1Overview));
+    updatedOverview.files[0].channels[0].fit_quality = {accepted: true, redchi: 1.2};
+    const updatedRun = {...state.run, config_revision: 2};
+    let overviewReads = 0, spectrumReads = 0;
+    api = async (path, options) => {
+      if (options?.method === 'POST' && path.endsWith('/jobs')) return {id: 'refit-one', layer: 'TB_L1', status: 'succeeded'};
+      if (path.endsWith('/l1-overview')) { overviewReads++; return updatedOverview; }
+      if (path === '/api/runs/run-a') return updatedRun;
+      spectrumReads++; throw new Error('Unexpected endpoint: ' + path);
+    };
+    renderJobs = () => {}; renderNavigation = () => {}; renderStage = () => {}; renderRun = () => {};
+    renderSurface = async () => {}; renderL1Workspace = () => { renderL1Quality(); };
+    notify = () => {};
+  `);
+  await ui.run('renderL1Quality()');
+  assert.equal(ui.run('state.qualityModel.counts.rejected'), 1);
+  await ui.run(`executeJob('TB_L1', {stem: 'warm', channel: 0, fit_channels: [0], representative: false})`);
+  await ui.run('state.qualityRenderPromise');
+  assert.equal(ui.run('overviewReads'), 1);
+  assert.equal(ui.run('spectrumReads'), 0);
+  assert.equal(ui.run('state.qualityModel.counts.rejected'), 0);
+  assert.equal(ui.run('state.qualityModel.counts.accepted'), 2);
+  assert.equal(ui.run('state.l1Overview.files[0].channels[0].fit_quality.redchi'), 1.2);
 });
