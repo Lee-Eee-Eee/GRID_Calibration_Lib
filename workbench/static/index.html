@@ -68,6 +68,13 @@
         </section>
         <div id="dependency-banner" class="dependency-banner" hidden></div>
         <div id="dependency-toolbar" class="dependency-toolbar" hidden><label for="tb-version-select">EC 校正依据 · TB L2</label><select id="tb-version-select"><option value="">正在读取参数包…</option></select><button id="apply-tb-version" class="button small">采用此版本</button><span id="tb-binding-state"></span><details class="tb-import"><summary>导入其他参数包</summary><div class="path-input"><input id="tb-import-path" aria-label="TB L2 JSON 完整路径" placeholder="其他时间 TB L2 JSON 的完整路径"><button id="import-tb-version" class="button small">导入并采用</button></div></details></div>
+        <section id="l1-quality-overview" class="panel l1-quality-overview" aria-labelledby="l1-quality-title" hidden>
+          <div class="panel-heading"><div><h3 id="l1-quality-title">拟合质量总览</h3><p>实测温度与偏压 · 颜色表示约化 χ² · 点击工况复核能谱</p></div><span id="l1-quality-channel" class="badge neutral">CH 0</span></div>
+          <div id="l1-quality-counts" class="l1-quality-counts" role="status" aria-live="polite"></div>
+          <div id="l1-quality-chart" class="chart l1-quality-chart" aria-label="当前通道的实测温度偏压与拟合质量"></div>
+          <p id="l1-quality-note" class="plot-caption"></p>
+          <details id="l1-quality-unlocated" class="l1-quality-unlocated" hidden><summary>缺少实测坐标的工况</summary><div id="l1-quality-unlocated-list"></div></details>
+        </section>
         <section id="tb-analysis" class="analysis-grid">
           <aside id="l1-workbench" class="panel l1-files-panel" aria-label="L1 工况文件" hidden>
             <div class="l1-files-heading"><h3>工况文件</h3><span id="l1-file-position">—</span></div>

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from ..common.spectral_models import detector_identity, unsupported_spectral_model
+from ..common.utils import read_parquet_metadata
 
 
 def _read(path, default=None):
@@ -13,6 +15,20 @@ def _read(path, default=None):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
+
+
+def _number(value):
+    """Keep unavailable diagnostics missing, including legacy nonfinite values."""
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+
+
+def _condition(metadata, key, channel):
+    value = metadata.get(key)
+    if isinstance(value, list):
+        value = value[channel] if channel < len(value) else None
+    elif isinstance(value, dict):
+        value = value.get(str(channel))
+    return _number(value)
 
 
 def overview(workbench, run_id):
@@ -57,23 +73,59 @@ def overview(workbench, run_id):
     pending = set(state.get("pending_windows", []))
     for stem in sorted(set(l0) | set(records)):
         channels = []
+        metadata = None
         for channel in range(4):
             record = next((row for row in records.get(stem, []) if row.get("channel") == channel), {})
             point_id = f"{payload}:{stem}:{channel}"
             attempt = attempts.get((stem, channel), {})
-            quality = record.get("fit_quality", {})
-            status = "failed" if attempt.get("error") else "rejected" if quality.get("accepted") is False else "fitted" if record.get("center") is not None else "not_fitted"
+            quality = record.get("fit_quality") or {}
+            failure = state.get("tb_l1_failures", {}).get(point_id) or {}
+            failed = (bool(failure) or attempt.get("status") == "failed"
+                      or bool(attempt.get("error")) or quality.get("status") == "fit_failed")
+            error = (failure.get("error") or attempt.get("error")
+                     or (record.get("fit_failure") or {}).get("error")
+                     or ("本次拟合失败" if failed else None))
+            status = "failed" if failed else "rejected" if quality.get("accepted") is False else "fitted" if record.get("center") is not None else "not_fitted"
+            conditions = {key: _number(record.get(key)) for key in ("temp", "temp_err", "bias", "bias_err")}
+            if record.get("placeholder") and conditions["temp"] == conditions["bias"] == 0:
+                # The legacy empty slot initializes all numeric fields to zero.
+                # Only HK can establish whether a zero pair is a real condition.
+                conditions = dict.fromkeys(conditions)
+            # A condition without a fit still belongs at the measured HK point.
+            # Read only schema metadata, once per file, and never infer from its name.
+            if any(conditions[key] is None for key in ("temp", "bias")) and l0.get(stem):
+                if metadata is None:
+                    try:
+                        metadata = read_parquet_metadata(l0[stem], "hk_data") or {}
+                    except (OSError, ValueError, TypeError):
+                        metadata = {}
+                for key, value in conditions.items():
+                    if value is None:
+                        conditions[key] = _condition(metadata, key, channel)
             reason = unsupported_spectral_model(response_payload, channel)
             if reason:
                 record, quality, status, attempt = {}, {}, "model_pending", {}
+                error = None
+            accepted = quality.get("accepted")
+            quality_accepted = accepted if isinstance(accepted, bool) and status not in ("model_pending", "failed") else None
+            rejection_reasons = []
+            if status == "rejected":
+                warnings = quality.get("warnings")
+                if isinstance(warnings, list):
+                    rejection_reasons.extend(item for item in warnings if isinstance(item, str))
+                if isinstance(quality.get("reason"), str) and quality["reason"] not in rejection_reasons:
+                    rejection_reasons.append(quality["reason"])
             channels.append({
                 **{key: record.get(key) for key in (
-                    "center", "center_err", "sigma", "resolution", "rsquared", "temp", "bias",
+                    "center", "center_err", "sigma", "resolution", "rsquared",
                     "window_lo", "window_hi", "fit_mode", "fit_quality",
                 )},
+                **conditions,
                 "id": point_id, "stem": stem, "channel": channel, "fit_status": status,
+                "chi2_reduced": _number(quality.get("redchi")) if status not in ("model_pending", "failed") else None,
+                "quality_accepted": quality_accepted, "rejection_reasons": rejection_reasons,
                 "pending_window": point_id in pending,
-                "error": attempt.get("error"), "attempt": attempt or None,
+                "error": error, "attempt": attempt or None,
                 "excluded": point_id in state.get("config", {}).get("excluded", []),
                 "unsupported_spectral_model": reason,
             })

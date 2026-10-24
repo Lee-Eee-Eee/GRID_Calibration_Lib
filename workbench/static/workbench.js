@@ -489,6 +489,111 @@ function filteredL1Files() {
   return (state.l1Overview?.files || []).filter(file => file.has_l0 && (!search || `${file.stem} ${file.channels[state.channel]?.temp ?? ""} ${file.channels[state.channel]?.bias ?? ""}`.toLowerCase().includes(search)) && (filter === "all" || file.status === filter));
 }
 
+const l1QualityStates = {
+  accepted: { label: "质量接受", symbol: "circle", glyph: "●" },
+  rejected: { label: "质量拒绝", symbol: "diamond", glyph: "◆" },
+  failed: { label: "计算失败", symbol: "x", glyph: "×" },
+  model_pending: { label: "模型待定", symbol: "square-open", glyph: "□" },
+  not_fitted: { label: "未拟合", symbol: "circle-open", glyph: "○" },
+  quality_unknown: { label: "质量未知", symbol: "triangle-up-open", glyph: "△" }
+};
+function l1QualityNumber(value) { return typeof value === "number" && Number.isFinite(value) ? value : null; }
+function l1QualityContext() { return `${state.run?.id}:${state.layer}:${state.channel}:${state.loadToken}`; }
+function l1QualityPoints(channel = state.channel) {
+  return (state.l1Overview?.files || []).map(file => {
+    const point = file.channels?.find(item => item.channel === channel) || {};
+    return { ...point, stem: file.stem, channel, id: point.id || `${state.run?.payload}:${file.stem}:${channel}`, has_l0: file.has_l0 };
+  });
+}
+function l1QualityStatus(point) {
+  if (point.fit_status === "model_pending" || point.unsupported_spectral_model) return "model_pending";
+  if (point.fit_status === "failed") return "failed";
+  const accepted = Object.hasOwn(point, "quality_accepted") ? point.quality_accepted : point.fit_quality?.accepted;
+  if (accepted === true) return "accepted";
+  if (accepted === false || point.fit_status === "rejected") return "rejected";
+  return point.fit_status === "fitted" || l1QualityNumber(point.center) !== null ? "quality_unknown" : "not_fitted";
+}
+function l1QualitySummary(points) {
+  const counts = Object.fromEntries(Object.keys(l1QualityStates).map(key => [key, 0]));
+  for (const point of points) counts[l1QualityStatus(point)]++;
+  return { counts, total: points.length,
+    missingCoordinates: points.filter(point => l1QualityNumber(point.temp) === null || l1QualityNumber(point.bias) === null).length,
+    missingMetrics: points.filter(point => l1QualityNumber(point.chi2_reduced) === null).length };
+}
+function l1QualityHover(point) {
+  const escape = value => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const reason = point.error || point.unsupported_spectral_model || (point.rejection_reasons || point.fit_quality?.warnings || []).join("；");
+  const previous = l1QualityStatus(point) === "failed" ? "上次拟合 " : "";
+  return [escape(point.stem), `CH ${point.channel} · ${l1QualityStates[l1QualityStatus(point)].label}`,
+    `实测 T ${number(point.temp, 3)} °C · Bias ${number(point.bias, 4)} V`,
+    `约化 χ² ${number(point.chi2_reduced, 4)} · ${previous}R² ${number(point.rsquared, 5)}`,
+    `${previous}ΔBIC ${number(point.fit_quality?.delta_bic_background, 3)} · 峰面积 SNR ${number(point.fit_quality?.amplitude_snr, 3)}`,
+    `${previous}窗口 ${number(point.window_lo, 3)}–${number(point.window_hi, 3)} ADC`,
+    `${l1QualityStatus(point) === "failed" ? "失败原因" : l1QualityStatus(point) === "model_pending" ? "模型" : "拒绝原因"}：${escape(reason || "—")}`,
+    ...(point.pending_window ? ["窗口待重拟合"] : []), ...(point.excluded ? ["已人工屏蔽"] : [])].join("<br>");
+}
+function l1QualityTraces(points) {
+  const traces = [];
+  for (const [status, style] of Object.entries(l1QualityStates)) for (const colored of [true, false]) {
+    const values = points.filter(point => l1QualityStatus(point) === status &&
+      l1QualityNumber(point.temp) !== null && l1QualityNumber(point.bias) !== null &&
+      (l1QualityNumber(point.chi2_reduced) !== null) === colored);
+    if (!values.length) continue;
+    traces.push({ type: "scatter", mode: "markers", name: style.label, meta: { quality_status: status, metric_missing: !colored },
+      x: values.map(point => point.temp), y: values.map(point => point.bias),
+      customdata: values.map(({ id, stem, channel }) => ({ id, stem, channel })), text: values.map(l1QualityHover),
+      hovertemplate: "%{text}<extra></extra>", marker: { symbol: style.symbol,
+        size: values.map(point => point.id === state.point?.id ? 14 : 10),
+        color: colored ? values.map(point => point.chi2_reduced) : "#8a949e",
+        ...(colored ? { coloraxis: "coloraxis" } : {}),
+        line: { color: values.map(point => point.id === state.point?.id ? "#172a3e" : "#64778a"),
+          width: values.map(point => point.id === state.point?.id ? 2.4 : .8) } }, showlegend: false });
+  }
+  return traces;
+}
+async function selectL1QualityPoint(identity, context) {
+  if (context !== l1QualityContext() || state.layer !== "TB_L1" || identity?.channel !== state.channel) return;
+  const point = l1QualityPoints().find(item => item.id === identity.id && item.stem === identity.stem && item.channel === identity.channel);
+  if (point) await selectPoint(point);
+}
+async function renderL1QualityOverview() {
+  const panel = $("l1-quality-overview");
+  if (!panel || state.layer !== "TB_L1" || !state.run || !state.l1Overview) return;
+  panel.hidden = false;
+  const context = l1QualityContext(), token = state.l1QualityRenderToken = (state.l1QualityRenderToken || 0) + 1;
+  const points = l1QualityPoints(), summary = l1QualitySummary(points), counts = clear($("l1-quality-counts"));
+  $("l1-quality-channel").textContent = `CH ${state.channel}`;
+  for (const [status, style] of Object.entries(l1QualityStates)) {
+    const item = node("span", `l1-quality-count status-${status}`, `${style.glyph} ${style.label} ${summary.counts[status]}`);
+    item.dataset.qualityStatus = status; counts.append(item);
+  }
+  $("l1-quality-note").textContent = `CH ${state.channel} · ${summary.total} 个工况 · ${summary.total - summary.missingCoordinates} 个已定位 · 约化 χ² 缺失 ${summary.missingMetrics}${summary.missingCoordinates ? ` · 缺少实测坐标 ${summary.missingCoordinates}` : ""} · 灰色表示指标缺失${state.point ? ` · 当前复核 ${state.point.stem}` : ""}`;
+  const unlocated = $("l1-quality-unlocated"); unlocated.hidden = !summary.missingCoordinates;
+  const missingList = clear($("l1-quality-unlocated-list"));
+  for (const point of points.filter(item => l1QualityNumber(item.temp) === null || l1QualityNumber(item.bias) === null)) {
+    const button = node("button", "text-button", `${point.stem} · CH ${point.channel} · ${l1QualityStates[l1QualityStatus(point)].label}`);
+    button.type = "button"; button.addEventListener("click", handleError(() => selectL1QualityPoint(point, context))); missingList.append(button);
+  }
+  if (!window.Plotly) { chartMessage("l1-quality-chart", "Plotly 未加载，暂无法显示质量总览"); return; }
+  const render = async () => {
+    if (token !== state.l1QualityRenderToken || context !== l1QualityContext() || state.layer !== "TB_L1") return;
+    const chart = $("l1-quality-chart");
+    const metrics = [0, 1, 2, 3].flatMap(channel => l1QualityPoints(channel)).map(point => l1QualityNumber(point.chi2_reduced)).filter(value => value !== null);
+    await Plotly.react(plotTarget(chart), l1QualityTraces(points), basicPlotLayout("实测温度 / °C", "实测偏压 / V", {
+      margin: { l: 72, r: metrics.length ? 105 : 28, t: 12, b: 46 },
+      coloraxis: { colorscale: "Viridis", cmin: 0, cmax: Math.max(1, ...metrics), showscale: points.some(point => l1QualityNumber(point.chi2_reduced) !== null),
+        colorbar: { title: { text: "约化 χ²", font: chartFont }, thickness: 12, len: .86, tickfont: numericFont } },
+      uirevision: `${state.run.id}-l1-quality-${state.channel}`,
+      annotations: points.length === summary.missingCoordinates ? [{ text: "暂无可定位工况，实测坐标保持缺失", x: .5, y: .5, xref: "paper", yref: "paper", showarrow: false }] : []
+    }), plotConfig);
+    if (token !== state.l1QualityRenderToken || context !== l1QualityContext() || state.layer !== "TB_L1") return;
+    chart.removeAllListeners?.("plotly_click");
+    chart.on?.("plotly_click", handleError(event => selectL1QualityPoint(event.points?.[0]?.customdata, context)));
+  };
+  state.l1QualityRender = (state.l1QualityRender || Promise.resolve()).catch(() => {}).then(render);
+  return state.l1QualityRender;
+}
+
 function filteredEcReviewPoints() {
   const search = $("peak-file-search").value.trim().toLowerCase();
   return (state.ecOverview?.points || []).filter(point => !search || `${point.stem || point.source_name || ""} ${point.E ?? ""}`.toLowerCase().includes(search));
@@ -548,6 +653,7 @@ function renderL1Workspace() {
     card.addEventListener("click", handleError(() => selectChannel(channel.channel))); summary.append(card);
   }
   renderL1Progress();
+  renderL1QualityOverview().catch(messageError);
 }
 
 async function moveL1File(offset) {
@@ -567,8 +673,8 @@ async function selectChannel(channel) {
   state.channel = channel; $("channel").value = channel; state.dirty = false; state.spectrum = null;
   if (state.layer === "TB_L1" && state.l1Overview) {
     const file = state.l1Overview.files?.find(file => file.stem === stem);
-    state.surface.points = (state.l1Overview.files || []).filter(file => file.has_l0).map(file => file.channels[channel]);
-    if (file) { await selectPoint(file.channels[channel]); return; }
+    state.surface.points = l1QualityPoints(channel).filter(point => point.has_l0);
+    if (file) { await selectPoint(l1QualityPoints(channel).find(point => point.stem === stem)); return; }
   }
   state.point = null; rememberView(); await loadSurfaceSafely();
 }
@@ -591,11 +697,15 @@ async function loadSurface() {
   if (state.layer.startsWith("EC")) return loadEcAnalysis();
   const token = ++state.loadToken;
   const selection = state.spectrumToken;
+  if (state.layer === "TB_L1") {
+    state.l1Overview = null; $("l1-quality-overview").hidden = true;
+    state.l1QualityRenderToken = (state.l1QualityRenderToken || 0) + 1;
+  }
   const data = await api(runPath(state.layer === "TB_L1" ? "/l1-overview" : `/surface?channel=${state.channel}&layer=${state.layer}`));
   if (token !== state.loadToken) return;
   if (state.layer === "TB_L1") {
     state.l1Overview = data;
-    data.points ||= (data.files || []).filter(file => file.has_l0).map(file => file.channels[state.channel]);
+    data.points ||= l1QualityPoints().filter(point => point.has_l0);
   }
   if (state.layer === "TB_L0") {
     data.points = (data.files || []).map((f) => { const file = typeof f === "string" ? { stem: f } : f; return { ...(data.points || []).find((p) => p.stem === file.stem), ...file, id: `${state.run.payload}:${file.stem}:${state.channel}`, channel: state.channel }; });
@@ -842,7 +952,7 @@ function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit
 
 async function resizeCharts() {
   if (!window.Plotly) return;
-  for (const id of ["surface-chart", "residual-chart", "spectrum-chart", "ec-spectrum-chart"]) {
+  for (const id of ["surface-chart", "residual-chart", "spectrum-chart", "ec-spectrum-chart", "l1-quality-chart"]) {
     const chart = $(id);
     if (!chart?.data || chart.getBoundingClientRect().width <= 0 || chart.getBoundingClientRect().height <= 0) continue;
     await Plotly.Plots.resize(chart);
@@ -1084,6 +1194,7 @@ function configureLayerPanels() {
   const titles = { TB_L0: "工况原始脉冲谱", TB_L1: "当前工况能谱与拟合", TB_L2: "温度–偏压响应与残差", EC_L0: "EC 原始脉冲谱", EC_L1: "EC 温度–偏压校正谱", EC_L2: "当前能线谱与拟合", EC_L3: "能量刻度与拟合残差" };
   $("tb-analysis").dataset.layer = state.layer;
   const l1 = state.layer === "TB_L1", review = isPeakReviewLayer(), ec2 = state.layer === "EC_L2";
+  $("l1-quality-overview").hidden = !l1 || !state.l1Overview;
   $("tb-analysis").dataset.peakReview = String(review);
   for (const id of ["l1-workbench","l1-channel-overview","l1-fit-all-channels"]) $(id).hidden = !l1;
   $("l1-spectrum-legend").hidden = !review;
