@@ -14,7 +14,7 @@
   --amber: #936215;
   --red: #a32f2f;
   --sidebar-width: 208px;
-  --header-height: 56px;
+  --header-height: 64px;
   --work-height: max(550px, calc(100vh - 270px));
   font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
   color: var(--text);
@@ -83,10 +83,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--blue); }
 .text-button, .icon-button { border: 0; background: none; color: var(--blue); padding: 5px 7px; font-size: 13px; }
 .icon-button { color: var(--secondary); font-size: 24px; line-height: 1; }
 .topbar { position: sticky; top: 0; z-index: 30; height: var(--header-height); display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 0 22px; background: #fff; border-bottom: 1px solid var(--line); }
-.brand { display: inline-flex; align-items: center; gap: 15px; color: var(--text); text-decoration: none; white-space: nowrap; font-size: 14px; }
-.brand strong { font-size: 19px; font-weight: 700; letter-spacing: .5px; }
-.brand > span:last-child { color: var(--secondary); }
-.brand-divider { width: 1px; height: 20px; background: #c7ced5; }
+.brand { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 12px; color: var(--text); text-decoration: none; white-space: nowrap; font-size: 13px; }
+.brand-logo, .brand > img { display: block; width: 106px; height: auto; max-height: 52px; flex: 0 0 auto; }
+.brand > span:last-child { color: var(--text); font-weight: 500; }
 .run-controls { display: flex; align-items: center; gap: 8px; }
 .run-controls select { width: 310px; font-size: 13px; height: 34px; background: #fafbfc; }
 .sidebar { position: fixed; inset: var(--header-height) auto 0 0; z-index: 20; width: var(--sidebar-width); display: flex; flex-direction: column; background: #f8f9fa; border-right: 1px solid var(--line); padding: 21px 14px 18px; }
@@ -360,7 +359,8 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
 }
 @media (max-width: 850px) {
   :root { --sidebar-width: 0px; --work-height: 650px; }
-  .topbar { position: relative; height: auto; min-height: 56px; padding: 10px 16px; flex-wrap: wrap; gap: 10px; }
+  .topbar { position: relative; height: auto; min-height: var(--header-height); padding: 8px 16px; flex-wrap: wrap; gap: 10px; }
+  .brand-logo, .brand > img { width: 96px; max-height: 47px; }
   .run-controls { flex: 1; justify-content: flex-end; }
   .run-controls select { width: min(260px, 33vw); }
   .sidebar { position: static; width: 100%; padding: 12px 16px 0; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -389,9 +389,8 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
   :root { --work-height: auto; }
   .topbar { gap: 10px; }
   .brand { gap: 9px; font-size: 12px; }
-  .brand strong { font-size: 17px; }
-  .brand-divider { height: 16px; }
-  .run-controls { width: 100%; }
+  .brand-logo, .brand > img { width: 90px; max-height: 44px; }
+  .run-controls { width: 100%; flex-wrap: wrap; }
   .run-controls select { width: auto; flex: 1; min-width: 0; }
   .run-controls .button { font-size: 12px; padding: 5px 9px; }
   .sidebar { padding: 10px 12px 0; }
@@ -606,7 +605,7 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
 .reference-analysis-actions { display:flex; gap:12px; align-items:center; margin:8px 0; font-size:12px; }
 @media(max-width:850px) { .preset-save-fields { grid-template-columns:1fr 1fr; } .preset-binding { grid-column:1/-1; } .reference-layout { grid-template-columns:1fr; } #reference-file { height:120px; } .reference-chart { height:330px; } }
 @media (max-width: 1250px) { .run-controls { gap: 5px; } .run-controls .button { padding-left: 8px; padding-right: 8px; } .run-controls select { width: 200px; } .brand { gap: 10px; } }
-@media (max-width: 950px) { .brand > span:last-child, .brand-divider { display: none; } .run-controls select { width: 180px; } .acquisition-footer { grid-template-columns: 1fr auto; } #acquisition-status { grid-column: 1 / -1; grid-row: 2; padding-bottom: 0; } .field-map-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 950px) { .brand > span:last-child { display: none; } .run-controls select { width: 180px; } .acquisition-footer { grid-template-columns: 1fr auto; } #acquisition-status { grid-column: 1 / -1; grid-row: 2; padding-bottom: 0; } .field-map-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .acquisition-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); } .acquisition-header { padding: 15px 15px 12px; } .acquisition-preset-row { padding: 0 15px 12px; flex-wrap: wrap; } #acquisition-version { width: 100%; margin: 0; text-align: left; } .acquisition-tabs { padding: 0 5px; } .acquisition-tabs .analysis-tab { font-size: 12px; padding: 0 9px; } .acquisition-scroll { padding: 15px; } .xml-editor-grid { grid-template-columns: 1fr; gap: 0; } .xml-editor { height: 190px; } .profile-form-grid, .field-map-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } .profile-section-heading { align-items: flex-start; flex-wrap: wrap; gap: 7px; } .profile-section-heading > span { width: 100%; } .acquisition-footer { padding: 12px 15px; grid-template-columns: 1fr; gap: 9px; } .acquisition-actions { justify-content: flex-end; } #acquisition-status { grid-column: 1; grid-row: auto; } #acquisition-settings { font-size: 12px; padding: 5px 7px; } }
 
 .source-library { margin: 16px 0; padding: 12px; border: 1px solid var(--border, #d8dfe5); background: #fafbfc; }
