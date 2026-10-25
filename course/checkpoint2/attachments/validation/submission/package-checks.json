@@ -34,16 +34,6 @@
       "folder": "06-experiment-b",
       "lines": 861,
       "sha256": "078f639eb354cf8827059eee2e1b24e8c883ee8ce67b4a818f8f44eb703eea4e"
-    },
-    {
-      "folder": "07-planning-part1",
-      "lines": 297,
-      "sha256": "8fcd968ce1f3afa5a9cc703bcafef482d5096adab9c06586ef8c08520bdd18ee"
-    },
-    {
-      "folder": "08-planning-part2",
-      "lines": 3814,
-      "sha256": "d40230500ef14e381bcd3f3f01e16a20ea92778a2434af8dcded6533db2df98a"
     }
   ],
   "credential_pattern_scan": "passed",

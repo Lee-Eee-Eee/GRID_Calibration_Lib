@@ -36,18 +36,6 @@
       "lines": 861,
       "gzip_matches": true,
       "sha256_matches": true
-    },
-    {
-      "folder": "07-planning-part1",
-      "lines": 297,
-      "gzip_matches": true,
-      "sha256_matches": true
-    },
-    {
-      "folder": "08-planning-part2",
-      "lines": 3814,
-      "gzip_matches": true,
-      "sha256_matches": true
     }
   ],
   "credential_pattern_scan": "passed",
