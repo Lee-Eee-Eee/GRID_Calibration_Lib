@@ -8,6 +8,7 @@ import matplotlib.tri as mtri
 import numpy as np
 from scipy.optimize import curve_fit
 
+from ...common.fit_policy import finite_number, quality_warnings, usable_peak
 from ...common.spectral_models import unsupported_spectral_model
 from ...common.utils import DataLayout, get_timestamp, read_json, read_parquet_metadata, write_json
 
@@ -45,7 +46,7 @@ class TBL2Processor:
     C_INIT = 23459.83
     C_LO, C_HI = 1e3, 1e8
 
-    # L1 拟合质量低于此 R² 的点不参与曲面拟合（仍作 outlier 提示）
+    # Historical R² threshold now adds a warning without dropping the point.
     MIN_RSQUARED = 0.5
 
     def __init__(self, payload_name: str, product_root: Path, *, response_payload: str | None = None):
@@ -70,6 +71,9 @@ class TBL2Processor:
             "output_json": None,
             "output_figures": [],
             "errors": [],
+            "warnings": [],
+            "quality_policy": "warning_only",
+            "included_points": [],
         }
 
         try:
@@ -78,6 +82,12 @@ class TBL2Processor:
             results["excluded_points"] = sorted(excluded)
             fit_data = [row for row in fit_data
                         if f"{self.payload_name}:{row['file']}:{row['channel']}" not in excluded]
+            results["suspect_points"] = [
+                {"id": f"{self.payload_name}:{row['file']}:{row['channel']}", "warnings": row["quality_warnings"]}
+                for row in fit_data if row.get("quality_warnings")
+            ]
+            if results["suspect_points"]:
+                results["warnings"].append(f"{len(results['suspect_points'])} suspected points included in TB surface fitting")
             if not fit_data:
                 raise ValueError("No TB L1/L0 matched data for L2 fit")
 
@@ -97,6 +107,9 @@ class TBL2Processor:
                     continue
 
                 params = self._fit_surface(ch_data)
+                results["included_points"].extend(
+                    f"{self.payload_name}:{row['file']}:{ch}" for row in ch_data
+                )
                 params["channel"] = ch
                 params["payload"] = self.payload_name
                 params_list.append(params)
@@ -205,22 +218,18 @@ class TBL2Processor:
                     continue
                 if unsupported_spectral_model(self.response_payload, ch):
                     continue
-                if rec.get("fit_quality", {}).get("accepted") is False:
+                if not usable_peak(rec):
                     continue
                 gain = rec.get("center", 0.0)
                 gain_err = rec.get("center_err", 0.0)
-                rsq = rec.get("rsquared", 0.0)
-                if not (np.isfinite(gain) and gain > 0):
-                    continue
-                if np.isfinite(rsq) and rsq < self.MIN_RSQUARED:
-                    continue
                 rows.append({
                     "temp": per_ch_tv[ch]["temp"],
                     "bias": per_ch_tv[ch]["bias"],
                     "gain": float(gain),
-                    "gain_err": float(gain_err) if np.isfinite(gain_err) and gain_err > 0 else 0.0,
+                    "gain_err": float(gain_err) if finite_number(gain_err) and gain_err > 0 else 0.0,
                     "channel": ch,
                     "file": str(stem),
+                    "quality_warnings": quality_warnings(rec, min_rsquared=self.MIN_RSQUARED),
                 })
         return rows
 

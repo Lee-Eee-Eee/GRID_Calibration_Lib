@@ -75,7 +75,7 @@ def test_l0_only_points_supply_real_hk_and_selectable_unfitted_spectra(tmp_path)
     assert spectrum["n_events"] == sum(spectrum["y"]) == count
     assert spectrum["histogram_config"] == HISTOGRAM
     assert spectrum["default_window"] == {"lo": 0, "hi": 16384}
-    assert spectrum["window_bounds"] == {"min": 0, "max": 16384, "minimum_width": 8}
+    assert spectrum["window_bounds"] == {"min": 0, "max": 16384, "minimum_width": 48}
     # Unfitted display bounds must not become a manual full-range fit.
     window_file = adapter._windows("10B", {"windows": {}}, products)
     assert "case" not in read_json(window_file)

@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 
+from ..common.fit_policy import quality_warnings
 from ..common.spectral_models import detector_identity, unsupported_spectral_model
 from ..common.utils import read_parquet_metadata
 
@@ -85,7 +86,8 @@ def overview(workbench, run_id):
             error = (failure.get("error") or attempt.get("error")
                      or (record.get("fit_failure") or {}).get("error")
                      or ("本次拟合失败" if failed else None))
-            status = "failed" if failed else "rejected" if quality.get("accepted") is False else "fitted" if record.get("center") is not None else "not_fitted"
+            warnings = quality_warnings(record, min_rsquared=0.5) if not failed else []
+            status = "failed" if failed else "suspect" if warnings else "fitted" if record.get("center") is not None else "not_fitted"
             conditions = {key: _number(record.get(key)) for key in ("temp", "temp_err", "bias", "bias_err")}
             if record.get("placeholder") and conditions["temp"] == conditions["bias"] == 0:
                 # The legacy empty slot initializes all numeric fields to zero.
@@ -106,15 +108,10 @@ def overview(workbench, run_id):
             if reason:
                 record, quality, status, attempt = {}, {}, "model_pending", {}
                 error = None
+                warnings = []
             accepted = quality.get("accepted")
-            quality_accepted = accepted if isinstance(accepted, bool) and status not in ("model_pending", "failed") else None
-            rejection_reasons = []
-            if status == "rejected":
-                warnings = quality.get("warnings")
-                if isinstance(warnings, list):
-                    rejection_reasons.extend(item for item in warnings if isinstance(item, str))
-                if isinstance(quality.get("reason"), str) and quality["reason"] not in rejection_reasons:
-                    rejection_reasons.append(quality["reason"])
+            quality_accepted = False if status == "suspect" else accepted if isinstance(accepted, bool) and status not in ("model_pending", "failed") else None
+            rejection_reasons = warnings  # Compatibility for older workbench clients.
             channels.append({
                 **{key: record.get(key) for key in (
                     "center", "center_err", "sigma", "resolution", "rsquared",
@@ -124,14 +121,15 @@ def overview(workbench, run_id):
                 "id": point_id, "stem": stem, "channel": channel, "fit_status": status,
                 "chi2_reduced": _number(quality.get("redchi")) if status not in ("model_pending", "failed") else None,
                 "quality_accepted": quality_accepted, "rejection_reasons": rejection_reasons,
+                "quality_warnings": warnings, "suspect": status == "suspect", "quality_policy": "warning_only",
                 "pending_window": point_id in pending,
                 "error": error, "attempt": attempt or None,
                 "excluded": point_id in state.get("config", {}).get("excluded", []),
                 "unsupported_spectral_model": reason,
             })
         supported = [item for item in channels if not item["unsupported_spectral_model"]]
-        fitted = sum(item["fit_status"] == "fitted" and not item["pending_window"] for item in supported)
-        attention = any(item["fit_status"] in ("failed", "rejected") for item in supported)
+        fitted = sum(item["fit_status"] in ("fitted", "suspect") and not item["pending_window"] for item in supported)
+        attention = any(item["fit_status"] in ("failed", "suspect") for item in supported)
         needs_fit = any(item["pending_window"] for item in supported)
         files.append({"stem": stem, "has_l0": stem in l0, "channels": channels,
                       "fitted": fitted, "status": "attention" if attention else "fitted" if fitted == len(supported) and not needs_fit else "pending"})

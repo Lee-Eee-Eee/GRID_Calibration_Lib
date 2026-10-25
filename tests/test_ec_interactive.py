@@ -254,17 +254,23 @@ def test_invalid_manual_ec_window_is_reported_without_faking_success(tmp_path, m
     source_fixture(root)
     processor = ECL2Processor("14B", root)
     monkeypatch.setattr(processor, "_plot_energy_file", lambda *args: None)
+    windows = {point_id("14B", "src_Na22", ch, 511.0): {"lo": 440, "hi": 575} for ch in range(4)}
+    windows[point_id("14B", "src_Na22", 0, 511.0)] = {"lo": 570, "hi": 440}
     result = processor.process(
-        root / "14B/ec/L1", {"ec_windows": {point_id("14B", "src_Na22", 0, 511.0): {"lo": 570, "hi": 440}}}
+        root / "14B/ec/L1", {"ec_windows": windows}
     )
-    assert result["n_processed"] == 0
+    assert result["n_processed"] == 1
     assert "Invalid manual EC window" in str(result["errors"])
+    assert result["outputs"][0]["channels_updated"] == [1, 2, 3]
 
 
-def test_quality_reasons_match_processor_gate():
+def test_quality_warnings_do_not_exclude_numerically_usable_points():
     rows = good_points()
     rows[0]["resolution"] = 99
     rows[1]["center_err"] = 0
     rows[2]["rsquared"] = 0.2
-    accepted = ECL3Processor._filter_quality(rows)
-    assert [row for row in rows if not ECInspector.quality_reasons(row)] == accepted
+    retained = ECL3Processor._filter_quality(rows)
+    assert rows[0] in retained and ECInspector.quality_reasons(rows[0])
+    assert rows[2] in retained and ECInspector.quality_reasons(rows[2])
+    assert rows[1] in retained and ECInspector.quality_reasons(rows[1])
+    assert all(ECInspector.quality_reasons(row) == row["quality_warnings"] for row in rows)

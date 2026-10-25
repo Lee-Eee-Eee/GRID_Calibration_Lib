@@ -345,7 +345,7 @@ test('a partial L1 job refreshes its usable results and reports successful and f
   assert.notEqual(completion.type, 'error');
 });
 
-test('L1 progress includes rejected models even when every channel produced parameters', () => {
+test('L1 progress flags suspect models without describing them as failed fits', () => {
   const ui = controller();
   ui.run(`
     state.layer = 'TB_L1';
@@ -354,7 +354,25 @@ test('L1 progress includes rejected models even when every channel produced para
       processor: { channels_accepted: 179, channels_rejected: 13 }
     }});
   `);
-  assert.match(ui.run('$("l1-progress").textContent'), /192 通道已拟合 · 179 通过 · 13 待复核/);
+  assert.match(ui.run('$("l1-progress").textContent'), /192 通道已拟合 · 179 未见异常 · 13 疑似问题/);
+  assert.doesNotMatch(ui.run('$("l1-progress").textContent'), /拒绝|计算失败/);
+});
+
+test('fit warnings retain a successful completion and EC participation follows explicit usage', () => {
+  const ui = controller();
+  ui.run(`
+    state.spectrum={fit:{fit_quality:{accepted:false,status:'suspect',warning_only:true}}};
+    fitCompletionFeedback({status:'succeeded'},false,1);
+  `);
+  assert.equal(ui.element('fit-result-status').dataset.status, 'attention');
+  assert.match(ui.element('fit-result-status').textContent, /拟合完成.*疑似问题.*保留/);
+  assert.doesNotMatch(ui.element('fit-result-status').textContent, /失败|拒绝/);
+  assert.match(ui.run(`ecPointStatus({id:'a',used:true,quality_reasons:['R² < 0.7']})`), /参与 L3 拟合.*疑似问题/);
+  assert.doesNotMatch(ui.run(`ecPointStatus({id:'a',used:true,quality_reasons:['R² < 0.7']})`), /未参与/);
+  assert.match(ui.run(`ecPointStatus({id:'a',used:false,draft_used:true,quality_reasons:['large uncertainty']})`), /参与 L3 拟合/);
+  assert.equal(ui.run(`isUsed({id:'a',used:false,draft_used:true})`), true);
+  assert.equal(ui.run(`ecPointStatus({id:'a',used:true,excluded:true,quality_reasons:['R² < 0.7']})`), '人工屏蔽');
+  assert.match(ui.run(`ecPointStatus({id:'a',used:false,quality_reasons:[]})`), /未参与 L3.*无可用参数/);
 });
 
 test('L1 residuals use matching histogram bins and finite model counts with Poisson scaling', () => {
@@ -365,7 +383,7 @@ test('L1 residuals use matching histogram bins and finite model counts with Pois
   }))`));
   assert.deepEqual(residual.x, [10, 20, 30, 60]);
   assert.equal(residual.y.length, 4);
-  for (const [index, expected] of [2.5, 0, -5 / 3, 2].entries()) {
+  for (const [index, expected] of [5 / 3, 0, -2.5, 2 / Math.sqrt(3)].entries()) {
     assert.ok(Math.abs(residual.y[index] - expected) < 1e-12);
   }
 });
@@ -871,6 +889,24 @@ test('a workflow stops at a failed step and releases its processing state', asyn
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(busyStates)')), [true, false]);
 });
 
+test('quality warnings keep the full workflow running through both aggregate fits', async () => {
+  const ui = controller();
+  ui.run(`
+    const plan = pipelinePlan('all', '', '');
+    let submitted=[];
+    selectLayer=async layer=>{state.layer=layer;};
+    executeJob=async layer=>{
+      submitted.push(layer);
+      if(layer==='TB_L2') state.run.tb_version={path:'warning-inclusive-tb.json'};
+      return {layer,status:'succeeded',result:{processor:{channels_suspect:13}},fit_quality:{accepted:false,status:'suspect'}};
+    };
+    api=async()=>state.run;
+  `);
+  await ui.run(`runPipeline(plan,'all')`);
+  assert.equal(ui.run('submitted.join()'), 'TB_L0,TB_L1,TB_L2,EC_L0,EC_L1,EC_L2,EC_L3');
+  assert.equal(ui.element('message').textContent, '流程已完成。');
+});
+
 test('a workflow stops after a partial L1 batch so its files can be reviewed before surface fitting', async () => {
   const ui = controller();
   ui.run(`
@@ -1026,6 +1062,35 @@ test('EC manual fitting sends the displayed point and window with automatic sele
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(patch)')), {ec_windows:{'source:2:59.5':{lo:25,hi:75}}});
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(submitted)')), {layer:'EC_L2',point_id:'source:2:59.5',channel:2,automatic_window:false});
   assert.match(ui.element('fit-result-status').textContent, /当前窗口拟合完成/);
+});
+
+test('fitting uses the displayed EC bin width and drag limits follow the number of fit bins', async () => {
+  const ui = controller();
+  ui.run(`
+    state.layer='TB_L1'; state.point={id:'case:0',stem:'case'};
+    state.spectrum={histogram_config:{min:0,max:16384,bin_width:6}};
+    $('window-lo').value='100'; $('window-hi').value='200';
+  `);
+  assert.equal(ui.run('spectrumBinWidth()'), 6);
+  assert.equal(ui.run(`boundedWindowValue('window-lo',199)`), 152);
+  assert.equal(ui.run(`boundedWindowValue('window-hi',101)`), 148);
+  ui.run(`$('window-hi').value='120';`);
+  assert.throws(()=>ui.run('windowPatch()'), /至少需要 48 ADC/);
+  ui.run(`
+    state.layer='EC_L2'; state.channel=1; state.point={id:'tube:1:40',stem:'tube',E:40};
+    state.spectrum={bin_width:6,window_bounds:{min:0,max:700,minimum_width:48}};
+    $('window-lo').value='200'; $('window-hi').value='350';
+    let submitted; saveRevision=async()=>{}; notify=()=>{};
+    executeJob=async(layer,config)=>{submitted={layer,...config};return{status:'succeeded'};};
+  `);
+  await ui.run('fitSpectrum()');
+  assert.equal(ui.run('submitted.bin_width'), 6);
+  assert.equal(ui.run('submitted.point_id'), 'tube:1:40');
+  assert.equal(ui.run('submitted.automatic_window'), false);
+  ui.run(`state.spectrum={bin_width:4}; $('window-hi').value='230';`);
+  assert.equal(ui.run(`boundedWindowValue('window-lo',229)`), 198);
+  ui.run(`state.spectrum.window_bounds={min:10,max:900,minimum_width:40};`);
+  assert.equal(ui.run(`boundedWindowValue('window-lo',229)`), 190);
 });
 
 test('EC file filtering and previous-next navigation retain the current physical channel', async () => {

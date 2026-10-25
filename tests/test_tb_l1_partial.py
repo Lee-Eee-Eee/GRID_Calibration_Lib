@@ -124,7 +124,7 @@ def test_private_tb_manual_window_cannot_fit_plastic_ch3(tmp_path, monkeypatch, 
     def unexpected_detection(*_args, **_kwargs):
         pytest.fail("Plastic CH3 must stop before Gaussian candidate detection")
 
-    monkeypatch.setattr("calibration_lib.tb.processors.L1_processor.detect_photopeak", unexpected_detection)
+    monkeypatch.setattr("calibration_lib.tb.processors.L1_processor.detect_photopeak_for_fit", unexpected_detection)
     processor = TBL1Processor(payload, tmp_path)
     with pytest.raises(ValueError, match="康普顿响应"):
         processor._fit_channel("case", 3, np.linspace(1900, 2500, 1000),

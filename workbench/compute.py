@@ -23,6 +23,7 @@ matplotlib.use("Agg")
 import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 
+from ..common.fit_policy import quality_warnings, unavailable_fit, usable_peak
 from ..common.spectral_models import detector_identity, photopeak_channels, unsupported_spectral_model
 from ..common.utils import (
     DataLayout,
@@ -377,9 +378,10 @@ class ComputeAdapter:
                         "gain": record.get("center"),
                         "l1_path": str(path),
                         "l0_path": str(l0_path) if l0_path else None,
-                        "fit_status": "rejected"
-                        if record.get("fit_quality", {}).get("accepted") is False
-                        else "fitted",
+                        "fit_status": "failed" if unavailable_fit(record) else "suspect"
+                        if quality_warnings(record, min_rsquared=TBL2Processor.MIN_RSQUARED) else "fitted",
+                        "quality_warnings": quality_warnings(record, min_rsquared=TBL2Processor.MIN_RSQUARED),
+                        "quality_policy": "warning_only",
                     }
                 )
         existing = {(row["stem"], row["channel"]) for row in rows}
@@ -507,9 +509,10 @@ class ComputeAdapter:
                 "gain": record.get("center"),
                 "l1_path": str(l1_path),
                 "l0_path": str(path),
-                "fit_status": "rejected"
-                if record.get("fit_quality", {}).get("accepted") is False
-                else "fitted",
+                "fit_status": "failed" if unavailable_fit(record) else "suspect"
+                if quality_warnings(record, min_rsquared=TBL2Processor.MIN_RSQUARED) else "fitted",
+                "quality_warnings": quality_warnings(record, min_rsquared=TBL2Processor.MIN_RSQUARED),
+                "quality_policy": "warning_only",
             }
         frame, metadata = self._spectrum_input(path, "amp")
         input_quality = {"crc_available": "crc_check" in frame, "input_events": len(frame)}
@@ -554,7 +557,7 @@ class ComputeAdapter:
             "histogram_config": histogram,
             "input_quality": input_quality,
             "unsupported_spectral_model": unsupported_spectral_model(self.detector_payload(payload), channel),
-            "window_bounds": {"min": histogram["min"], "max": histogram["max"], "minimum_width": 8},
+            "window_bounds": {"min": histogram["min"], "max": histogram["max"], "minimum_width": 8 * width},
             "default_window": {
                 "lo": (record or {}).get("window_lo", histogram["min"]),
                 "hi": (record or {}).get("window_hi", histogram["max"]),
@@ -629,6 +632,8 @@ class ComputeAdapter:
         manifest_path = self._layer_dir(product_root, payload, "TB_L2") / "json" / "L2_manifest.json"
         manifest = read_json(manifest_path) if manifest_path.exists() else {}
         excluded = set(manifest.get("excluded_points", []))
+        included = set(manifest["included_points"]) if "included_points" in manifest else None
+        legacy = manifest_path.exists() and manifest.get("quality_policy") != "warning_only"
         finite = []
         for point in rows:
             if point.get("temp") is None or point.get("bias") is None or point.get("center") is None:
@@ -639,9 +644,14 @@ class ComputeAdapter:
             point["excluded"] = point["id"] in excluded
             point["used"] = (
                 not point["excluded"]
-                and (point.get("rsquared") or 0) >= TBL2Processor.MIN_RSQUARED
-                and point.get("fit_quality", {}).get("accepted") is not False
+                and usable_peak(point)
+                and (point["id"] in included if included is not None else
+                     not legacy or ((point.get("rsquared") or 0) >= TBL2Processor.MIN_RSQUARED
+                                    and (point.get("fit_quality") or {}).get("accepted") is not False))
             )
+            point["draft_used"] = not point["excluded"] and usable_peak(point)
+            point["quality_warnings"] = quality_warnings(point, min_rsquared=TBL2Processor.MIN_RSQUARED)
+            point["suspect"] = bool(point["quality_warnings"])
             finite.append(point)
         if not finite:
             return {
@@ -667,6 +677,8 @@ class ComputeAdapter:
                 "diagnostics": {
                     "n_points": len(used),
                     "n_excluded": len(finite) - len(used),
+                    "n_draft_points": sum(row["draft_used"] for row in finite),
+                    "n_suspect": sum(row["suspect"] for row in used),
                     "rmse": np.sqrt(np.mean(residuals**2)) if used else None,
                     "mape_percent": np.mean(np.abs(residuals / gains)) * 100 if used else None,
                     "chisquare": params.get("chisquare"),
@@ -819,10 +831,10 @@ class ComputeAdapter:
                     or not all(map(math.isfinite, (lo, hi)))
                     or lo < histogram["min"]
                     or hi > histogram["max"]
-                    or hi - lo < 8
+                    or hi - lo < 8 * histogram["bin_width"]
                 ):
                     raise ValueError(
-                        f"Invalid fit window for {stem} ch{channel}: require {histogram['min']} <= lo < hi <= {histogram['max']} and width >= 8"
+                        f"Invalid fit window for {stem} ch{channel}: require {histogram['min']} <= lo < hi <= {histogram['max']} and at least 8 bins ({8 * histogram['bin_width']:g} ADC)"
                     )
                 windows.setdefault(_stem(stem), {})[str(channel)] = {"lo": lo, "hi": hi, "manual": True}
         output = target.parent / "workbench-fit-windows.json"
@@ -1055,6 +1067,7 @@ class ComputeAdapter:
                 layout.get_ec_l1_dir(),
                 {
                     **EC_PROCESS_PARAMS,
+                    **({"bin_width": config["bin_width"]} if "bin_width" in config else {}),
                     "only_energies": energies,
                     "only_stems": selection,
                     "ec_windows": config.get("ec_windows", {}),
@@ -1166,10 +1179,15 @@ class ComputeAdapter:
             warnings.append(
                 "Existing L3 algorithm fits E(ADC) globally and shares low/high coefficients; wiki describes segmented ADC(E). Scientific direction is preserved and requires review"
             )
+        has_partial_output = bool(outputs)
+        if layer == "EC_L3":
+            has_partial_output = has_partial_output and any(
+                params.get("EC_low") is not None for params in result.get("calibration_params", {}).values()
+            )
         return _clean(
             {
                 "success": not errors,
-                "partial": bool(errors and outputs) if layer == "TB_L1" else False,
+                "partial": bool(errors and has_partial_output) if layer in ("TB_L1", "EC_L2", "EC_L3") else False,
                 "errors": errors,
                 "warnings": warnings,
                 "layer": layer,

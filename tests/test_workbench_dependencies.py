@@ -393,6 +393,32 @@ def mixed_ec_history(workspace, *, xray_k=0.0184, background_k=0.02, include_sou
     return windows
 
 
+@pytest.mark.parametrize("override,expected", [(None, 8.), (2.5, 2.5)])
+def test_local_refit_preserves_saved_bin_width_or_explicit_override(
+    dependency_service, dependency_workspace, override, expected
+):
+    windows = mixed_ec_history(dependency_workspace)
+    path = dependency_workspace / "products/14B/ec/L2/json/40keV_fit_results.l2.json"
+    records = json.loads(path.read_text(encoding="utf8"))
+    records[0]["bin_width"] = 8.
+    put(path, records)
+    run = default_run(dependency_service)
+    dependency_service.patch(run["id"], {"ec_windows": windows})
+    spec = {"layer": "EC_L2", "point_id": "14B:ec:40keV:0:40", "channel": 0}
+    if override is not None:
+        spec["bin_width"] = override
+    job = settled(dependency_service, run["id"], dependency_service.submit(run["id"], spec))
+    assert job["status"] == "succeeded", job.get("error")
+    assert job["config"]["bin_width"] == expected
+    spectrum = dependency_service.ec_spectrum(run["id"], "EC_L2", 0, point_id=spec["point_id"])
+    np.testing.assert_allclose(np.diff(spectrum["x"]), expected)
+    assert spectrum["window_bounds"]["minimum_width"] == 8 * expected
+    if override is None:
+        assert spectrum["fit"]["fit_quality"]["status"] == "suspect"
+        assert spectrum["fit"]["peak_detection"]["selection_warnings"]
+    assert path.read_text(encoding="utf8") == json.dumps(records)
+
+
 def test_partial_import_allows_matching_xray_local_refit_despite_unrelated_stale_background(
     dependency_service, dependency_workspace, monkeypatch
 ):

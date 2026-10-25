@@ -16,7 +16,12 @@ import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 from scipy.signal import savgol_filter
 
-from ...common.peak_finding import PeakDetectionError, detect_photopeak, fit_quality, propose_photopeaks
+from ...common.peak_finding import (
+    PeakDetectionError,
+    detect_photopeak_for_fit,
+    fit_quality,
+    propose_photopeaks,
+)
 from ...common.spectral_models import pending_peak_record, unsupported_spectral_model
 from ...common.tb_peak_context import gain_guides
 from ...common.utils import (
@@ -161,6 +166,8 @@ class TBL1Processor:
         results["channels_failed"] = 0
         results["channels_accepted"] = 0
         results["channels_rejected"] = 0
+        results["channels_suspect"] = 0
+        results["quality_policy"] = "warning_only"
         for file_index, parquet_file in enumerate(parquet_files, 1):
             started = perf_counter()
             stem = parquet_file.stem.removesuffix(".l0")
@@ -208,6 +215,7 @@ class TBL1Processor:
                         records[ch] = record
                         fits[ch] = fit_res
                         results["channels_accepted" if fit_res.fit_quality["accepted"] else "channels_rejected"] += 1
+                        results["channels_suspect"] += int(not fit_res.fit_quality["accepted"])
                         updated.append(ch)
                         used_windows[stem][str(ch)] = {
                             "lo": float(fit_res.lo), "hi": float(fit_res.hi), "manual": is_manual,
@@ -550,7 +558,7 @@ class TBL1Processor:
 
         requested = [float(item["lo"]), float(item["hi"])] if manual else None
         if manual:
-            candidate, detection = detect_photopeak(mids, hist, window=requested, config=peak_config)
+            candidate, detection = detect_photopeak_for_fit(mids, hist, window=requested, config=peak_config)
             lo, hi = requested
             detection["histogram"] = histogram
             return self._fit_candidate(mids, hist, hist_smooth, candidate, detection, lo, hi, histogram)
@@ -567,7 +575,7 @@ class TBL1Processor:
         candidate = candidates[0]
         if (len(candidates) > 1 and candidates[1].score > .82 * candidate.score
                 and abs(candidates[1].center - candidate.center) > 2 * max(candidate.sigma, candidates[1].sigma)):
-            raise PeakDetectionError("Competing photopeaks need an independent gain anchor", detection)
+            detection.setdefault("selection_warnings", []).append("Competing photopeaks need an independent gain anchor")
         trials, rejected = [], []
         initial_sigma = candidate.sigma
         for extent in (3., 2.5, 2.):
@@ -587,7 +595,7 @@ class TBL1Processor:
                 fraction = fit.fwhm / max(fit.center, 1e-12)
                 if not settings["min_resolution"] <= fraction <= settings["max_resolution"]:
                     fit.fit_quality["accepted"] = False
-                    fit.fit_quality["status"] = "rejected"
+                    fit.fit_quality.update(status="suspect", suspect=True, quality_pass=False, warning_only=True)
                     fit.fit_quality["warnings"].append("Fitted width is outside the configured scintillation response range")
                 trials.append(fit)
                 if len(trials) == 1 and fit.sigma < .7 * initial_sigma:
@@ -617,7 +625,7 @@ class TBL1Processor:
             "score": float(score(fit)), "quality": fit.fit_quality,
         } for fit in trials]
         selected.peak_detection["fit_errors"] = rejected
-        selected.peak_detection["selection_status"] = "resolved" if selected.fit_quality["accepted"] else "rejected"
+        selected.peak_detection["selection_status"] = "resolved" if selected.fit_quality["accepted"] else "suspect"
         return selected
 
     def _fit_candidate(self, mids, hist, hist_smooth, candidate, detection, lo, hi, histogram):
@@ -634,7 +642,8 @@ class TBL1Processor:
         result, comps, fit_mode, rsquared = self._select_best_fit(
             x_cut, y_cut, peak_x, center_lo, center_hi, candidate.sigma,
         )
-        quality = fit_quality(result, x_cut, y_cut, np.sqrt(np.maximum(y_cut, 1.0)))
+        quality = fit_quality(result, x_cut, y_cut, np.sqrt(np.maximum(y_cut, 1.0)),
+                              selection_warnings=detection.get("selection_warnings"))
 
         center = float(result.params["g_center"].value)
         center_err = float(result.params["g_center"].stderr or 0.0)

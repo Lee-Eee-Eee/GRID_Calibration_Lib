@@ -15,13 +15,7 @@ from lmfit.models import ExponentialModel, GaussianModel, LinearModel, Quadratic
 from ..common.spectral_models import unsupported_spectral_model
 from ..common.utils import read_json, read_parquet, read_parquet_metadata, validated_events
 from ..ec.processors.L2_processor import BIN_WIDTH, ECL2Processor
-from ..ec.processors.L3_processor import (
-    MAX_CENTER_RELERR,
-    MAX_RESOLUTION,
-    MIN_RSQUARED,
-    ECL3Processor,
-    res_fit,
-)
+from ..ec.processors.L3_processor import ECL3Processor, res_fit
 
 if TYPE_CHECKING:
     from .compute import ComputeAdapter
@@ -104,7 +98,12 @@ class ECInspector:
                 ch = record.get("channel")
                 if ch not in range(4) or channel is not None and ch != channel:
                     continue
-                energy = float(record.get("E", 0))
+                try:
+                    energy = float(record.get("E", 0))
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(energy) or energy <= 0:
+                    continue
                 parquet = (
                     self._named_parquet(payload, product_root, record["signal_file"])
                     if record.get("signal_file")
@@ -121,7 +120,9 @@ class ECInspector:
                         "l2_path": str(path),
                         "source_path": str(parquet) if parquet else None,
                         "l1_stem": parquet.name.removesuffix("_corr.l1.parquet") if parquet else None,
-                        "quality_pass": not reasons,
+                        "quality_pass": ECL3Processor.usable_record(record) and not unsupported_spectral_model(
+                            self.adapter.detector_payload(payload) if hasattr(self.adapter, "detector_payload") else payload, ch),
+                        "quality_suspect": bool(reasons),
                         "quality_reasons": reasons,
                         "source_origin": "run"
                         if Path(product_root).resolve() in path.resolve().parents
@@ -132,32 +133,8 @@ class ECInspector:
 
     @staticmethod
     def quality_reasons(record: dict) -> list[str]:
-        """Explain precisely the existing L3 quality gate, without changing it."""
-        reasons = []
-        r2 = record.get("rsquared", 0)
-        if r2 is None or r2 < MIN_RSQUARED:
-            reasons.append(f"R² < {MIN_RSQUARED}")
-        center, ce = record.get("center", 0), record.get("center_err")
-        if ce is None or not np.isfinite(ce) or ce <= 0:
-            reasons.append("center_err is missing or non-positive")
-        elif center and center > 0 and ce / center > MAX_CENTER_RELERR:
-            reasons.append(f"center relative error > {MAX_CENTER_RELERR:.0%}")
-        sigma, se = record.get("sigma", 0), record.get("sigma_err")
-        if se is None or not np.isfinite(se) or se <= 0:
-            reasons.append("sigma_err is missing or non-positive")
-        elif sigma and sigma > 0 and se / sigma > 2:
-            reasons.append("sigma relative error > 200%")
-        resolution, re = record.get("resolution"), record.get("resolution_err")
-        if (
-            resolution is None
-            or not np.isfinite(resolution)
-            or resolution <= 0
-            or resolution > MAX_RESOLUTION
-        ):
-            reasons.append(f"resolution outside (0, {MAX_RESOLUTION}] %")
-        if re is None or not np.isfinite(re) or re <= 0:
-            reasons.append("resolution_err is missing or non-positive")
-        return reasons
+        """Expose warning annotations using the processor's own diagnostics."""
+        return ECL3Processor.quality_reasons(record)
 
     def overview(self, payload: str, product_root: Path, channel: int) -> dict:
         self._channel(channel)
@@ -172,27 +149,32 @@ class ECInspector:
         manifests = self._files(payload, product_root, "EC_L3", "json", "L3_manifest.json")
         manifest = read_json(manifests[-1]) if manifests else {}
         excluded = set(manifest.get("excluded_points", []))
-        accepted = [row for row in rows if row["quality_pass"] and row["id"] not in excluded]
-        kept = ECL3Processor._filter_monotonic(accepted)
+        available = [row for row in rows if row["quality_pass"] and row["id"] not in excluded]
+        kept = ECL3Processor._filter_monotonic(available)
         kept_ids = {row["id"] for row in kept}
         coefficients = (params or {}).get("EC_low")
         for row in rows:
             row["excluded"] = row["id"] in excluded
             row["used"] = row["id"] in kept_ids
-            if row["quality_pass"] and not row["excluded"] and not row["used"]:
-                row["quality_reasons"].append("non-monotonic center")
-            row["predicted_energy"] = float(np.polyval(coefficients, row["center"])) if coefficients else None
+            for reason in row.get("quality_warnings", []):
+                if reason not in row["quality_reasons"]:
+                    row["quality_reasons"].append(reason)
+            row["quality_suspect"] = bool(row["quality_reasons"])
+            row["predicted_energy"] = (
+                float(np.polyval(coefficients, row["center"])) if coefficients and row["quality_pass"] else None
+            )
             row["residual_keV"] = (
                 row["E"] - row["predicted_energy"] if row["predicted_energy"] is not None else None
             )
         curve = {"x": [], "y": []}
         resolution_curve = {"x": [], "y": []}
-        if rows and coefficients:
-            adc = np.linspace(min(row["center"] for row in rows), max(row["center"] for row in rows), 250)
+        numeric = [row for row in rows if row["quality_pass"]]
+        if numeric and coefficients:
+            adc = np.linspace(min(row["center"] for row in numeric), max(row["center"] for row in numeric), 250)
             curve = {"x": adc, "y": np.polyval(coefficients, adc)}
-        if rows and params:
+        if numeric and params:
             energies = np.geomspace(
-                max(min(row["E"] for row in rows), 0.01), max(row["E"] for row in rows), 250
+                max(min(row["E"] for row in numeric), 0.01), max(row["E"] for row in numeric), 250
             )
             resolution = []
             for energy in energies:
@@ -365,6 +347,8 @@ class ECInspector:
                 "hi": hi,
                 "range": [max(0, lo - (hi - lo) * 0.6), hi + (hi - lo) * 0.6],
                 "bin_width": bin_width,
+                "window_bounds": {"min": 0., "max": max(float(x[-1] + bin_width / 2), hi),
+                                  "minimum_width": 8 * bin_width},
                 "y_label": f"Count rate / {bin_width:g} ADC bin (s⁻¹)",
                 "normalization": "Processor UTC-axis acquisition duration; signal and background normalized independently",
             }

@@ -110,16 +110,32 @@ test('quality points map each file to the requested physical channel even when r
   assert.equal(ui.run('l1QualityPoints(0)[1].bias'), 26.912);
 });
 
-test('acceptance, rejection, failed calculation, pending model and unknown quality remain separate', () => {
+test('normal fits, suspect fits, failed calculation, pending model and unknown quality remain separate', () => {
   const ui = controller();
   assert.deepEqual(plain(ui.run('l1QualityPoints().map(l1QualityStatus)')), [
-    'accepted', 'rejected', 'failed', 'model_pending', 'not_fitted', 'quality_unknown', 'accepted', 'accepted',
+    'accepted', 'suspect', 'failed', 'model_pending', 'not_fitted', 'quality_unknown', 'accepted', 'accepted',
   ]);
   const summary = plain(ui.run('l1QualitySummary(l1QualityPoints())'));
   assert.equal(summary.total, 8);
-  assert.deepEqual(summary.counts, { accepted:3, rejected:1, failed:1, model_pending:1, not_fitted:1, quality_unknown:1 });
+  assert.deepEqual(summary.counts, { accepted:3, suspect:1, failed:1, model_pending:1, not_fitted:1, quality_unknown:1 });
   assert.equal(summary.missingCoordinates, 1);
   assert.equal(summary.missingMetrics, 4);
+});
+
+test('new warning-only results and legacy rejected results both remain selectable suspect points', async () => {
+  const ui = controller();
+  ui.run(`
+    state.l1Overview.files[0].channels.find(item=>item.channel===0).fit_status='suspect';
+    state.l1Overview.files[0].channels.find(item=>item.channel===0).fit_quality={suspect:true,quality_pass:false,warning_only:true,warnings:['wide peak']};
+  `);
+  assert.equal(ui.run('l1QualityStatus(l1QualityPoints()[0])'), 'suspect');
+  assert.equal(ui.run('l1QualityStatus(l1QualityPoints()[1])'), 'suspect');
+  assert.equal(ui.run('l1QualityStates.suspect.label'), '疑似问题');
+  assert.equal(ui.run('l1QualityStates.accepted.label'), '未见异常');
+  assert.doesNotMatch(ui.run('l1QualityHover(l1QualityPoints()[1])'), /拒绝/);
+  const context = ui.run('l1QualityContext()');
+  await ui.run(`selectL1QualityPoint(l1QualityPoints()[0],${JSON.stringify(context)})`);
+  assert.equal(ui.run('selected[0].stem'), 'accepted');
 });
 
 test('missing metrics stay grey and missing coordinates never become zero-valued map points', () => {

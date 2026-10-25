@@ -80,7 +80,7 @@ def test_narrow_line_can_be_used_when_detector_noise_inference_is_disabled():
     assert diagnostics["noise_boundary"] is None
 
 
-def test_legacy_channel_dictionary_retains_explicit_quality_rejection(tmp_path):
+def test_legacy_channel_dictionary_retains_quality_warning_without_exclusion(tmp_path):
     root = tmp_path / "ec/L2"
     (root / "json").mkdir(parents=True)
     rejected = {
@@ -98,7 +98,8 @@ def test_legacy_channel_dictionary_retains_explicit_quality_rejection(tmp_path):
     rows = processor._collect_l2_results(root)
     assert len(rows) == 1
     assert rows[0]["fit_quality"]["accepted"] is False
-    assert processor._filter_quality(rows) == []
+    assert processor._filter_quality(rows) == rows
+    assert rows[0]["quality_warnings"] and rows[0]["quality_suspect"]
 
 
 def test_actual_14b_weak_photopeak_never_silently_locks_to_the_dark_component():

@@ -12,7 +12,7 @@ import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel
 from scipy.signal import savgol_filter
 
-from ...common.peak_finding import detect_photopeak, fit_quality
+from ...common.peak_finding import detect_photopeak, detect_photopeak_for_fit, fit_quality
 from ...common.spectral_models import pending_peak_record, photopeak_channels, unsupported_spectral_model
 from ...common.utils import (
     DataLayout,
@@ -72,6 +72,8 @@ class ECL2Processor:
     def process(self, ec_l1_dir: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = config or {}
         bin_width = float(cfg.get("bin_width", BIN_WIDTH))
+        if not np.isfinite(bin_width) or bin_width <= 0:
+            raise ValueError("bin_width must be finite and positive")
         only_point = self._only_point(cfg.get("only_point"))
         if only_point and cfg.get("only_energies") is not None and only_point[0] not in cfg["only_energies"]:
             raise ValueError("only_point is outside only_energies")
@@ -252,7 +254,7 @@ class ECL2Processor:
                         bkg_ch = ch
                     else:
                         bkg_df_ch = None
-                        bkg_ch, bkg = self._choose_background_channel(ch, ch_map)
+                        bkg_ch, bkg = self._choose_background_channel(ch, ch_map, bin_width)
                         bkg_df_ch = bkg["df"]
 
                     peaks_to_fit = sorted(peak_energies) if data_type == "src" else [float(peak_energies[0])]
@@ -275,10 +277,15 @@ class ECL2Processor:
                                 window_source = "packaged"
                         point_id = f"{self.payload_name}:ec:{energy_key}:{ch}:{float(peak_E):g}"
                         manual_override = cfg.get("ec_windows", {}).get(point_id)
-                        if manual_override is not None:
-                            lo, hi = float(manual_override["lo"]), float(manual_override["hi"])
-                            if not np.isfinite([lo, hi]).all() or hi - lo < 2 * bin_width:
-                                raise ValueError(f"Invalid manual EC window for {point_id}: [{lo}, {hi}]")
+                        if manual_override is not None and not cfg.get("automatic_window"):
+                            try:
+                                lo, hi = float(manual_override["lo"]), float(manual_override["hi"])
+                                if not np.isfinite([lo, hi]).all() or hi - lo < 2 * bin_width:
+                                    raise ValueError(f"Invalid manual EC window for {point_id}: [{lo}, {hi}]")
+                            except (ValueError, TypeError, KeyError) as exc:
+                                results["errors"].append({"energy": energy_key, "channel": ch,
+                                                           "peak_keV": peak_E, "error": str(exc)})
+                                continue
                             peak_window = [lo, hi]
                             window_source = "manual"
                         if peak_window is None and prev_center is not None and prev_energy is not None:
@@ -316,7 +323,7 @@ class ECL2Processor:
                                 forced_peak_energy=peak_E,
                                 peak_config=detection_config,
                             )
-                            if fit["fit_quality"]["accepted"]:
+                            if np.isfinite(fit["center"]) and fit["center"] > 0:
                                 prev_center = float(fit["center"])
                                 prev_energy = float(peak_E)
                         except Exception as exc:
@@ -386,7 +393,7 @@ class ECL2Processor:
                             # X-ray spectra always use a different channel of
                             # that energy. An unrelated gamma-source background
                             # in the same directory must not change the refit.
-                            refit_bkg_ch, refit_bkg = self._choose_background_channel(ch, ch_map)
+                            refit_bkg_ch, refit_bkg = self._choose_background_channel(ch, ch_map, bin_width)
                             refit_bkg_df = refit_bkg["df"]
                             cw = [consensus * 0.80, consensus * 1.22]
                             try:
@@ -438,6 +445,14 @@ class ECL2Processor:
                     print(f"⚠ EC L2: {energy_key} - no successful fits")
                     results["errors"].append({"energy": energy_key, "error": "No successful peak fits"})
                     continue
+
+                for rec in records:
+                    quality = rec.get("fit_quality") or {}
+                    if quality.get("accepted") is False or quality.get("suspect"):
+                        details = "; ".join(quality.get("warnings") or []) or "peak diagnostics need review"
+                        results["warnings"].append(
+                            f"{energy_key} CH{rec['channel']} {rec['E']:g} keV: {details}; retained for review"
+                        )
 
                 points_updated = [f"{self.payload_name}:ec:{energy_key}:{rec['channel']}:{float(rec['E']):g}"
                                   for rec in records]
@@ -562,12 +577,8 @@ class ECL2Processor:
     def _xray_consensus_center(self, channel_fits: dict[int, dict[str, Any]]) -> float | None:
         centers = []
         for _, fit in channel_fits.items():
-            if fit.get("fit_quality", {}).get("accepted") is False:
-                continue
-            r2 = float(fit.get("rsquared", 0.0))
             center = float(fit.get("center", 0.0))
-            center_err = float(abs(fit.get("center_err", float("nan"))))
-            if r2 >= 0.6 and center > 0 and np.isfinite(center_err) and center_err < center * 0.5:
+            if np.isfinite(center) and center > 0:
                 centers.append(center)
         if len(centers) >= 2:
             return float(np.median(centers))
@@ -639,6 +650,7 @@ class ECL2Processor:
         self,
         target_channel: int,
         channel_map: dict[int, dict[str, Any]],
+        bin_width: float = BIN_WIDTH,
     ) -> tuple[int, dict[str, Any]]:
         channel_map = {ch: item for ch, item in channel_map.items()
                        if not unsupported_spectral_model(self.response_payload, ch)}
@@ -657,7 +669,7 @@ class ECL2Processor:
             ),
         ) + 50.0
         upper = max(upper, 160.0)
-        edges = np.arange(0.0, upper + BIN_WIDTH, BIN_WIDTH)
+        edges = np.arange(0.0, upper + bin_width, bin_width)
         signal_spec, _, _ = self._build_rate_spectrum(signal_amp, signal_time, edges)
 
         best_ch: int | None = None
@@ -777,6 +789,8 @@ class ECL2Processor:
         UTC-axis rule. Keeping one implementation prevents UI spectra from
         using counts or exposure scaling inconsistent with the actual fit.
         """
+        if not np.isfinite(bin_width) or bin_width <= 0:
+            raise ValueError("bin_width must be finite and positive")
         signal_df, signal_quality = validated_events(signal_df)
         background_df, background_quality = validated_events(background_df)
         signal_quality = signal_df.attrs.get("crc_input_quality", signal_quality)
@@ -815,7 +829,7 @@ class ECL2Processor:
             prepared[key] for key in ("mids", "spec", "bkg_spec", "net", "net_err")
         )
 
-        candidate, detection = detect_photopeak(mids, net, net_err, window=forced_window, config=peak_config)
+        candidate, detection = detect_photopeak_for_fit(mids, net, net_err, window=forced_window, config=peak_config)
         peak_x = candidate.center
         if forced_window is not None:
             lo, hi = map(float, forced_window)
@@ -834,7 +848,8 @@ class ECL2Processor:
             x_fit, y_fit, err_fit, peak_x, max(lo, peak_x - 1.5 * candidate.sigma),
             min(hi, peak_x + 1.5 * candidate.sigma), bin_width, candidate.sigma,
         )
-        quality = fit_quality(result, x_fit, y_fit, err_fit)
+        quality = fit_quality(result, x_fit, y_fit, err_fit,
+                              selection_warnings=detection.get("selection_warnings"))
         comps = result.eval_components(x=x_fit)
 
         center = float(result.params["g_center"].value)
@@ -951,7 +966,7 @@ class ECL2Processor:
             )
             style_axes(ax, xlabel="Corrected ADC", ylabel="Count Rate")
 
-            fit_width = max(row["hi"] - row["lo"], 8.0 * max(row["sigma"], BIN_WIDTH), 60.0)
+            fit_width = max(row["hi"] - row["lo"], 8.0 * max(row["sigma"], row.get("bin_width", BIN_WIDTH)), 60.0)
             x_lo = 0.0
             x_hi = min(float(pdata["mids"][-1]), max(row["hi"], row["center"] + 1.25 * fit_width) + 0.25 * fit_width)
             ax.set_xlim(x_lo, x_hi)
@@ -999,7 +1014,7 @@ class ECL2Processor:
             ax.grid(alpha=0.2, linewidth=0.5)
             ax.legend(fontsize=8, loc="upper right")
 
-            fit_width = max(row["hi"] - row["lo"], 8.0 * max(row["sigma"], BIN_WIDTH), 60.0)
+            fit_width = max(row["hi"] - row["lo"], 8.0 * max(row["sigma"], row.get("bin_width", BIN_WIDTH)), 60.0)
             x_lo = 0.0
             x_hi = min(float(pdata["mids"][-1]), max(row["hi"], row["center"] + 1.25 * fit_width) + 0.25 * fit_width)
             ax.set_xlim(x_lo, x_hi)

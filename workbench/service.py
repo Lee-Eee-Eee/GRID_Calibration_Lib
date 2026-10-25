@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+from ..common.fit_policy import usable_peak
 from ..common.spectral_models import detector_identity, photopeak_channels, unsupported_spectral_model
 from .acquisition_store import freeze_profile, load_profile, prepare_profile, presets, profile_digest
 from .compute import ComputeAdapter
@@ -92,6 +93,12 @@ def peak_job_settings(layer, spec):
     if supplied and layer not in ("TB_L1", "EC_L2"):
         raise ValueError("自动寻峰配置只适用于 TB L1 / EC L2")
     result = {}
+    if "bin_width" in spec:
+        width = spec["bin_width"]
+        if (layer != "EC_L2" or isinstance(width, bool) or not isinstance(width, (int, float))
+                or not math.isfinite(width) or width <= 0):
+            raise ValueError("EC L2 bin_width 必须为正的有限 ADC 数值")
+        result["bin_width"] = float(width)
     if "fit_channels" in spec:
         channels = spec["fit_channels"]
         if (layer != "TB_L1" or not isinstance(channels, list) or not channels
@@ -690,10 +697,10 @@ class Workbench:
                             math.isfinite(lo)
                             and math.isfinite(hi)
                             and histogram["min"] <= lo < hi <= histogram["max"]
-                            and hi - lo >= 8
+                            and hi - lo >= 8 * histogram["bin_width"]
                         ):
                             raise ValueError(
-                                f"窗口须满足 {histogram['min']} ≤ lo < hi ≤ {histogram['max']}，宽度至少 8 ADC"
+                                f"窗口须满足 {histogram['min']} ≤ lo < hi ≤ {histogram['max']}，至少 8 个 bin（{8 * histogram['bin_width']:g} ADC）"
                             )
                         new = {"lo": lo, "hi": hi}
                         old = state["config"]["windows"].setdefault(stem, {}).get(str(ch))
@@ -716,7 +723,7 @@ class Workbench:
                 state["name"] = str(patch["name"])[:120]
             if "ec_windows" in patch or "ec_excluded" in patch:
                 known = {
-                    point["id"]
+                    point["id"]: point
                     for channel in range(4)
                     for point in ECInspector(adapter).overview(
                         state["payload"], self.root(run_id) / "products", channel
@@ -729,10 +736,11 @@ class Workbench:
                     if point_id not in known or not isinstance(bounds, dict):
                         raise ValueError("EC 能峰不存在")
                     lo, hi = float(bounds["lo"]), float(bounds["hi"])
+                    minimum = 8 * float(known[point_id].get("bin_width", 4.))
                     if not (
-                        math.isfinite(lo) and math.isfinite(hi) and 0 <= lo < hi <= 65536 and hi - lo >= 8
+                        math.isfinite(lo) and math.isfinite(hi) and 0 <= lo < hi <= 65536 and hi - lo >= minimum
                     ):
-                        raise ValueError("EC 窗口须满足 0 ≤ lo < hi ≤ 65536，宽度至少 8 ADC")
+                        raise ValueError(f"EC 窗口须满足 0 ≤ lo < hi ≤ 65536，至少 8 个 bin（{minimum:g} ADC）")
                     new = {"lo": lo, "hi": hi}
                     if state["config"].setdefault("ec_windows", {}).get(point_id) != new:
                         state["config"]["ec_windows"][point_id] = new
@@ -1036,9 +1044,12 @@ class Workbench:
                 channel = int(spec.get("channel", 0))
                 self._channel(channel)
                 overview = self.ec_overview(run_id, channel)
-                if not any(point["id"] == spec["point_id"] for point in overview["points"]):
+                point = next((point for point in overview["points"] if point["id"] == spec["point_id"]), None)
+                if point is None:
                     raise ValueError("EC 能峰不存在")
                 config["ec_point_id"] = spec["point_id"]
+                if "bin_width" not in config and point.get("bin_width") is not None:
+                    config.update(peak_job_settings(layer, {"bin_width": point["bin_width"]}))
             if layer == "EC_L2" and state.get("pending_ec_l0"):
                 pending = state["pending_ec_l0"]
                 if config.get("ec_point_id"):
@@ -1092,7 +1103,7 @@ class Workbench:
             return copy.deepcopy(job)
 
     def _unreviewed_tb_l1_inputs(self, state):
-        """Failed fits are rejected points; untouched reading inputs still wait."""
+        """Unavailable fits are omitted; untouched reading inputs still wait."""
         excluded = set(state["config"].get("excluded", [])) | set(state.get("tb_l1_failures", {}))
         completed = set(state.get("acquisition_products", {}).get("TB_L1", []))
         coverage = state.get("acquisition_l1_channels", {})
@@ -1273,7 +1284,9 @@ class Workbench:
             if result.get("partial"):
                 counts = result.get("counts", {})
                 job.update(status="partial", outputs=generated,
-                           error=f"{counts.get('channels_fitted', 0)} 个通道已保存，{counts.get('channels_failed', 0)} 个通道拟合失败")
+                           error=(f"{counts.get('channels_fitted', 0)} 个通道已保存，{counts.get('channels_failed', 0)} 个通道计算失败"
+                                  if job["layer"] == "TB_L1" else
+                                  f"已保存可用结果；{len(result.get('errors', []))} 项计算错误，详情见运行记录"))
             else:
                 job.update(status="succeeded", outputs=generated)
         except Exception as exc:
@@ -1334,8 +1347,10 @@ class Workbench:
                         if suffix and item["path"].endswith(suffix)
                         and layer not in ("TB_L1", "EC_L2")
                     )
-                    if layer in ("TB_L2", "EC_L3"):
+                    if layer in ("TB_L2", "EC_L3") and job["status"] == "succeeded":
                         completed.add("aggregate")
+                    elif layer in ("TB_L2", "EC_L3"):
+                        completed.discard("aggregate")
                     state["acquisition_products"][layer] = sorted(completed)
                     coverage = self.acquisition_coverage(state, layer)
                     pending = set(state.get("acquisition_pending_layers", []))
@@ -1579,7 +1594,10 @@ class Workbench:
             )
         ]
         for p in result["points"]:
+            p["actual_used"] = p.get("used", False)
             p["excluded"] = p["id"] in state["config"]["excluded"]
+            p["draft_used"] = usable_peak(p) and not p["excluded"]
+            p["used"] = p["actual_used"] and not p["excluded"]
         result["dirty"] = "TB_L2" in state["dirty_layers"]
         return clean(result)
 

@@ -428,7 +428,26 @@ def propose_photopeaks(
                              proposals_only=True, include_noise=include_noise)
 
 
-def fit_quality(result: Any, x: np.ndarray, y: np.ndarray, errors: np.ndarray) -> dict[str, Any]:
+def detect_photopeak_for_fit(x, y, errors=None, *, window=None, config=None):
+    """Use the best supported initial guess when identity needs review.
+
+    Explicit windows may include empirically flagged noise candidates. A measured
+    noise ceiling still applies; an empty candidate set remains a numerical input
+    problem. The independent candidate-inspection API keeps its strict contract.
+    """
+    try:
+        return detect_photopeak(x, y, errors, window=window, config=config)
+    except PeakDetectionError as error:
+        candidates, diagnostics = propose_photopeaks(
+            x, y, errors, window=window, config=config, include_noise=window is not None,
+        )
+        candidate = candidates[0]
+        diagnostics.update(selected_center=candidate.center, selection_status="suspect",
+                           selection_warnings=[str(error)])
+        return candidate, diagnostics
+
+
+def fit_quality(result: Any, x: np.ndarray, y: np.ndarray, errors: np.ndarray, *, selection_warnings=None) -> dict[str, Any]:
     """Check signal-vs-continuum evidence, boundaries and uncertainty, beyond R²."""
     center, sigma = result.params["g_center"], result.params["g_sigma"]
     amplitude = result.params["g_amplitude"]
@@ -460,7 +479,7 @@ def fit_quality(result: Any, x: np.ndarray, y: np.ndarray, errors: np.ndarray) -
     delta_bic = background_chi - residual_chi + (background_k - result.nvarys) * np.log(len(x))
     snr = float(amplitude.value / amplitude.stderr) if amplitude.stderr and amplitude.stderr > 0 else None
     near_edge = min(center.value - center.min, center.max - center.value) < 0.05 * max(sigma.value, 1e-12)
-    warnings = []
+    warnings = list(selection_warnings or [])
     if delta_bic < 6:
         warnings.append("Peak model is weakly supported over a smooth background (delta BIC < 6)")
     if snr is None or snr < 3:
@@ -474,4 +493,5 @@ def fit_quality(result: Any, x: np.ndarray, y: np.ndarray, errors: np.ndarray) -
     return {"delta_bic_background": float(delta_bic), "amplitude_snr": snr,
             "redchi": float(result.redchi), "center_at_boundary": bool(near_edge),
             "warnings": warnings, "accepted": not warnings,
-            "status": "rejected" if warnings else "resolved"}
+            "quality_pass": not warnings, "suspect": bool(warnings), "warning_only": True,
+            "status": "suspect" if warnings else "resolved"}

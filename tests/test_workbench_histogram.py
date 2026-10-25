@@ -114,7 +114,7 @@ def test_high_adc_window_can_be_saved_and_reaches_the_actual_processor(tmp_path)
         service.close()
 
 
-def test_explicitly_rejected_high_r_squared_point_is_not_used_by_surface(tmp_path):
+def test_suspect_high_r_squared_point_remains_usable_by_surface(tmp_path):
     products = tmp_path / "runs/display/products"
     seed_l1(products, accepted=False)
     seed_l1(products, stem="accepted", accepted=True)
@@ -125,9 +125,9 @@ def test_explicitly_rejected_high_r_squared_point_is_not_used_by_surface(tmp_pat
     surface = ComputeAdapter(tmp_path).surface("10B", products, 0)
     points = {point["stem"]: point for point in surface["points"]}
     assert points["case"]["rsquared"] > 0.99
-    assert points["case"]["used"] is False
+    assert points["case"]["used"] is True and points["case"]["suspect"]
     assert points["accepted"]["used"] is True
-    assert surface["diagnostics"]["n_points"] == 1
+    assert surface["diagnostics"]["n_points"] == 2
 
 
 @pytest.mark.parametrize("crc", [[False] * 4, [False] * 3, []])

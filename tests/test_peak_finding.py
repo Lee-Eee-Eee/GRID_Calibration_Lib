@@ -39,14 +39,15 @@ def test_adjacent_fainter_photopeak_is_selected_instead_of_tallest_dark_peak(tmp
     assert fit.lo > 30
 
 
-def test_manual_window_is_kept_while_dark_noise_model_mismatch_is_rejected(tmp_path):
+def test_manual_window_is_kept_while_dark_noise_model_mismatch_is_annotated(tmp_path):
     windows = {"sample": {"0": {"lo": 15.125, "hi": 80.375}}}
     fit = TBL1Processor("Custom", tmp_path)._fit_channel("sample", 0, adjacent_events(), windows, True)
     assert fit.lo == 15.125 and fit.hi == 80.375
     assert abs(fit.center - 48) < 2
     assert fit.fit_quality["redchi"] > 3
     assert fit.fit_quality["accepted"] is False
-    assert fit.fit_quality["status"] == "rejected"
+    assert fit.fit_quality["status"] == "suspect"
+    assert fit.fit_quality["suspect"] and fit.fit_quality["warning_only"]
 
 
 def test_faint_unresolved_signal_never_falls_back_to_dark_peak():
@@ -115,17 +116,19 @@ def test_ec_uses_propagated_signal_and_background_errors_and_retains_manual_boun
     assert fit["fit_quality"]["accepted"] is False
 
 
-def test_explicit_rejection_is_excluded_by_both_aggregators(tmp_path):
+def test_saved_quality_warnings_are_retained_by_both_aggregators(tmp_path):
     good = {"channel": 0, "temp": 25, "bias": 28, "center": 48, "center_err": .2,
             "rsquared": .99, "fit_quality": {"accepted": False}}
     directory = tmp_path / "Custom/tb/L1/json"
     (tmp_path / "Custom/tb/L0/parquet").mkdir(parents=True)
     write_json(directory / "sample_fit_results.l1.json", [good])
-    assert TBL2Processor("Custom", tmp_path)._collect_fit_data(tmp_path / "Custom/tb/L1", tmp_path / "Custom/tb/L0") == []
+    tb_rows = TBL2Processor("Custom", tmp_path)._collect_fit_data(tmp_path / "Custom/tb/L1", tmp_path / "Custom/tb/L0")
+    assert len(tb_rows) == 1 and tb_rows[0]["quality_warnings"]
     write_json(directory / "sample_fit_results.l1.json", [{**good, "fit_quality": {"accepted": True}}])
     assert len(TBL2Processor("Custom", tmp_path)._collect_fit_data(tmp_path / "Custom/tb/L1", tmp_path / "Custom/tb/L0")) == 1
-    assert ECL3Processor._filter_quality([{**good, "sigma": 5, "sigma_err": .2,
-                                        "resolution": .2, "resolution_err": .01}]) == []
+    ec_rows = ECL3Processor._filter_quality([{**good, "E": 59.5, "sigma": 5, "sigma_err": .2,
+                                            "resolution": .2, "resolution_err": .01}])
+    assert len(ec_rows) == 1 and ec_rows[0]["quality_warnings"]
 
 
 @pytest.mark.parametrize("x,y", [([0, 1], [1, 2]), (np.arange(12), np.zeros(12)),
@@ -145,10 +148,10 @@ def test_invalid_settings_never_leak_nonfinite_diagnostics(key, value):
     assert len(error.value.diagnostics["algorithm_sha256"]) == 64
 
 
-def test_rejected_fit_cannot_seed_xray_consensus(tmp_path):
+def test_suspect_fit_can_supply_numeric_xray_consensus(tmp_path):
     rows = {ch: {"rsquared": .999, "center": 200 + ch, "center_err": .1,
                  "fit_quality": {"accepted": False}} for ch in range(4)}
-    assert ECL2Processor("Custom", tmp_path)._xray_consensus_center(rows) is None
+    assert ECL2Processor("Custom", tmp_path)._xray_consensus_center(rows) == 201.5
 
 
 def test_multiline_source_needs_energy_identity_anchor_and_scales_it_correctly(tmp_path, monkeypatch):
