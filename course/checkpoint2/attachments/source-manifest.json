@@ -242,6 +242,20 @@
       "description": "用户提供的原项目TB/EC标定数据处理流程图，原样收录",
       "bytes": 611255,
       "sha256": "815ad9c1269c318fc7c378ecfe3a0fca3acf7453208a3bb41dc0d84523c0fd1d"
+    },
+    {
+      "file": "current-demo/tb-l2-3d-surface.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261019-ui-redesign\\evidence\\workbench-redesigned.jpg",
+      "description": "14B CH0 早期TB L2三维曲面、原谱及残差联动演示",
+      "bytes": 112685,
+      "sha256": "b84d4c146cb88c99543194e985f970ae4e9edfc70008e79df047111a3f0bf693"
+    },
+    {
+      "file": "current-demo/tb-l2-3d-residual.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261019-090055-df4dfe323ec3\\evidence\\tb-3d-residual.png",
+      "description": "使用14B真实数据的DEMO-16交互演示：TB L2三维残差与原谱联动",
+      "bytes": 128435,
+      "sha256": "da46c58944a56baacfdb5c3e444330782783de41b40054a7a6b1535dcb196039"
     }
   ]
 }

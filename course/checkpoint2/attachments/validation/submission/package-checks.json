@@ -3,7 +3,7 @@
   "project_has_no_external_object_store": true,
   "project_git_fsck": "passed",
   "code_commit": "ced4e8c2bb4b3eb040fab0238a0161b7011245cb",
-  "images_verified": 21,
+  "images_verified": 23,
   "records": [
     {
       "folder": "01-main-part1",

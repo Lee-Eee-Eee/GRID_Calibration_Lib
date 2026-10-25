@@ -3,7 +3,7 @@
 | 目录 | 内容与来源 |
 | --- | --- |
 | [ab-comparison](ab-comparison/README.md) | A/B 共同基线的 13 张截图和图表原图，含采集清单。A 为 `3f26210`，B 为 `8e66e62`。 |
-| [current-demo](current-demo/) | 主开发线的 TB/EC 界面、多能峰编辑、配置/输出预览及修复后的真实能谱，来自 10 月 25 日对应验收目录。 |
+| [current-demo](current-demo/) | TB/EC 界面、TB L2 三维曲面及残差联动、多能峰编辑、配置/输出预览及修复后能谱，来自 10 月 19—25 日的开发验收。 |
 | [validation](validation/) | B 合入、质量提示、EC 多峰与输入修复阶段的实际验收记录和测试输出。 |
 | [samples](samples/README.md) | 冻结的 10B 单工况 L1 记录及 64 工况计数直方图，供离线检查。 |
 | [background/calibration-pipeline.png](background/calibration-pipeline.png) | 用户提供的原项目 TB/EC 标定流程图，原样收录。 |
