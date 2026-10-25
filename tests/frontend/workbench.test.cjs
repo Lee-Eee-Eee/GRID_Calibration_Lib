@@ -834,8 +834,8 @@ test('EC workflow fitting submits only points from the chosen file and channel',
   `);
   await ui.run(`runPipeline([{layer:'EC_L2',stem:'src_Na22_5m',representative:false}], 'ec')`);
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(submitted)')), [
-    { layer: 'EC_L2', point_id: 'chosen:2:511', channel: 2, representative: false },
-    { layer: 'EC_L2', point_id: 'chosen:2:1275', channel: 2, representative: false },
+    { layer: 'EC_L2', point_id: 'chosen:2:511', stem: 'src_Na22_5m', channel: 2, representative: false },
+    { layer: 'EC_L2', point_id: 'chosen:2:1275', stem: 'src_Na22_5m', channel: 2, representative: false },
   ]);
   assert.equal(ui.run('selected.join()'), 'chosen:2:511,chosen:2:1275,chosen:2:511');
   assert.equal(ui.run('state.point.id'), 'chosen:2:511');
@@ -1323,4 +1323,192 @@ test('full-source view labels only configured ADC windows on the current physica
   assert.equal(overlay.shapes.length,1);
   assert.equal(overlay.shapes[0].x0,300);
   assert.match(overlay.annotations[1].text,/1,?274\.5/);
+});
+
+test('source workflow maps grouped peak identities to the selected observation and channel', async () => {
+  const ui=controller();
+  ui.run(`state.channel=1;state.ecOverview={points:[
+    {id:'co-1173',stem:'src_Co60',channel:1,signal_file:'src_Co60_40m_corr.l1.parquet'},
+    {id:'co-1332',stem:'src_Co60',channel:1,l1_stem:'src_Co60_40m'},
+    {id:'other-exposure',stem:'src_Co60',channel:1,signal_file:'src_Co60_10m_corr.l1.parquet'},
+    {id:'other-channel',stem:'src_Co60',channel:2,signal_file:'src_Co60_40m_corr.l1.parquet'}
+  ]};let submitted=[];
+  selectLayer=async layer=>{state.layer=layer;};selectEcPoint=async point=>{state.point=point;};
+  executeJob=async(layer,spec)=>{submitted.push({layer,...spec});};`);
+  await ui.run(`runPipeline([{layer:'EC_L2',stem:'src_Co60_40m',representative:false}],'ec')`);
+  const submitted=JSON.parse(ui.run('JSON.stringify(submitted)'));
+  assert.deepEqual(submitted.map(job=>job.point_id),['co-1173','co-1332']);
+  assert.ok(submitted.every(job=>job.stem==='src_Co60_40m' && job.channel===1));
+});
+
+test('opening a source workflow selects its real filename instead of the first listed source', () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.point={stem:'src_Co60',signal_file:'src_Co60_40m_corr.l1.parquet'};
+  state.run.inventory={raw:{reading_preview:{rows:[
+    {kind:'source',stem:'src_Cs137_25m'}, {kind:'source',stem:'src_Co60_40m'}
+  ]}}};renderPipelinePlan=()=>{};openPipelineDialog();`);
+  assert.equal(ui.element('pipeline-ec-file').value,'src_Co60_40m');
+});
+
+test('CRC recovery rebuilds the selected source and background without fitting historical windows', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.channel=1;
+  const failedPoint={id:'14B:ec:src_Cs137:1:661.7',stem:'src_Cs137',E:661.7,signal_file:'src_Cs137_25m_corr.l1.parquet'};
+  state.run.inventory={raw:{reading_preview:{rows:[
+    {kind:'background',stem:'src_bkg_30m'}, {kind:'source',stem:'src_Cs137_25m'}
+  ]}}};state.ecOverview={points:[failedPoint]};
+  $('spectrum-params').append(node('div','param-item','old peak 17000'));
+  $('window-lo').value=16600;$('window-hi').value=17800;$('residual-metric').textContent='RMS 99';
+  chartMessage=(id,text)=>{$(id).replaceChildren(node('p','chart-loading',text));};
+  api=async()=>{throw new Error('全部事件 CRC 失败');};renderCurrentStatus=()=>{};
+  renderEcSourceConfig=()=>{};setBusy=busy=>{state.busy=busy;};`);
+  await ui.run('selectEcPoint(failedPoint)');
+  assert.equal(ui.element('spectrum-rebuild').textContent,'重建此源');
+  assert.equal(ui.run('state.selecting'),false);
+  assert.equal(ui.run('state.testError'),undefined);
+  assert.equal(ui.element('spectrum-params').children.length,0);
+  assert.equal(ui.element('window-lo').value,'');
+  assert.equal(ui.element('window-hi').value,'');
+  assert.equal(ui.element('window-lo').disabled,true);
+  assert.equal(ui.element('window-status').textContent,'CRC 异常');
+  assert.equal(ui.element('residual-metric').textContent,'');
+  assert.equal(ui.element('residual-chart').children[0].textContent,'');
+  ui.run(`let recovered=[];executeJob=async(layer,spec)=>{recovered.push({layer,...spec});return {status:'succeeded'};};
+  loadSurfaceSafely=async()=>{};`);
+  await ui.element('spectrum-rebuild').listeners.click[0]();
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(recovered)')), [
+    {layer:'EC_L0',stem:'src_bkg_30m',representative:false,channel:1},
+    {layer:'EC_L1',stem:'src_bkg_30m',representative:false,channel:1},
+    {layer:'EC_L0',stem:'src_Cs137_25m',representative:false,channel:1},
+    {layer:'EC_L1',stem:'src_Cs137_25m',representative:false,channel:1}
+  ]);
+  assert.equal(ui.run('state.point.id'),'14B:ec:src_Cs137:1:661.7');
+  assert.equal(ui.run('state.layer'),'EC_L2');
+});
+
+test('TB CRC recovery exposes an unpack action for its selected file', async () => {
+  const ui=controller();
+  ui.run(`state.layer='TB_L0';state.run.inventory={raw:{tb_samples:[{stem:'10C-270-141'}]}};
+  const failedPoint={id:'15B:10C-270-141:0',stem:'10C-270-141'};
+  api=async()=>{throw new Error('全部事件 CRC 失败');};renderCurrentStatus=()=>{};
+  renderL1Workspace=()=>{};highlightSelectedPoint=async()=>{};
+  setBusy=busy=>{state.busy=busy;};`);
+  await ui.run('selectPoint(failedPoint)');
+  assert.equal(ui.element('spectrum-rebuild').textContent,'重新解包');
+  assert.equal(ui.run('state.testError'),undefined);
+  ui.run(`let unpacked=[];executeJob=async(layer,spec)=>{unpacked.push({layer,...spec});return {status:'succeeded'};};
+  loadSurfaceSafely=async()=>{};`);
+  await ui.element('spectrum-rebuild').listeners.click[0]();
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(unpacked)')), [{layer:'TB_L0',stem:'10C-270-141',representative:false,channel:0}]);
+});
+
+test('a stale CRC action cannot start jobs for a different run, point or channel', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.point={id:'old-point',stem:'src_Cs137',signal_file:'src_Cs137_25m_corr.l1.parquet'};
+  state.run.inventory={raw:{ec_samples:[{stem:'src_Cs137_25m'}]}};
+  renderSpectrumRecovery(new Error('CRC invalid'));let submissions=0;executeJob=async()=>{submissions++;};
+  state.channel=2;`);
+  await ui.element('spectrum-rebuild').listeners.click[0]();
+  assert.equal(ui.run('submissions'),0);
+  ui.run(`state.channel=0;state.point={id:'another-point',stem:'src_Cs137'};`);
+  await ui.element('spectrum-rebuild').listeners.click[0]();
+  assert.equal(ui.run('submissions'),0);
+  ui.run(`state.point={id:'old-point',stem:'src_Cs137'};state.run.id='another-run';`);
+  await ui.element('spectrum-rebuild').listeners.click[0]();
+  assert.equal(ui.run('submissions'),0);
+});
+
+test('source recovery stops before the next calculation if its channel changes during a job', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.point={id:'chosen',stem:'src_Cs137',signal_file:'src_Cs137_25m_corr.l1.parquet'};
+  state.run.inventory={raw:{reading_preview:{rows:[{kind:'background',stem:'src_bkg_30m'},{kind:'source',stem:'src_Cs137_25m'}]}}};
+  renderSpectrumRecovery(new Error('CRC invalid'));let submissions=[];const release=deferred(),started=deferred();
+  executeJob=async(layer,spec)=>{submissions.push({layer,...spec});started.resolve();return release.promise;};
+  setBusy=busy=>{state.busy=busy;};`);
+  const recovery=ui.element('spectrum-rebuild').listeners.click[0]();
+  await ui.run('started.promise');
+  ui.run(`state.channel=3;release.resolve({status:'succeeded'});`);
+  await recovery;
+  assert.equal(ui.run('submissions.length'),1);
+  assert.equal(ui.run('state.busy'),false);
+});
+
+test('CRC recovery is absent when original data is unavailable or the error is unrelated', () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.point={id:'chosen',stem:'src_Cs137',signal_file:'src_Cs137_25m_corr.l1.parquet'};`);
+  assert.equal(ui.run(`renderSpectrumRecovery(new Error('CRC invalid'))`),false);
+  ui.run(`state.run.inventory={raw:{ec_samples:[{stem:'src_Cs137_25m'}]}};`);
+  assert.equal(ui.run(`renderSpectrumRecovery(new Error('fit is unavailable'))`),false);
+});
+
+test('a failed recovery stops its plan and leaves the selected recovery action available for retry', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.point={id:'chosen',stem:'src_Cs137',signal_file:'src_Cs137_25m_corr.l1.parquet'};
+  state.run.inventory={raw:{reading_preview:{rows:[{kind:'background',stem:'src_bkg_30m'},{kind:'source',stem:'src_Cs137_25m'}]}}};
+  renderSpectrumRecovery(new Error('CRC invalid'));let submissions=0;
+  executeJob=async()=>{submissions++;throw new Error('read configuration needs review');};
+  setBusy=busy=>{state.busy=busy;};`);
+  await ui.element('spectrum-rebuild').listeners.click[0]();
+  assert.equal(ui.run('submissions'),1);
+  assert.equal(ui.run('state.testError'),'read configuration needs review');
+  assert.equal(ui.element('spectrum-rebuild').disabled,false);
+  assert.equal(ui.run('state.busy'),false);
+});
+
+test('focused spectrum scaling ignores offscreen noise and includes the visible curve and negative rate', () => {
+  const ui=controller();
+  ui.run(`const focusedTraces=[
+    {x:[100,7100,7300,7600],y:[1500,-.002,.02,0]},
+    {x:[100,7100,7300,7600],y:[2000,0,.025,.001]},
+    {visible:'legendonly',x:[7300],y:[3000]}
+  ];const originalFocused=JSON.stringify(focusedTraces);`);
+  const range=JSON.parse(ui.run('JSON.stringify(visibleSpectrumYRange(focusedTraces,[7000,7800]))'));
+  assert.ok(range[0]<-.002);
+  assert.ok(range[1]>.025 && range[1]<.04);
+  assert.equal(ui.run('JSON.stringify(focusedTraces)===originalFocused'),true);
+});
+
+test('focused spectrum scaling accounts for displayed asymmetric error bars only', () => {
+  const ui=controller();
+  ui.run(`const errors=[
+    {x:[100,7200],y:[999,.02],error_y:{array:[500,.03],arrayminus:[500,.04],symmetric:false}},
+    {x:[7200],y:[.01],error_y:{visible:false,array:[900]}}
+  ];`);
+  const range=JSON.parse(ui.run('JSON.stringify(visibleSpectrumYRange(errors,[7000,7500]))'));
+  assert.ok(range[0]<-.02);
+  assert.ok(range[1]>.05 && range[1]<.07);
+});
+
+test('focused positive spectra use Plotly logarithmic coordinates and ignore invalid values', () => {
+  const ui=controller();
+  ui.run(`const positive=[{x:[0,10,20,30,40],y:[1e9,10,100,0,null]}];`);
+  const range=JSON.parse(ui.run('JSON.stringify(visibleSpectrumYRange(positive,[5,45],{logarithmic:true}))'));
+  assert.ok(Math.abs(range[0]-.92)<1e-12);
+  assert.ok(Math.abs(range[1]-2.12)<1e-12);
+  assert.equal(ui.run('visibleSpectrumYRange(positive,[20,20])'),undefined);
+  assert.equal(ui.run('visibleSpectrumYRange([{x:[10],y:[null]}],[0,20])'),undefined);
+});
+
+test('EC focused rendering preserves signed data while full-source view restores all-data autorange', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.point={id:'co60:0:1332.5',stem:'src_Co60',E:1332.5};
+    state.spectrum={x:[100,7100,7300,7600],y:[1000,-.002,.02,0],bin_width:4,
+      curve:{x:[7100,7300,7600],y:[0,.025,.001],background:[-.001,0,.001]}};
+    state.ecPeakConfig={spectra:[{energy_key:'src_Co60',lines:[]}]};
+    $('window-lo').value=7000;$('window-hi').value=7700;
+    let spectrumPlots=[];Plotly={react:async(chart,traces,layout)=>{spectrumPlots.push({traces,layout});},relayout:async()=>{}};
+    renderL1Residual=async()=>{};renderPeakDiagnostics=()=>{};installWindowHandles=()=>{};bindL1Axes=()=>{};updateSpectralModelControls=()=>{};`);
+  await ui.run('renderSpectrum()');
+  const focused=JSON.parse(ui.run('JSON.stringify(spectrumPlots[0])'));
+  assert.deepEqual(focused.traces[0].y,[1000,-.002,.02,0]);
+  assert.deepEqual(focused.traces[2].y,[-.001,0,.001]);
+  assert.equal(focused.layout.yaxis.type,'linear');
+  assert.equal(focused.layout.yaxis.autorange,false);
+  assert.ok(focused.layout.yaxis.range[1]<.04);
+  ui.run('state.ecFullSource=true;');
+  await ui.run('renderSpectrum()');
+  const full=JSON.parse(ui.run('JSON.stringify(spectrumPlots[1])'));
+  assert.equal(full.layout.yaxis.autorange,true);
+  assert.equal(full.layout.yaxis.range,undefined);
+  assert.deepEqual(full.traces[0].y,focused.traces[0].y);
 });

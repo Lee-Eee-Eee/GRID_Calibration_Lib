@@ -515,9 +515,7 @@ class ComputeAdapter:
                 "quality_policy": "warning_only",
             }
         frame, metadata = self._spectrum_input(path, "amp")
-        input_quality = {"crc_available": "crc_check" in frame, "input_events": len(frame)}
-        if layer != "TB_L0":
-            frame, input_quality = validated_events(frame)
+        frame, input_quality = validated_events(frame)
         amp = frame.loc[frame["channel"] == channel, "amp"].to_numpy(dtype=float)
         if not amp.size:
             raise ValueError(f"L0 has no events for {stem} ch{channel}")
@@ -741,6 +739,7 @@ class ComputeAdapter:
         path, source = Path(selected["path"]), selected["source"]
         field = "amp" if layer == "EC_L0" else "amp_corr"
         frame, metadata = self._spectrum_input(path, field)
+        frame, input_quality = validated_events(frame)
         values = frame.loc[frame["channel"] == channel, field].to_numpy(dtype=float)
         values = values[np.isfinite(values)]
         if not values.size:
@@ -776,6 +775,7 @@ class ComputeAdapter:
                 "source_path": str(path),
                 "path": str(path),
                 "field": field,
+                "input_quality": input_quality,
                 "tb_corrfile": correction.get("tb_corrfile"),
                 "display_range": [lo, hi],
                 "events_in_display": int(counts.sum()),

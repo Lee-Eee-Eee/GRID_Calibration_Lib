@@ -22,7 +22,7 @@ const chartHover = { bgcolor: "#ffffff", bordercolor: "#c4ccd4", font: { ...char
 
 function node(tag, className, value) { const el = document.createElement(tag); if (className) el.className = className; if (value !== undefined && value !== null) el.textContent = String(value); return el; }
 function clear(el) { el.replaceChildren(); return el; }
-function plotTarget(chart) { for (const child of [...chart.children]) if (child.matches("p.chart-loading, table, .window-handle")) child.remove(); return chart; }
+function plotTarget(chart) { for (const child of [...chart.children]) if (child.matches("p.chart-loading, table, .window-handle, .spectrum-recovery")) child.remove(); return chart; }
 function isPeakReviewLayer(layer = state.layer) { return ["TB_L1", "EC_L2"].includes(layer); }
 function detectorPayload() { return state.run?.acquisition_preset?.payload || state.run?.dataset?.profile || state.run?.dataset?.source_payload || state.run?.payload || ""; }
 function hasPlasticChannel() { return ["10B", "11B"].includes(String(detectorPayload()).toUpperCase()); }
@@ -669,6 +669,60 @@ function currentEcSourceKey() { return state.point?.energy_key || state.point?.s
 function ecSourceSpectra() { return state.ecPeakConfig?.spectra || []; }
 function currentEcSource() { return ecSourceSpectra().find(item => item.energy_key === currentEcSourceKey()); }
 function ecSourceInputSpec() { const file=state.spectrum?.point?.signal_file || state.point?.signal_file || currentEcSource()?.signal_file; return file && currentEcSourceKey().startsWith("src_") ? {stem:String(file).split(/[\\/]/).pop().replace(/_corr\.l1\.parquet$/,"")} : {}; }
+function ecObservationStem(point) {
+  const normalize = value => String(value).split(/[\\/]/).pop().replace(/_corr\.l1\.parquet$/i, "").replace(/\.l[01]\.parquet$/i, "");
+  if (point?.signal_file || point?.l1_stem) return normalize(point.signal_file || point.l1_stem);
+  const key = point?.energy_key || point?.stem;
+  if (!key) return null;
+  if (!key.startsWith("src_")) return /_ch\d+$/i.test(key) ? key : `${key}_ch${point.channel ?? state.channel}`;
+  if (/_\d+(?:\.\d+)?m$/i.test(key)) return key;
+  const source = ecSourceSpectra().find(item => item.energy_key === key);
+  const files = [...new Set((source?.source_files?.length ? source.source_files.map(file => file.name) : [source?.signal_file]).filter(Boolean).map(normalize))];
+  return files.length === 1 ? files[0] : null;
+}
+function ecPointMatchesObservation(point, stem) { return ecObservationStem(point) === stem; }
+function rawObservationAvailable(stem, family) {
+  const raw = state.run?.inventory?.raw || {}, rows = raw.reading_preview?.rows || [];
+  const files = rows.length ? rows.filter(row => family === "TB" ? row.kind === "tb" : ["xray", "source", "background"].includes(row.kind)) : raw[family === "TB" ? "tb_samples" : "ec_samples"] || [];
+  return files.some(file => file.stem === stem) || state.point?.stem === stem && !!state.point.event;
+}
+function spectrumRecoveryContext() { return `${viewContext()}:${state.point?.id || state.point?.stem}`; }
+function renderSpectrumRecovery(error) {
+  if (!/CRC/i.test(error.message || String(error)) || !state.point) return false;
+  const family = state.layer.slice(0, 2), stem = family === "TB" ? state.point.stem : ecObservationStem(state.point);
+  if (!stem || !rawObservationAvailable(stem, family)) return false;
+  const context = spectrumRecoveryContext(), chartId = isPeakReviewLayer() || ["TB_L0", "EC_L0", "EC_L1"].includes(state.layer) ? "surface-chart" : "spectrum-chart";
+  $("window-status").textContent = "CRC 异常";
+  if (isPeakReviewLayer()) { chartMessage("residual-chart", ""); $("residual-metric").textContent = ""; }
+  chartMessage(chartId, "该谱 CRC 校验未通过。");
+  const actions = node("div", "spectrum-recovery"), button = node("button", "button small", family === "TB" || state.layer === "EC_L0" ? "重新解包" : stem.startsWith("src_") ? "重建此源" : "重建此谱");
+  button.id = "spectrum-rebuild"; button.type = "button"; button.disabled = state.busy;
+  button.addEventListener("click", handleError(async () => {
+    if (context !== spectrumRecoveryContext() || state.busy || state.selecting) return;
+    button.disabled = true;
+    await rebuildSpectrumInputs({context, family, stem});
+  }));
+  actions.append(button); $(chartId).append(actions); return true;
+}
+async function rebuildSpectrumInputs({context, family, stem}) {
+  if (context !== spectrumRecoveryContext()) return;
+  const channel = state.channel, rawLayer = state.layer === "EC_L0";
+  const plan = family === "TB" ? [{layer:"TB_L0",stem,representative:false}] : rawLayer ? [{layer:"EC_L0",stem,representative:false}] : pipelinePlan("ec", "", stem).filter(step => step.layer !== "EC_L2");
+  setBusy(true);
+  try {
+    if (state.ecPeakDirty) await saveEcPeakConfig(false);
+    if (state.dirty) await saveRevision({}, true);
+    for (const {layer, ...spec} of plan) {
+      if (context !== spectrumRecoveryContext()) return;
+      const job = await executeJob(layer, {...spec, channel}, false);
+      if (job && normalizedStatus(job.status) !== "succeeded") throw new Error(`${layer.replace("_", " ")} 未完成，请查看运行记录。`);
+    }
+    if (context === spectrumRecoveryContext()) { await loadSurfaceSafely(); notify("谱已重建。", "success"); }
+  } finally {
+    setBusy(false);
+    if (context === spectrumRecoveryContext() && $("spectrum-rebuild")) $("spectrum-rebuild").disabled = !!(state.busy || state.selecting);
+  }
+}
 function ecPeakIdentity(key, energy, channel = state.channel) {
   const saved=ecSourceSpectra().find(source=>source.energy_key===key)?.lines?.find(line=>Number(line.energy_keV)===Number(energy))?.point_ids?.[String(channel)];
   if(saved) return saved;
@@ -1025,10 +1079,46 @@ async function selectPoint(point) {
     const attemptError = state.layer === "TB_L1" ? point.error : spectrum.last_fit_attempt?.status === "failed" ? spectrum.last_fit_attempt.error : null;
     if (attemptError) params.append(node("p","peak-evidence-warning",`上次拟合：${jobErrorText(attemptError)}`));
     await renderSpectrum(); if (token !== state.spectrumToken) return; if (state.layer === "TB_L0") await renderRawMain();
-  } catch (error) { if (token !== state.spectrumToken) return; $("window-status").textContent = "读取失败"; chartMessage(state.layer === "TB_L1" ? "surface-chart" : "spectrum-chart", `此工况能谱不可用：${error.message}`); if (state.layer === "TB_L1") chartMessage("residual-chart", "当前文件的谱读取失败"); messageError(error); }
+  } catch (error) {
+    if (token !== state.spectrumToken) return;
+    $("window-status").textContent = "读取失败";
+    const recoverable = renderSpectrumRecovery(error);
+    if (!recoverable) chartMessage(["TB_L0", "TB_L1"].includes(state.layer) ? "surface-chart" : "spectrum-chart", `此工况能谱不可用：${error.message}`);
+    if (state.layer === "TB_L1") chartMessage("residual-chart", "当前文件的谱读取失败");
+    if (!recoverable) messageError(error);
+  }
   if (token !== state.spectrumToken) return;
   state.selecting = false; setBusy(state.busy);
   updateExcludedButton(); renderRunBadge();
+}
+
+function visibleSpectrumYRange(traces, range, {logarithmic = false} = {}) {
+  if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isFinite) || range[1] <= range[0]) return undefined;
+  let low = Infinity, high = -Infinity;
+  const include = value => {
+    if (!Number.isFinite(value) || logarithmic && value <= 0) return;
+    const position = logarithmic ? Math.log10(value) : value;
+    low = Math.min(low, position); high = Math.max(high, position);
+  };
+  for (const trace of traces) {
+    if (trace.visible === false || trace.visible === "legendonly") continue;
+    for (let index = 0; index < (trace.x || []).length; index++) {
+      const x = trace.x[index], y = trace.y?.[index];
+      if (!Number.isFinite(x) || x < range[0] || x > range[1] || !Number.isFinite(y)) continue;
+      include(y);
+      const error = trace.error_y;
+      if (!error || error.visible === false) continue;
+      const factor = error.type === "percent" ? Math.abs(y)/100 : 1;
+      const upper = error.type === "sqrt" ? Math.sqrt(Math.abs(y)) : error.array?.[index] ?? error.value ?? 0;
+      const lower = error.symmetric === false ? error.arrayminus?.[index] ?? error.valueminus ?? upper : upper;
+      if (Number.isFinite(upper) && upper >= 0) include(y + upper*factor);
+      if (Number.isFinite(lower) && lower >= 0) include(y - lower*factor);
+    }
+  }
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return undefined;
+  if (!logarithmic) { low = Math.min(0, low); high = Math.max(0, high); }
+  const span = high - low || (logarithmic ? 1 : Math.max(Math.abs(high)*.1, 1e-6));
+  return [low - span*.08, high + span*.12];
 }
 
 async function renderSpectrum() {
@@ -1038,20 +1128,23 @@ async function renderSpectrum() {
   $("spectrum-chart").hidden = isPeakReviewLayer();
   const chart = spectrumChart();
   const rateSpectrum = state.layer.startsWith("EC") && state.layer !== "EC_L0";
-  const traces = [{ type: "scatter", mode: "lines", x: data.x || [], y: (data.y || []).map((v) => v > 0 ? v : null), line: { color: chartColors.ink, width: 1.2, shape: "hv" }, name: rateSpectrum ? "净计数率" : "真实计数谱", hovertemplate: rateSpectrum ? "ADC %{x:.1f}<br>净计数率 %{y:.5g}<extra></extra>" : "ADC %{x:.1f}<br>计数 %{y:.0f}<extra></extra>" }];
+  const hasNegative = (data.y || []).some(value => Number.isFinite(value) && value < 0), yType = hasNegative ? "linear" : "log";
+  const displayedY = (data.y || []).map(value => Number.isFinite(value) && (hasNegative || value > 0) ? value : null);
+  const traces = [{ type: "scatter", mode: "lines", x: data.x || [], y: displayedY, line: { color: chartColors.ink, width: 1.2, shape: "hv" }, name: rateSpectrum ? "净计数率" : "真实计数谱", hovertemplate: rateSpectrum ? "ADC %{x:.1f}<br>净计数率 %{y:.5g}<extra></extra>" : "ADC %{x:.1f}<br>计数 %{y:.0f}<extra></extra>" }];
   const curve = ["TB_L0", "EC_L0", "EC_L1"].includes(state.layer) || unsupportedSpectralModel() ? {} : data.curve || {};
   if (curve.x?.length && curve.y?.length) traces.push({ type: "scatter", mode: "lines", x: curve.x, y: curve.y, line: { color: chartColors.fit, width: 2.1 }, name: "峰 + 背景拟合", hovertemplate: "ADC %{x:.1f}<br>拟合 %{y:.2f}<extra></extra>" });
   else if (curve.x?.length && curve.gaussian?.length) traces.push({ type: "scatter", mode: "lines", x: curve.x, y: curve.gaussian, line: { color: chartColors.fit, width: 1.8, dash: "dash" }, name: "高斯峰分量（历史背景参数缺失）", hovertemplate: "ADC %{x:.1f}<br>高斯分量 %{y:.2f}<extra></extra>" });
-  if (curve.x?.length && curve.background?.length) traces.push({ type: "scatter", mode: "lines", x: curve.x, y: curve.background.map((v) => v > 0 ? v : null), line: { color: "#89939d", width: 1.3, dash: "dash" }, name: "背景", hoverinfo: "skip" });
+  if (curve.x?.length && curve.background?.length) traces.push({ type: "scatter", mode: "lines", x: curve.x, y: curve.background.map(value => Number.isFinite(value) && (hasNegative || value > 0) ? value : null), line: { color: "#89939d", width: 1.3, dash: "dash" }, name: "背景", hoverinfo: "skip" });
   const lo = windowValue("window-lo"); const hi = windowValue("window-hi"); const width = hi - lo;
   const binWidth = spectrumBinWidth(data);
-  const range = state.ecFullSource && state.layer === "EC_L2" && currentEcSource() && data.x?.length ? [Math.max(0,data.x[0]-(binWidth || 1)/2),data.x.at(-1)+(binWidth || 1)/2] : width > 0 ? [Math.max(0, lo - width * .6), hi + width * .6] : undefined;
+  const fullSource = !!(state.ecFullSource && state.layer === "EC_L2" && currentEcSource() && data.x?.length);
+  const range = fullSource ? [Math.max(0,data.x[0]-(binWidth || 1)/2),data.x.at(-1)+(binWidth || 1)/2] : width > 0 ? [Math.max(0, lo - width * .6), hi + width * .6] : undefined;
   if (!chart.data) clear(chart);
   const editable = !["TB_L0", "EC_L0", "EC_L1"].includes(state.layer);
-  const hasNegative = (data.y || []).some((v) => v < 0);
-  if (hasNegative) traces[0].y = data.y;
   const peak = peakPlotDetails(data), sourceWindows=ecSourceWindowOverlays(); traces.push(...peak.traces);
-  await Plotly.react(plotTarget(chart), traces, { margin: { l: 55, r: 16, t: editable ? 28 : 14, b: 41 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, xaxis: { ...axisStyle, title: { text: state.layer.startsWith("EC") && state.layer !== "EC_L0" ? "校正 ADC" : "ADC", standoff: 5 }, range }, yaxis: { ...axisStyle, title: { text: data.y_label || (binWidth ? `计数 / ${number(binWidth, 3)} ADC bin` : "计数 / bin"), standoff: 6 }, type: hasNegative ? "linear" : "log", exponentformat: "power" }, shapes: [...sourceWindows.shapes, ...(editable ? windowShapes(lo, hi) : []), ...peak.shapes], annotations: sourceWindows.annotations, hovermode: "closest", uirevision: `${state.run.id}-${state.channel}-${state.point.id || state.point.stem}` }, plotConfig);
+  const focusedY = state.layer === "EC_L2" && !fullSource ? visibleSpectrumYRange(traces, range, {logarithmic:yType === "log"}) : undefined;
+  const rateAxis = state.layer === "EC_L2" ? {range:focusedY,autorange:!focusedY} : {};
+  await Plotly.react(plotTarget(chart), traces, { margin: { l: 55, r: 16, t: editable ? 28 : 14, b: 41 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, xaxis: { ...axisStyle, title: { text: state.layer.startsWith("EC") && state.layer !== "EC_L0" ? "校正 ADC" : "ADC", standoff: 5 }, range }, yaxis: { ...axisStyle, title: { text: data.y_label || (binWidth ? `计数 / ${number(binWidth, 3)} ADC bin` : "计数 / bin"), standoff: 6 }, type:yType, exponentformat: "power", ...rateAxis }, shapes: [...sourceWindows.shapes, ...(editable ? windowShapes(lo, hi) : []), ...peak.shapes], annotations: sourceWindows.annotations, hovermode: "closest", uirevision: `${state.run.id}-${state.channel}-${state.point.id || state.point.stem}` }, plotConfig);
   if (context !== plotContext()) return;
   if (isPeakReviewLayer()) {
     $("surface-caption").textContent = `${state.point.stem}${state.layer === "EC_L2" ? ` · ${number(state.point.E, 3)} keV` : ""}${binWidth && !rateSpectrum ? ` · ${number(binWidth, 3)} ADC/bin` : ""}`;
@@ -1622,6 +1715,8 @@ async function selectEcPoint(point) {
   if (state.point?.id !== point.id) { $("peak-noise-ceiling").value=""; $("peak-expected-center").value=""; }
   $("auto-fit-status").textContent=""; fitFeedback();
   state.point = point; state.spectrum = null; state.dirty = false; $("point-select").value = point.id; $("selected-channel").textContent = `CH ${state.channel}`;
+  displayWindowValue("window-lo", ""); displayWindowValue("window-hi", "");
+  clear($("spectrum-params")); $("window-status").textContent="读取中"; $("peak-diagnostics").hidden=true;
   renderEcReviewFiles();
   if (isPeakReviewLayer()) { chartMessage("surface-chart", `正在读取 ${point.stem} · CH ${state.channel}…`); chartMessage("residual-chart", "读取拟合残差…"); }
   if (raw) { chartMessage("surface-chart", "正在读取所选文件的真实脉冲谱…"); $("surface-caption").textContent = `${point.stem} · CH ${state.channel} · 读取中`; }
@@ -1638,7 +1733,15 @@ async function selectEcPoint(point) {
   const query = raw ? `layer=${layer}&stem=${encodeURIComponent(point.stem)}&channel=${state.channel}` : `layer=EC_L2&point_id=${encodeURIComponent(point.id)}&channel=${state.channel}`;
   let spectrum;
   try { spectrum = await api(runPath(`/ec-spectrum?${query}`)); }
-  catch(error) { if (token===state.spectrumToken && layer===state.layer) { state.selecting=false; chartMessage(isPeakReviewLayer() ? "surface-chart" : "spectrum-chart", error.message); setBusy(state.busy); } throw error; }
+  catch(error) {
+    if (token===state.spectrumToken && layer===state.layer) {
+      state.selecting=false; setBusy(state.busy);
+      $("window-status").textContent="读取失败";
+      if (renderSpectrumRecovery(error)) { renderEcSourceConfig(); return; }
+      chartMessage(isPeakReviewLayer() || raw ? "surface-chart" : "spectrum-chart", error.message);
+    }
+    throw error;
+  }
   if (token !== state.spectrumToken || state.layer !== layer) return;
   state.spectrum = spectrum;
   const fit = spectrum.fit || point, override = fit.peak_detection?.manual_window === false && !(state.run.pending_ec_windows || []).includes(point.id) ? null : state.run.config?.ec_windows?.[point.id];
@@ -1804,7 +1907,8 @@ function openPipelineDialog() {
     const select=clear($("pipeline-"+type+"-file"));
     const files=rows.length ? rows.filter(row=>type==="tb" ? row.kind==="tb" : ["xray","source"].includes(row.kind) && (row.channel==null || row.channel===state.channel)) : type==="tb" ? raw.tb_samples || [] : raw.ec_samples || [];
     for (const file of files) select.append(new Option(file.stem,file.stem));
-    const preferred=family.toLowerCase()===type ? state.point?.stem : savedView().familyStems?.[type.toUpperCase()];
+    const candidate=family.toLowerCase()===type ? state.point : {stem:savedView().familyStems?.[type.toUpperCase()]};
+    const preferred=type==="ec" ? ecObservationStem(candidate) || candidate?.stem : candidate?.stem;
     if (files.some(file=>file.stem===preferred)) select.value=preferred;
     else if (files.length) select.value=files[0].stem;
   }
@@ -1826,10 +1930,10 @@ async function runPipeline(plan, mode) {
         if (selected) await selectPoint(selected);
       }
       if (step.layer==="EC_L2" && step.stem) {
-        const points=(state.ecOverview?.points || []).filter(point=>point.stem===step.stem);
+        const points=(state.ecOverview?.points || []).filter(point=>(point.channel==null || point.channel===channel) && ecPointMatchesObservation(point,step.stem));
         if (!points.length) throw new Error(`未找到 ${step.stem} 的能峰输入，请检查 EC L1 输出。`);
-        for (const point of points) { await selectEcPoint(point); await executeJob(step.layer,{point_id:point.id,channel,representative:false,...ecBinningSpec()},false); }
-        const current=(state.ecOverview?.points || []).filter(point=>point.stem===step.stem);
+        for (const point of points) { await selectEcPoint(point); await executeJob(step.layer,{point_id:point.id,stem:step.stem,channel,representative:false,...ecBinningSpec()},false); }
+        const current=(state.ecOverview?.points || []).filter(point=>(point.channel==null || point.channel===channel) && ecPointMatchesObservation(point,step.stem));
         if (current.length) await selectEcPoint(current.find(point=>point.id===selectedPointId) || current[0]);
       } else { const {layer,...spec}=step; const job = await executeJob(layer,{...spec,...(mode!=="all"?{channel,...(layer==="TB_L1"?{fit_channels:[channel]}:{})}:{})},false); if (job?.status === "partial") { notify(`${layer.replace("_"," ")} 有通道计算失败，可用结果已保存；请处理缺失结果后继续。`,"warning"); return; } }
     }
