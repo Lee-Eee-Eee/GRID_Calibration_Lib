@@ -22,7 +22,10 @@
       "commit": "8e66e62afc6e1d0ca20c6782d46f80e040e279f0"
     }
   },
-  "project_git_history_included": true,
+  "project_git_history_included": false,
   "raw_binary_data": "External experiment inputs; saved L1 JSON and count histograms are in attachments/samples.",
-  "assembled_at_utc": "2026-10-25T14:52:40.939604+00:00"
+  "assembled_at_utc": "2026-10-25T14:52:40.939604+00:00",
+  "code_delivery": "public_repository_link",
+  "project_directory_included": false,
+  "git_history_location": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib"
 }

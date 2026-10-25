@@ -87,11 +87,11 @@ A、B 都能切换通道，并从地图打开对应能谱。浏览器验证中�
 
 A、B 的效果差异没有我预想的大。A 只把目标和使用方式讲清楚，模型也完成了地图和联动；B 多写了呈现细节，主要改善了状态和缺失指标的处理。对这个已有代码基础的项目，我觉得更值得花时间的是想清楚下一步要解决什么问题、做出来以后怎么用。目标明确后，常规实现往往可以交给模型补齐；把布局和实现路径规定得太细，有时也会限制它的发挥。
 
-一开始我还担心两个 fork 都在本地项目上动手，会互相覆盖。实际做过以后才发现codex fork的worktree模式：fork 继承的是对话上下文，Git worktree 提供的是独立代码目录。两边再使用不同的试算目录和端口，就能同时开发和运行，比较之后再选择一边合入。以后遇到某个功能有两种做法，或者想单独试一个算法，这种方式会很方便。
+一开始我还担心两个 fork 都在本地项目上动手，会互相覆盖。实际做过以后才发现codex fork的worktree模式：fork 继承的是对话上下文，Git worktree 提供独立代码目录。两边再使用不同的试算目录和端口，就能同时开发和运行，比较之后再选择一边合入。以后遇到某个功能有两种做法，或者想单独试一个算法，这种方式会很方便。
 
 ## 5. 代码、环境与运行
 
-项目继续使用公开仓库 [GRID_Calibration_Lib](https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib)，下面三个分支均已推送。完整提交编号也记录在 `submission.json` 中。
+代码通过公开仓库 [Lee-Eee-Eee/GRID_Calibration_Lib](https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib) 提交。仓库地址为 `https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib`，本次使用 `feat/calibration-workbench` 分支，提交编号为 `ced4e8c2bb4b3eb040fab0238a0161b7011245cb`。主开发和两组实验分支均已推送，可直接访问。
 
 | 代码 | 分支 | 提交 |
 | --- | --- | --- |
@@ -99,12 +99,14 @@ A、B 的效果差异没有我预想的大。A 只把目标和使用方式讲清
 | 实验 A | `experiment/cp2-quality-a` | [3f26210](https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib/commit/3f2621085ef9b582c7a82b49114141e942959115) |
 | 实验 B | `experiment/cp2-quality-b` | [8e66e62](https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib/commit/8e66e62afc6e1d0ca20c6782d46f80e040e279f0) |
 
-提交包的 `project/` 保留了 `.git/` 和版本历史。报告、会话及附件同时放在仓库的 [`course/checkpoint2`](https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib/tree/course/checkpoint2/course/checkpoint2) 分支。
+代码及版本历史保存在上述仓库中。压缩包提交报告、AI 记录和附件；这些材料同时放在仓库的 [`course/checkpoint2`](https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib/tree/course/checkpoint2/course/checkpoint2) 分支。
 
-本机使用 Windows、Python 3.11.15、Node.js 24.11.1。Python 端使用 NumPy、pandas、PyArrow、SciPy、lmfit 等库，页面使用 HTML/CSS/JavaScript 和本地 Plotly。解压后，从提交目录运行：
+本机使用 Windows、Python 3.11.15、Node.js 24.11.1。Python 端使用 NumPy、pandas、PyArrow、SciPy、lmfit 等库，页面使用 HTML/CSS/JavaScript 和本地 Plotly。克隆仓库并切换到本次提交后运行：
 
 ```powershell
-cd project
+git clone --branch feat/calibration-workbench https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib.git calibration_lib
+cd calibration_lib
+git checkout ced4e8c2bb4b3eb040fab0238a0161b7011245cb
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install ".[workbench,dev]"
 .venv/Scripts/grid-workbench.exe --workspace ../workspace --port 8765
@@ -112,7 +114,7 @@ python -m venv .venv
 
 打开 `http://127.0.0.1:8765/`，选择实验数据或已有产品目录、载荷预设，再创建试算。新结果保存在 `workspace/runs/`。完整解包使用对应的事件和 HK 文件；随包还提供了[真实 L1 结果与计数直方图小样例](attachments/samples/README.md)，可直接读取查看。
 
-自动检查命令如下，在 `project/` 中运行：
+自动检查命令如下，在克隆的 `calibration_lib/` 目录中运行：
 
 ```powershell
 .venv/Scripts/python.exe -m pytest tests -q

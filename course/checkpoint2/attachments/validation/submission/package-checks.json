@@ -1,7 +1,4 @@
 {
-  "project_git_is_directory": true,
-  "project_has_no_external_object_store": true,
-  "project_git_fsck": "passed",
   "code_commit": "ced4e8c2bb4b3eb040fab0238a0161b7011245cb",
   "images_verified": 23,
   "records": [
@@ -41,5 +38,11 @@
   "record_formats": [
     "Markdown",
     "JSONL"
-  ]
+  ],
+  "code_delivery": "public_repository_link",
+  "project_directory_included": false,
+  "repository": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib",
+  "repository_visibility": "public",
+  "code_branch": "feat/calibration-workbench",
+  "remote_code_commit_verified": "ced4e8c2bb4b3eb040fab0238a0161b7011245cb"
 }
