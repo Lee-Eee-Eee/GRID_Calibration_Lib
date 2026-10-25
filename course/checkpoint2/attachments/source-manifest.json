@@ -235,6 +235,13 @@
       "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-10b-peak-study\\cache-histograms.npz",
       "bytes": 770124,
       "sha256": "78ab6c7a244c7794bc5ab5534496d1fc8ec14e9b96d45623859a5b8e51784ea0"
+    },
+    {
+      "file": "background/calibration-pipeline.png",
+      "source": "C:\\Users\\HP\\AppData\\Local\\Temp\\codex-clipboard-75af5bea-bf99-4f26-9410-32abc42157cf.png",
+      "description": "用户提供的原项目TB/EC标定数据处理流程图，原样收录",
+      "bytes": 611255,
+      "sha256": "815ad9c1269c318fc7c378ecfe3a0fca3acf7453208a3bb41dc0d84523c0fd1d"
     }
   ]
 }
