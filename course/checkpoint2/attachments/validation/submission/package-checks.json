@@ -47,5 +47,9 @@
     }
   ],
   "credential_pattern_scan": "passed",
-  "artifact_links": "passed"
+  "artifact_links": "passed",
+  "record_formats": [
+    "Markdown",
+    "JSONL"
+  ]
 }

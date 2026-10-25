@@ -52,5 +52,7 @@
   ],
   "credential_pattern_scan": "passed",
   "reasoning_and_encrypted_content_check": "passed",
-  "all_files_below_45_MiB": true
+  "all_files_below_45_MiB": true,
+  "gzip_included_in_submission": false,
+  "gzip_verified_before_packaging": true
 }

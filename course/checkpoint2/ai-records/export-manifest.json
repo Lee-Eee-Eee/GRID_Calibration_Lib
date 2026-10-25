@@ -292,5 +292,10 @@
     "instruction_items": 166,
     "reasoning_items": 4862,
     "encrypted_fields": 625
-  }
+  },
+  "included_formats": [
+    "Markdown",
+    "JSONL"
+  ],
+  "gzip_export_metadata": "Gzip was verified against JSONL during export; duplicate gzip files are omitted from the submission."
 }
