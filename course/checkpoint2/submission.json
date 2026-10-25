@@ -1,0 +1,28 @@
+{
+  "assignment": "checkpoint2",
+  "student_id": "2024011089",
+  "name": "李涛",
+  "date": "2026-10-25",
+  "repository": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib",
+  "repository_visibility": "public",
+  "code_branch": "feat/calibration-workbench",
+  "code_commit": "ced4e8c2bb4b3eb040fab0238a0161b7011245cb",
+  "numeric_implementation_commit": "b9cae10912823800366ee425239d2e695a58dc9d",
+  "materials_branch": "course/checkpoint2",
+  "materials_path": "course/checkpoint2",
+  "materials_url": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib/tree/course/checkpoint2/course/checkpoint2",
+  "experiments": {
+    "common_commit": "b90b3aa11a0a95b482e1ddb05c6f79f0c15d753b",
+    "A": {
+      "branch": "experiment/cp2-quality-a",
+      "commit": "3f2621085ef9b582c7a82b49114141e942959115"
+    },
+    "B": {
+      "branch": "experiment/cp2-quality-b",
+      "commit": "8e66e62afc6e1d0ca20c6782d46f80e040e279f0"
+    }
+  },
+  "project_git_history_included": true,
+  "raw_binary_data": "External experiment inputs; saved L1 JSON and count histograms are in attachments/samples.",
+  "assembled_at_utc": "2026-10-25T14:52:40.939604+00:00"
+}

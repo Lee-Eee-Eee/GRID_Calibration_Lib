@@ -1,0 +1,31 @@
+{
+  "final": {
+    "brandText": "",
+    "params": "峰位 / ADC\n7,676.646 ± 14.721\nσ / ADC\n271.289\nR²\n0.93087\n拟合模型\nlin + gaus",
+    "point": "14B:ec:src_Co60:0:1332.5",
+    "run": "20261025-171410-224e4170da14",
+    "window": [
+      "7232.000",
+      "8412.000"
+    ]
+  },
+  "errorCount": 0,
+  "crcRecovery": {
+    "run": "20261023-114209-7646c5ca45c2",
+    "point": "14B:ec:src_Cs137:1:661.7",
+    "channel": 1,
+    "emptyOldParameters": true,
+    "messageAfter": "谱已重建。",
+    "recoveryButtonRemovedAfterSuccess": true
+  },
+  "corrected15B": {
+    "stem": "10C-270-141",
+    "channel": 0,
+    "events": 95912,
+    "totalEvents": 374908
+  },
+  "screenshots": [
+    "15b-corrected-spectrum.png",
+    "co60-corrected-spectrum.png"
+  ]
+}

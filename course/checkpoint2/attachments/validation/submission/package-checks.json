@@ -1,0 +1,51 @@
+{
+  "project_git_is_directory": true,
+  "project_has_no_external_object_store": true,
+  "project_git_fsck": "passed",
+  "code_commit": "ced4e8c2bb4b3eb040fab0238a0161b7011245cb",
+  "images_verified": 20,
+  "records": [
+    {
+      "folder": "01-main-part1",
+      "lines": 7251,
+      "sha256": "19ff7f3ab2c2b3f2f289f230df4f065e12d5b1ddaceaf3c5f0d887ef9b02a3e2"
+    },
+    {
+      "folder": "02-main-part2",
+      "lines": 6876,
+      "sha256": "510e572b8be42b26dc1ab629dd3e6ce83661aa6ff06ab8d01d6c2a3b78a7e254"
+    },
+    {
+      "folder": "03-common-before-fork",
+      "lines": 75,
+      "sha256": "23a3d6191791fd47bd2b6db5bacfe69d2329462274831391bf689851ef037113"
+    },
+    {
+      "folder": "04-common-full",
+      "lines": 220,
+      "sha256": "9094b0779d99548346b5a059b2bd57ef3c985e73b99e3293762d351367717a84"
+    },
+    {
+      "folder": "05-experiment-a",
+      "lines": 921,
+      "sha256": "03e632b0928614664321c4db9177b4f8c3ecba8a18d7e94313a7bb72b20fa47e"
+    },
+    {
+      "folder": "06-experiment-b",
+      "lines": 861,
+      "sha256": "078f639eb354cf8827059eee2e1b24e8c883ee8ce67b4a818f8f44eb703eea4e"
+    },
+    {
+      "folder": "07-planning-part1",
+      "lines": 297,
+      "sha256": "8fcd968ce1f3afa5a9cc703bcafef482d5096adab9c06586ef8c08520bdd18ee"
+    },
+    {
+      "folder": "08-planning-part2",
+      "lines": 3814,
+      "sha256": "d40230500ef14e381bcd3f3f01e16a20ea92778a2434af8dcded6533db2df98a"
+    }
+  ],
+  "credential_pattern_scan": "passed",
+  "artifact_links": "passed"
+}

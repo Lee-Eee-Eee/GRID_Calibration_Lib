@@ -1,0 +1,20 @@
+{
+  "source": "14B Na22, 20261025 new CRC-valid L1",
+  "channel": 0,
+  "energies_keV": [
+    511.0,
+    1274.5
+  ],
+  "valid_signal_events": 561374,
+  "bins": 2508,
+  "bin_width_ADC": 4.0,
+  "before_cold_seconds": 0.8271107000182383,
+  "after_cold_seconds": 0.38848939997842535,
+  "before_warm_median_seconds": 0.6156710999784991,
+  "after_warm_median_seconds": 0.02180779998889193,
+  "warm_speedup": 28.231692343661386,
+  "warm_reduction_percent": 96.45788149067684,
+  "counting_arrays_identical": true,
+  "inputs_unchanged": true,
+  "method": "Six alternating reads in each fresh Python process; first cold, five warm; no profiler enabled."
+}

@@ -1,0 +1,1342 @@
+{
+  "date": "2026-10-25",
+  "commit": "c3ee6b4888bfe24f707d9518f30f426840d42d5d",
+  "pushed": false,
+  "policy": "Quality diagnostics annotate possible problems; usable fit parameters continue downstream.",
+  "tests": {
+    "pytest": 468,
+    "seconds": 99.737,
+    "node": 84,
+    "ruff_changed_modules_and_new_tests": "passed",
+    "diff_check": "passed"
+  },
+  "binning_audit": {
+    "date": "2026-10-25",
+    "tb": {
+      "run": "20261023-111431-6e9fdd63c95a",
+      "preset": {
+        "id": "b5bc272f0378488ba85880b1",
+        "name": "10B · 560B 波形与稳态遥测",
+        "payload": "10B",
+        "version": 1,
+        "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+        "created_at": "2026-10-20T12:02:25+00:00",
+        "origin": "manual",
+        "modified": false
+      },
+      "profile_histogram": {
+        "min": 0.0,
+        "max": 16384.0,
+        "bin_width": 6.0
+      },
+      "fit_record_histogram_configs": [
+        {
+          "bin_width": 6.0,
+          "max": 16384.0,
+          "min": 0.0
+        }
+      ],
+      "supported_record_count": 192,
+      "bin_count": 2731,
+      "first_edge": 0.0,
+      "actual_last_edge": 16386.0,
+      "display_step": 6.0,
+      "min_sigma_ADC": 11.863147236340684,
+      "max_bin_width_over_sigma": 0.5057679788058304,
+      "data_kind": "original validated event counts per fixed ADC bin",
+      "counting_error": "sqrt(max(N,1))",
+      "smoothing": "candidate/diagnostic use only; fit uses original bin counts"
+    },
+    "ec": {
+      "run": "20261023-114209-7646c5ca45c2",
+      "preset": {
+        "id": "286b59d74b7245d29c8512a5",
+        "name": "14B 默认实验读取",
+        "payload": "14B",
+        "version": 3,
+        "sha256": "8a9857e5b163c3c3fc6a820f5edde0b09b1938927195fa467bcb52dee54a891e",
+        "created_at": "2026-10-20T12:08:14+00:00",
+        "origin": "manual",
+        "modified": false
+      },
+      "profile_fitting": null,
+      "saved_fit_bin_width_ADC": 4.0,
+      "display_step_ADC": 4.0,
+      "display_bins": 6559,
+      "display_counts_match_processor": true,
+      "display_errors_match_processor": true,
+      "data_kind": "TB-corrected ADC signal/background rate per fixed bin",
+      "normalization": "net = N_signal/t_signal - N_background/t_background",
+      "error": "sqrt(max(N_signal,1)/t_signal^2 + max(N_background,1)/t_background^2)",
+      "time_axis": "per-channel observed UTC max-min, fallback 1 second if insufficient span",
+      "export_display_merge": "PNG only: 3-bin means (12 ADC sampling at default 4 ADC); fit and interactive UI retain native bins"
+    },
+    "observations": [
+      "No adaptive binning or keV binning is used in TB L1 / EC L2.",
+      "Equal-width TB bins extend the final edge upwards if requested range is not an exact width multiple.",
+      "Gaussian is evaluated at bin centers; current models do not integrate the Gaussian over each bin.",
+      "Current saved default EC bin width is 4 ADC; custom process cfg.bin_width was not exposed through Workbench submit/execute at audit start.",
+      "EC background-channel candidate scoring used hard-coded 4 ADC before the current change; EC owner notified.",
+      "Legacy UI minimum fit-window span 8 ADC may contain fewer than 8 fit bins; minimum should follow bin width."
+    ],
+    "warning_policy_gate_watchlist": [
+      "tb/processors/L2_processor.py _collect_fit_data accepted and MIN_RSQUARED filters",
+      "workbench/compute.py surface point.used accepted and MIN_RSQUARED filters",
+      "workbench/service.py ec_overview draft_used quality_pass gate",
+      "workbench/ec_interactive.py overview quality_pass and monotonic filters",
+      "ec/processors/L3_processor.py _quality_filter and _filter_monotonic",
+      "ec/processors/L2_processor.py consensus/energy-anchor accepted checks and quality failure exceptions",
+      "workbench/static/workbench.js pipeline partial-result pauses should distinguish numerical absence from warning-only quality"
+    ]
+  },
+  "real_tb": {
+    "seconds": 3.4189960000221618,
+    "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\3ad2f6a05d3d\\products\\10B\\tb\\L1",
+    "source_hashes": {
+      "094_observe_50C_290_fit_results.l1.json": "70819b0049a77053fc3fea53ae3ba2914b21aac7a671bf97a0005a4beda9aa4e",
+      "101_observe_50C_285_fit_results.l1.json": "c9ce87a004fddcbe9b648d07af01d70eebaa3e7664336c76311d49f4acaed7a9",
+      "102_observe_50C_287_fit_results.l1.json": "1e6ff2b21ecb0ec3d5abc1c90e429e58013596dc62547d2487b7fdd1ec76ed3f",
+      "103_observe_50C_283_fit_results.l1.json": "ff67355add26e0a3fc6925695973826ffe095a05dd383dd86cba4ce24f397313",
+      "104_observe_50C_280_fit_results.l1.json": "9eef2e6cc994fe000c1858573b1896f44338f4feb3eecacdb468a0f8544d03a6",
+      "105_observe_50C_275_fit_results.l1.json": "a738b2267d21c2716161ea5ab79dd5e2d6a5d69cc7a1478c32a062f19dc1c87a",
+      "106_observe_50C_270_fit_results.l1.json": "9694f21944e838cd26902f026389185a2ecf7206f3cd8efc897fb58e150a97a7",
+      "108_observe_50C_265_fit_results.l1.json": "e69fd46d7b590b91c5312095aaa29a823ae2eab0cc17f7e58bd10dbf986b68ac",
+      "113_observe_40C_290_fit_results.l1.json": "45aed7545aa3efa89924698c8dff1f6aff2b4fd10558af6358be68cdb8a70863",
+      "114_observe_40C_287_fit_results.l1.json": "240672a071af73a563b6c5838ef27e53b742f3f55735e117e59bf581324f10cc",
+      "115_observe_40C_285_fit_results.l1.json": "edd79a0476fe3af30a8b32887172191f0a4d7800a7a2fef58a94c06baf4558ff",
+      "116_observe_40C_283_fit_results.l1.json": "5019859674f3b80c2e452e64346a9178f8bec35bcd167060863983de2e37ece8",
+      "117_observe_40C_280_fit_results.l1.json": "a05d1529504da493b1c3cdee8238ab35a2907b7b47661fc494721efd01201cbf",
+      "118_observe_40C_275_fit_results.l1.json": "81d1cff034ca17ce38b123cc30f5a00067f64fd3796214916afc3b44b3af449c",
+      "119_observe_40C_270_fit_results.l1.json": "fad7c3e980b5a26d1a5da157d3c290e38549313f09b45f02e35580b3a1d88e77",
+      "120_observe_40C_265_fit_results.l1.json": "36a02b9cdbfa89e55a568f3e1f2e886c8bfc45d98c5ab43d9e672a09380959af",
+      "125_observe_30C_290_fit_results.l1.json": "fa204b63a4a00fcfd28b861e1d18406b9381fbff3b3854aaba1e7a5ad8d5b052",
+      "126_observe_30C_285_fit_results.l1.json": "b4e8ac2cf9411f5f1fbdf93961f5e1e9b06683f387a86d5e952a52b2c6965b4f",
+      "127_observe_30C_287_fit_results.l1.json": "5355f834cab44ebac846d5604ec1e18ee0f0010a8da1a7888f0aab1d1172ab29",
+      "128_observe_30C_283_fit_results.l1.json": "b7282a7229abfebf013653f28fb1acbd61b4c0dd064746ff5d6c9d54bfbb720e",
+      "129_observe_30C_280_fit_results.l1.json": "93da316495069afa83a4cfff944201bc39d76afdb814110900e3cb8e39253a94",
+      "130_observe_30C_275_fit_results.l1.json": "408e06190ee91ae6fabf1c38a564c13bdb05091e708a196c69d1122259bae834",
+      "131_observe_30C_270_fit_results.l1.json": "414d90d865ffebae6c26b2c6e1fff70906e63dbad68b4bff3f21aab1e6d65032",
+      "132_observe_30C_265_fit_results.l1.json": "d29d28667f2d018ef3b8d282d53357a2df7005780248d1e2cee03a04c1e2057a",
+      "136_observe_20C_290_fit_results.l1.json": "b1e0ef2b2f835762e345dcc58e234b9aa9df89bde61cd6ae16a4e0a44e9bdeb0",
+      "137_observe_20C_287_fit_results.l1.json": "3da7d27d6dbb2616cae11bfc2a69ac760aa527167e7162f1dc712103eaac8017",
+      "138_observe_20C_285_fit_results.l1.json": "88104c2a85bd851d12b5770ca7d00686a60fd53475a536c8d36c39c64a598985",
+      "139_observe_20C_283_fit_results.l1.json": "f3d84426b8d83785578e41599df0f2da1dc10a0803c25dc49ccebb9c813f57e5",
+      "140_observe_20C_280_fit_results.l1.json": "e0c49a95daea774ab01045567194a33b36dce09b35ae74e0529e4441b62c1031",
+      "141_observe_20C_275_fit_results.l1.json": "04c0b6b5e5b32293a107450a644c4453957beafbdc82561d3dda1df59bd21446",
+      "142_observe_20C_270_fit_results.l1.json": "0d28eeb08361b2ec8ee21151cd502491af92e20ed37d789fbbc2ab06884489f6",
+      "143_observe_20C_265_fit_results.l1.json": "0f8f2f1b9a665c0a4c9419b8d8c60193eaec385fc0da838c8a335237e1122bbb",
+      "147_observe_10C_290_fit_results.l1.json": "d2c1452e98b6abeb1f83d189cbef3fe2e4681f2e32fb5c5f76f75f56eb2135de",
+      "148_observe_10C_287_fit_results.l1.json": "fe949eca2ce6174d90498acb831d9d29799409958321e9e44a7fbceeea4b9e1c",
+      "149_observe_10C_285_fit_results.l1.json": "6b1c5401f337b0f6aea404f4b8de48c69dc81474ed88580e268d2e9591775976",
+      "150_observe_10C_283_fit_results.l1.json": "ccab83a8a3d13a91c10ef249f401730cded88e94c790c983ca5975313418818d",
+      "151_observe_10C_280_fit_results.l1.json": "91c1453d5ef7404787f1335746ac95f76ddadb87373f905c24353a7aeb5120c3",
+      "152_observe_10C_275_fit_results.l1.json": "d3cc890e263a1a8a1604ed2143a6bad34275baad104b0c10d79fb1779e79809d",
+      "153_observe_10C_270_fit_results.l1.json": "13baee56509010a1c90a9717dad690fee096e03eda5b789bbaba7230415f0347",
+      "154_observe_10C_265_fit_results.l1.json": "2d5ac93ee12cc28263ceecd63d855c8f3b4a797ba2918ac124b727000e4822e9",
+      "155_observe_0C_290_fit_results.l1.json": "fdd1a016ece0d685feb7d855c5a9b97da4ba21f5c1bd167738675e82a1b6fda2",
+      "156_observe_0C_287_fit_results.l1.json": "40c142a360926244f32d45cc4f25ce4020608f3b5866dd2844cacb2b3b20a94a",
+      "157_observe_0C_285_fit_results.l1.json": "ff30abdddc1de66c07a56bec97880385e21e56cdc50dc8772a718b1c0c927cb1",
+      "158_observe_0C_283_fit_results.l1.json": "04c2eeb581520c093b5a77e06f2eb9132016eea3d18b08c23e7b086ea41ceb62",
+      "160_observe_0C_280_fit_results.l1.json": "357a30f70a5710eb84fcaa0653b905b9004b12eb87e835a77b32d07861835f13",
+      "161_observe_0C_275_fit_results.l1.json": "556f66c502b823fd550cbec52e1cea3fdc3644bf856685af88ec09b366270138",
+      "162_observe_0C_270_fit_results.l1.json": "032b08d52674fcaaf635fc5d5ca850a74d155d7e5f5ee42e83d3e5e61d5a97ef",
+      "163_observe_0C_265_fit_results.l1.json": "13b72161aba49f8da0d6b5eb6b4db9b0cb16e2cedfece49ed7fc9d36b83fc400",
+      "169_observe_-10C_290_fit_results.l1.json": "1e88f84b22906d3fdd7a142e0926835f6d6d2152ca5da4bcf835637dc29513cf",
+      "170_observe_-10C_287_fit_results.l1.json": "e641e73a7f5616c968c9306a2aa446ee4d7671f54fe4e2d1c7c7b3ac658db234",
+      "171_observe_-10C_285_fit_results.l1.json": "f60357f94e27112bcbc26cfbd58a3aaa7fd9cccc01ef6881345fe970f6ac6cc0",
+      "172_observe_-10C_283_fit_results.l1.json": "92855e7581172d396d8f76cf11faf73cd7a9cf05420ab0abdef7fdc6878962f9",
+      "173_observe_-10C_280_fit_results.l1.json": "0cb27235d801b70cd03c8e9d53e63f77c0913f832438a5e8d095ceeb9b131c65",
+      "175_observe_-10C_275_fit_results.l1.json": "3af719a343923f84ca8148e365a52d433635108628097491788799c875b7f233",
+      "176_observe_-10C_270_fit_results.l1.json": "f457ecdb76237899dd190400fc66dc41e881ee412bf6c8c0997a4853f5428065",
+      "177_observe_-10C_265_fit_results.l1.json": "a149723e0e80fc5dd50d34e02a2e90e713536fb007ef0cea0dbc2dd718710b9f",
+      "181_observe_-20C_290_fit_results.l1.json": "adf141601683e21929d77c1c1d8913065142c512fe4d2160812dc3be926c2288",
+      "182_observe_-20C_287_fit_results.l1.json": "b2d68f23f78bdd067e146fb4b51ff9d0d233e479d5741c50d333bf1c4b9bd1c9",
+      "183_observe_-20C_285_fit_results.l1.json": "59b8d15a930e93a3bb40a4fc728dee6701bc0866454abdd6089b1e870348ec68",
+      "184_observe_-20C_283_fit_results.l1.json": "1002b7d6b6a454a39c14a9b285a11200bee0e85bf5f4e22daa7054398f4bfe2f",
+      "185_observe_-20C_280_fit_results.l1.json": "60288a20bc57daeb8c7a65c0d483f297501a0ba72b36369ece28e83e4a1e595b",
+      "187_observe_-20C_275_fit_results.l1.json": "f3e29d20701a083a5f426745b139e1dc4cb479b9d4ef89a88c2a1b384f30132c",
+      "188_observe_-20C_270_fit_results.l1.json": "37336d523391a94240c607158a3eacd098a43348852735d2c3491c26fec7bdcc",
+      "189_observe_-20C_265_fit_results.l1.json": "048f7d03efbf83d143bb345d06a0163db21a83908a2408cb13fb61dbd912f69f",
+      "auto_peak_context.json": "fd2b3746af6dae8e79b8a412c4a95d1817549763fbd67088961c562f042269ba",
+      "fit_windows_used.json": "0040d6a86663d81eb03d6ac439843ad1f2c8e7af3f8b7ce36ce4670c75a05bb4",
+      "L1_manifest.json": "8cf3596f653be68c6942d9851ac9d37b38898a56a250fb0498d5031726ce3fe0"
+    },
+    "per_channel_points": [
+      64,
+      64,
+      64
+    ],
+    "included_points": 192,
+    "suspect_points_retained": 13,
+    "result": {
+      "payload": "10B",
+      "layer": "TB_L2",
+      "timestamp": "2610251657",
+      "k_init": 0.0184,
+      "fit_params": [
+        {
+          "G0": 0.0065839241853899695,
+          "V0": 24.11589593110201,
+          "b": 53.54115467101672,
+          "c": 22319.567429979164,
+          "k": 0.01846470462511274,
+          "G0_err": 2.4876707928821657e-05,
+          "V0_err": 0.0008477371982407038,
+          "b_err": 0.32873223280436553,
+          "c_err": 81.31924826923257,
+          "k_err": 2.4946317400447157e-05,
+          "chi2": 23413.037149862274,
+          "rmse": 23.605690908698325,
+          "mape_percent": 0.8542740569002276,
+          "chi2_reduced": 396.8311381332589,
+          "n_points": 64,
+          "channel": 0,
+          "payload": "10B"
+        },
+        {
+          "G0": 0.005557109728835075,
+          "V0": 24.072456317585715,
+          "b": 47.95712533619288,
+          "c": 28425.55361133378,
+          "k": 0.018370954862889463,
+          "G0_err": 2.4576803023109888e-05,
+          "V0_err": 0.0007296071492080211,
+          "b_err": 0.3302849556552335,
+          "c_err": 122.53765378969393,
+          "k_err": 1.987598708286752e-05,
+          "chi2": 30637.78378298921,
+          "rmse": 25.892713915379453,
+          "mape_percent": 0.9045090357803913,
+          "chi2_reduced": 519.2844708981222,
+          "n_points": 64,
+          "channel": 1,
+          "payload": "10B"
+        },
+        {
+          "G0": 0.005959108323198197,
+          "V0": 24.06858041300628,
+          "b": 34.31586115263839,
+          "c": 24829.571920633232,
+          "k": 0.018893715581761537,
+          "G0_err": 2.1820827060256626e-05,
+          "V0_err": 0.0006013644926865052,
+          "b_err": 0.254952196840906,
+          "c_err": 88.77754503665986,
+          "k_err": 1.7820177030625807e-05,
+          "chi2": 33643.711013633496,
+          "rmse": 25.44777629960861,
+          "mape_percent": 0.9532745641627517,
+          "chi2_reduced": 570.2323900615846,
+          "n_points": 64,
+          "channel": 2,
+          "payload": "10B"
+        },
+        null
+      ],
+      "output_json": "2610251657_10B_TB.l2.json",
+      "output_figures": [
+        "2610251657_10B_ch0_TB_fit.l2.png",
+        "2610251657_10B_ch1_TB_fit.l2.png",
+        "2610251657_10B_ch2_TB_fit.l2.png"
+      ],
+      "errors": [],
+      "warnings": [
+        "13 suspected points included in TB surface fitting"
+      ],
+      "quality_policy": "warning_only",
+      "included_points": [
+        "10B:094_observe_50C_290:0",
+        "10B:101_observe_50C_285:0",
+        "10B:102_observe_50C_287:0",
+        "10B:103_observe_50C_283:0",
+        "10B:104_observe_50C_280:0",
+        "10B:105_observe_50C_275:0",
+        "10B:106_observe_50C_270:0",
+        "10B:108_observe_50C_265:0",
+        "10B:113_observe_40C_290:0",
+        "10B:114_observe_40C_287:0",
+        "10B:115_observe_40C_285:0",
+        "10B:116_observe_40C_283:0",
+        "10B:117_observe_40C_280:0",
+        "10B:118_observe_40C_275:0",
+        "10B:119_observe_40C_270:0",
+        "10B:120_observe_40C_265:0",
+        "10B:125_observe_30C_290:0",
+        "10B:126_observe_30C_285:0",
+        "10B:127_observe_30C_287:0",
+        "10B:128_observe_30C_283:0",
+        "10B:129_observe_30C_280:0",
+        "10B:130_observe_30C_275:0",
+        "10B:131_observe_30C_270:0",
+        "10B:132_observe_30C_265:0",
+        "10B:136_observe_20C_290:0",
+        "10B:137_observe_20C_287:0",
+        "10B:138_observe_20C_285:0",
+        "10B:139_observe_20C_283:0",
+        "10B:140_observe_20C_280:0",
+        "10B:141_observe_20C_275:0",
+        "10B:142_observe_20C_270:0",
+        "10B:143_observe_20C_265:0",
+        "10B:147_observe_10C_290:0",
+        "10B:148_observe_10C_287:0",
+        "10B:149_observe_10C_285:0",
+        "10B:150_observe_10C_283:0",
+        "10B:151_observe_10C_280:0",
+        "10B:152_observe_10C_275:0",
+        "10B:153_observe_10C_270:0",
+        "10B:154_observe_10C_265:0",
+        "10B:155_observe_0C_290:0",
+        "10B:156_observe_0C_287:0",
+        "10B:157_observe_0C_285:0",
+        "10B:158_observe_0C_283:0",
+        "10B:160_observe_0C_280:0",
+        "10B:161_observe_0C_275:0",
+        "10B:162_observe_0C_270:0",
+        "10B:163_observe_0C_265:0",
+        "10B:169_observe_-10C_290:0",
+        "10B:170_observe_-10C_287:0",
+        "10B:171_observe_-10C_285:0",
+        "10B:172_observe_-10C_283:0",
+        "10B:173_observe_-10C_280:0",
+        "10B:175_observe_-10C_275:0",
+        "10B:176_observe_-10C_270:0",
+        "10B:177_observe_-10C_265:0",
+        "10B:181_observe_-20C_290:0",
+        "10B:182_observe_-20C_287:0",
+        "10B:183_observe_-20C_285:0",
+        "10B:184_observe_-20C_283:0",
+        "10B:185_observe_-20C_280:0",
+        "10B:187_observe_-20C_275:0",
+        "10B:188_observe_-20C_270:0",
+        "10B:189_observe_-20C_265:0",
+        "10B:094_observe_50C_290:1",
+        "10B:101_observe_50C_285:1",
+        "10B:102_observe_50C_287:1",
+        "10B:103_observe_50C_283:1",
+        "10B:104_observe_50C_280:1",
+        "10B:105_observe_50C_275:1",
+        "10B:106_observe_50C_270:1",
+        "10B:108_observe_50C_265:1",
+        "10B:113_observe_40C_290:1",
+        "10B:114_observe_40C_287:1",
+        "10B:115_observe_40C_285:1",
+        "10B:116_observe_40C_283:1",
+        "10B:117_observe_40C_280:1",
+        "10B:118_observe_40C_275:1",
+        "10B:119_observe_40C_270:1",
+        "10B:120_observe_40C_265:1",
+        "10B:125_observe_30C_290:1",
+        "10B:126_observe_30C_285:1",
+        "10B:127_observe_30C_287:1",
+        "10B:128_observe_30C_283:1",
+        "10B:129_observe_30C_280:1",
+        "10B:130_observe_30C_275:1",
+        "10B:131_observe_30C_270:1",
+        "10B:132_observe_30C_265:1",
+        "10B:136_observe_20C_290:1",
+        "10B:137_observe_20C_287:1",
+        "10B:138_observe_20C_285:1",
+        "10B:139_observe_20C_283:1",
+        "10B:140_observe_20C_280:1",
+        "10B:141_observe_20C_275:1",
+        "10B:142_observe_20C_270:1",
+        "10B:143_observe_20C_265:1",
+        "10B:147_observe_10C_290:1",
+        "10B:148_observe_10C_287:1",
+        "10B:149_observe_10C_285:1",
+        "10B:150_observe_10C_283:1",
+        "10B:151_observe_10C_280:1",
+        "10B:152_observe_10C_275:1",
+        "10B:153_observe_10C_270:1",
+        "10B:154_observe_10C_265:1",
+        "10B:155_observe_0C_290:1",
+        "10B:156_observe_0C_287:1",
+        "10B:157_observe_0C_285:1",
+        "10B:158_observe_0C_283:1",
+        "10B:160_observe_0C_280:1",
+        "10B:161_observe_0C_275:1",
+        "10B:162_observe_0C_270:1",
+        "10B:163_observe_0C_265:1",
+        "10B:169_observe_-10C_290:1",
+        "10B:170_observe_-10C_287:1",
+        "10B:171_observe_-10C_285:1",
+        "10B:172_observe_-10C_283:1",
+        "10B:173_observe_-10C_280:1",
+        "10B:175_observe_-10C_275:1",
+        "10B:176_observe_-10C_270:1",
+        "10B:177_observe_-10C_265:1",
+        "10B:181_observe_-20C_290:1",
+        "10B:182_observe_-20C_287:1",
+        "10B:183_observe_-20C_285:1",
+        "10B:184_observe_-20C_283:1",
+        "10B:185_observe_-20C_280:1",
+        "10B:187_observe_-20C_275:1",
+        "10B:188_observe_-20C_270:1",
+        "10B:189_observe_-20C_265:1",
+        "10B:094_observe_50C_290:2",
+        "10B:101_observe_50C_285:2",
+        "10B:102_observe_50C_287:2",
+        "10B:103_observe_50C_283:2",
+        "10B:104_observe_50C_280:2",
+        "10B:105_observe_50C_275:2",
+        "10B:106_observe_50C_270:2",
+        "10B:108_observe_50C_265:2",
+        "10B:113_observe_40C_290:2",
+        "10B:114_observe_40C_287:2",
+        "10B:115_observe_40C_285:2",
+        "10B:116_observe_40C_283:2",
+        "10B:117_observe_40C_280:2",
+        "10B:118_observe_40C_275:2",
+        "10B:119_observe_40C_270:2",
+        "10B:120_observe_40C_265:2",
+        "10B:125_observe_30C_290:2",
+        "10B:126_observe_30C_285:2",
+        "10B:127_observe_30C_287:2",
+        "10B:128_observe_30C_283:2",
+        "10B:129_observe_30C_280:2",
+        "10B:130_observe_30C_275:2",
+        "10B:131_observe_30C_270:2",
+        "10B:132_observe_30C_265:2",
+        "10B:136_observe_20C_290:2",
+        "10B:137_observe_20C_287:2",
+        "10B:138_observe_20C_285:2",
+        "10B:139_observe_20C_283:2",
+        "10B:140_observe_20C_280:2",
+        "10B:141_observe_20C_275:2",
+        "10B:142_observe_20C_270:2",
+        "10B:143_observe_20C_265:2",
+        "10B:147_observe_10C_290:2",
+        "10B:148_observe_10C_287:2",
+        "10B:149_observe_10C_285:2",
+        "10B:150_observe_10C_283:2",
+        "10B:151_observe_10C_280:2",
+        "10B:152_observe_10C_275:2",
+        "10B:153_observe_10C_270:2",
+        "10B:154_observe_10C_265:2",
+        "10B:155_observe_0C_290:2",
+        "10B:156_observe_0C_287:2",
+        "10B:157_observe_0C_285:2",
+        "10B:158_observe_0C_283:2",
+        "10B:160_observe_0C_280:2",
+        "10B:161_observe_0C_275:2",
+        "10B:162_observe_0C_270:2",
+        "10B:163_observe_0C_265:2",
+        "10B:169_observe_-10C_290:2",
+        "10B:170_observe_-10C_287:2",
+        "10B:171_observe_-10C_285:2",
+        "10B:172_observe_-10C_283:2",
+        "10B:173_observe_-10C_280:2",
+        "10B:175_observe_-10C_275:2",
+        "10B:176_observe_-10C_270:2",
+        "10B:177_observe_-10C_265:2",
+        "10B:181_observe_-20C_290:2",
+        "10B:182_observe_-20C_287:2",
+        "10B:183_observe_-20C_285:2",
+        "10B:184_observe_-20C_283:2",
+        "10B:185_observe_-20C_280:2",
+        "10B:187_observe_-20C_275:2",
+        "10B:188_observe_-20C_270:2",
+        "10B:189_observe_-20C_265:2"
+      ],
+      "excluded_points": [],
+      "suspect_points": [
+        {
+          "id": "10B:108_observe_50C_265:2",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:119_observe_40C_270:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:120_observe_40C_265:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:120_observe_40C_265:1",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:131_observe_30C_270:1",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:132_observe_30C_265:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:132_observe_30C_265:1",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:142_observe_20C_270:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:143_observe_20C_265:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:143_observe_20C_265:1",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:154_observe_10C_265:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:177_observe_-10C_265:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        },
+        {
+          "id": "10B:189_observe_-20C_265:0",
+          "warnings": [
+            "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "status": "passed",
+      "checker": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\cali_format\\src\\check\\TB_L2.py",
+      "checker_sha256": "5b8f4e51ae650c60aceecd19659f91033e311a2ba18255e22823435b0c23faee",
+      "files": [
+        {
+          "file": "2610251657_10B_TB.l2.json",
+          "valid": true,
+          "details": "\n============================================================\n文件：2610251657_10B_TB.l2.json\n============================================================\n[合法] 文件格式完全符合要求。✓\n\n"
+        }
+      ],
+      "passed": 1,
+      "total": 1
+    }
+  },
+  "real_ec": {
+    "processed": 1,
+    "point": "14B:ec:40keV:1:40",
+    "bin_width_ADC": 4.0,
+    "center": 265.34305106790595,
+    "quality": {
+      "delta_bic_background": 18.51545653056036,
+      "amplitude_snr": 2.1131985800269595,
+      "redchi": 1.8673952834055372,
+      "center_at_boundary": false,
+      "warnings": [
+        "Peak area uncertainty is unavailable or area SNR < 3"
+      ],
+      "accepted": false,
+      "quality_pass": false,
+      "suspect": true,
+      "warning_only": true,
+      "status": "suspect"
+    },
+    "warnings": [
+      "40keV CH1 40 keV: Peak area uncertainty is unavailable or area SNR < 3; retained for review"
+    ],
+    "outputs": [
+      {
+        "energy": "40keV",
+        "data_type": "x",
+        "n_records": 4,
+        "points_updated": [
+          "14B:ec:40keV:1:40"
+        ],
+        "channels_updated": [
+          1
+        ],
+        "json": "40keV_fit_results.l2.json",
+        "figure": "40keV_fit.l2.png"
+      }
+    ]
+  },
+  "workbench_jobs": {
+    "bfdee00df4cf": {
+      "id": "bfdee00df4cf",
+      "layer": "TB_L1",
+      "status": "succeeded",
+      "created_at": "2026-10-25T09:00:30+00:00",
+      "config_revision": 2,
+      "config": {
+        "windows": {
+          "181_observe_-20C_290": {
+            "1": {
+              "lo": 3639.819,
+              "hi": 4744.98710442134
+            }
+          },
+          "143_observe_20C_265": {
+            "1": {
+              "lo": 517.4687062916222,
+              "hi": 712.5312937083778
+            }
+          }
+        },
+        "excluded": [],
+        "ec_windows": {},
+        "ec_excluded": [],
+        "fit_channels": [
+          1
+        ],
+        "automatic_window": false,
+        "representative": true,
+        "only": [
+          "143_observe_20C_265"
+        ]
+      },
+      "scope": "selected",
+      "tb_version": {
+        "filename": "2610231157_10B_TB.l2.json",
+        "sha256": "a01822bde025a6cadb7a3ddbec4ae852b991d45a3636cbbfe789675cc6fd204c",
+        "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\0125dfe18afa\\products\\10B\\tb\\L2\\json\\2610231157_10B_TB.l2.json",
+        "origin": "computed",
+        "job_id": "0125dfe18afa"
+      },
+      "acquisition": {
+        "revision": 1,
+        "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+        "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\profile.json",
+        "file_sha256": "9bd6226091f036568338e7b87414725c2a6e43ada2f726de850eba495a41b5e0",
+        "xml": [
+          {
+            "role": "event",
+            "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\event.xml",
+            "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+          },
+          {
+            "role": "hk",
+            "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\hk.xml",
+            "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+          }
+        ]
+      },
+      "acquisition_preset": {
+        "id": "b5bc272f0378488ba85880b1",
+        "name": "10B · 560B 波形与稳态遥测",
+        "payload": "10B",
+        "version": 1,
+        "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+        "created_at": "2026-10-20T12:02:25+00:00",
+        "origin": "manual",
+        "modified": false
+      },
+      "error": null,
+      "started_at": "2026-10-25T09:00:30+00:00",
+      "result": {
+        "success": true,
+        "partial": false,
+        "errors": [],
+        "warnings": [],
+        "layer": "TB_L1",
+        "quality": {},
+        "payload": "10B",
+        "outputs": [
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\bfdee00df4cf\\products\\10B\\tb\\L1\\json\\143_observe_20C_265_fit_results.l1.json",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\bfdee00df4cf\\products\\10B\\tb\\L1\\figures\\143_observe_20C_265_ch1_fit.l1.jpg"
+        ],
+        "output_paths": [
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\bfdee00df4cf\\products\\10B\\tb\\L1\\json\\143_observe_20C_265_fit_results.l1.json",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\bfdee00df4cf\\products\\10B\\tb\\L1\\figures\\143_observe_20C_265_ch1_fit.l1.jpg"
+        ],
+        "counts": {
+          "outputs": 2,
+          "processed": 1,
+          "files": 1,
+          "channels_fitted": 1,
+          "channels_failed": 0
+        },
+        "summary": {
+          "files_total": 1,
+          "channels_succeeded": 1,
+          "channels_failed": 0
+        },
+        "scope": {
+          "representative": true,
+          "only": [
+            "143_observe_20C_265"
+          ]
+        },
+        "hydrated_historical_inputs": [
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261020-200352-afee1ec08bfb\\products\\10B\\tb\\L0\\parquet\\143_observe_20C_265.l0.parquet"
+        ],
+        "tb_dependency": null,
+        "processor": {
+          "payload": "10B",
+          "layer": "TB_L1",
+          "timestamp": "2610251700",
+          "auto_window": true,
+          "automatic_window": false,
+          "peak_detection_config": {},
+          "fit_windows_config": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\bfdee00df4cf\\workbench-fit-windows.json",
+          "n_processed": 1,
+          "outputs": [
+            {
+              "stem": "143_observe_20C_265",
+              "channels_fitted": 3,
+              "channels_updated": [
+                1
+              ],
+              "channels_failed": [],
+              "json": "143_observe_20C_265_fit_results.l1.json",
+              "figure": "143_observe_20C_265_ch1_fit.l1.jpg",
+              "input_quality": {
+                "crc_available": true,
+                "input_events": 247167,
+                "used_events": 247167,
+                "excluded_crc_count": 0
+              }
+            }
+          ],
+          "errors": [],
+          "skipped_channels": [],
+          "fit_channels": [
+            1
+          ],
+          "n_files": 1,
+          "file_outcomes": [
+            {
+              "stem": "143_observe_20C_265",
+              "channels_updated": [
+                1
+              ],
+              "channels_failed": [],
+              "errors": [],
+              "elapsed_seconds": 0.409
+            }
+          ],
+          "channels_fitted": 1,
+          "channels_failed": 0,
+          "channels_accepted": 0,
+          "channels_rejected": 1,
+          "channels_suspect": 1,
+          "quality_policy": "warning_only",
+          "partial_run_stems": [
+            "143_observe_20C_265"
+          ]
+        },
+        "processor_class": "TBL1Processor",
+        "acquisition": {
+          "revision": 1,
+          "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+          "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\profile.json",
+          "file_sha256": "9bd6226091f036568338e7b87414725c2a6e43ada2f726de850eba495a41b5e0",
+          "xml": [
+            {
+              "role": "event",
+              "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\event.xml",
+              "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+            },
+            {
+              "role": "hk",
+              "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\hk.xml",
+              "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+            }
+          ]
+        }
+      },
+      "validation": {
+        "status": "passed",
+        "checker": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\cali_format\\src\\check\\TB_L1.py",
+        "checker_sha256": "b34c056c699b0d99f64846a16eb7aff3174d7eb96ad774841c603376e7d16c97",
+        "files": [
+          {
+            "file": "143_observe_20C_265_fit_results.l1.json",
+            "valid": true,
+            "details": "\n============================================================\n文件：143_observe_20C_265_fit_results.l1.json\n============================================================\n[合法] TB L1 文件格式符合要求。✓\n\n"
+          }
+        ],
+        "passed": 1,
+        "total": 1
+      },
+      "outputs": [
+        {
+          "path": "10B/tb/L1/figures/143_observe_20C_265_ch1_fit.l1.jpg",
+          "sha256": "f6e6db97977616fa09eb5b671fe4cf95e4ea413d1d6f144ee8bc3d52fced4430",
+          "job_id": "bfdee00df4cf"
+        },
+        {
+          "path": "10B/tb/L1/json/143_observe_20C_265_fit_results.l1.json",
+          "sha256": "4a6d1c18d3e94ab2d35de97d509139ea23fcfa0a381680f58da3b2a3cc8d550d",
+          "job_id": "bfdee00df4cf"
+        },
+        {
+          "path": "10B/tb/L1/json/fit_windows_used.json",
+          "sha256": "cd9de3c5ddc17a69a76c697f3d8d041501a3bcacbf6c06461670e142a2dd7bd5",
+          "job_id": "bfdee00df4cf"
+        },
+        {
+          "path": "10B/tb/L1/json/L1_manifest.json",
+          "sha256": "99c5a9d57d62be5f247b8141aaaa9e9b1c604b138cd77f591948d3c9405b2122",
+          "job_id": "bfdee00df4cf"
+        }
+      ],
+      "finished_at": "2026-10-25T09:00:31+00:00",
+      "invalidated_l1_points": [],
+      "acquisition_coverage": {
+        "completed": 64,
+        "required": 64,
+        "missing": [],
+        "current": true,
+        "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b"
+      }
+    },
+    "d2fbe15c9f88": {
+      "id": "d2fbe15c9f88",
+      "layer": "TB_L2",
+      "status": "succeeded",
+      "created_at": "2026-10-25T09:03:26+00:00",
+      "config_revision": 2,
+      "config": {
+        "windows": {
+          "181_observe_-20C_290": {
+            "1": {
+              "lo": 3639.819,
+              "hi": 4744.98710442134
+            }
+          },
+          "143_observe_20C_265": {
+            "1": {
+              "lo": 517.4687062916222,
+              "hi": 712.5312937083778
+            }
+          }
+        },
+        "excluded": [],
+        "ec_windows": {},
+        "ec_excluded": [],
+        "representative": true
+      },
+      "scope": "representative",
+      "tb_version": {
+        "filename": "2610231157_10B_TB.l2.json",
+        "sha256": "a01822bde025a6cadb7a3ddbec4ae852b991d45a3636cbbfe789675cc6fd204c",
+        "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\0125dfe18afa\\products\\10B\\tb\\L2\\json\\2610231157_10B_TB.l2.json",
+        "origin": "computed",
+        "job_id": "0125dfe18afa"
+      },
+      "acquisition": {
+        "revision": 1,
+        "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+        "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\profile.json",
+        "file_sha256": "9bd6226091f036568338e7b87414725c2a6e43ada2f726de850eba495a41b5e0",
+        "xml": [
+          {
+            "role": "event",
+            "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\event.xml",
+            "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+          },
+          {
+            "role": "hk",
+            "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\hk.xml",
+            "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+          }
+        ]
+      },
+      "acquisition_preset": {
+        "id": "b5bc272f0378488ba85880b1",
+        "name": "10B · 560B 波形与稳态遥测",
+        "payload": "10B",
+        "version": 1,
+        "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+        "created_at": "2026-10-20T12:02:25+00:00",
+        "origin": "manual",
+        "modified": false
+      },
+      "error": null,
+      "started_at": "2026-10-25T09:03:26+00:00",
+      "result": {
+        "success": true,
+        "partial": false,
+        "errors": [],
+        "warnings": [
+          "13 suspected points included in TB surface fitting"
+        ],
+        "layer": "TB_L2",
+        "quality": {},
+        "payload": "10B",
+        "outputs": [
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\json\\2610251703_10B_TB.l2.json",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\figures\\2610251703_10B_ch0_TB_fit.l2.png",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\figures\\2610251703_10B_ch1_TB_fit.l2.png",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\figures\\2610251703_10B_ch2_TB_fit.l2.png"
+        ],
+        "output_paths": [
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\json\\2610251703_10B_TB.l2.json",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\figures\\2610251703_10B_ch0_TB_fit.l2.png",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\figures\\2610251703_10B_ch1_TB_fit.l2.png",
+          "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\jobs\\d2fbe15c9f88\\products\\10B\\tb\\L2\\figures\\2610251703_10B_ch2_TB_fit.l2.png"
+        ],
+        "counts": {
+          "outputs": 4,
+          "processed": 0
+        },
+        "scope": {
+          "representative": true,
+          "only": null
+        },
+        "hydrated_historical_inputs": [],
+        "tb_dependency": null,
+        "processor": {
+          "payload": "10B",
+          "layer": "TB_L2",
+          "timestamp": "2610251703",
+          "k_init": 0.0184,
+          "fit_params": [
+            {
+              "G0": 0.0065839241853899695,
+              "V0": 24.11589593110201,
+              "b": 53.54115467101672,
+              "c": 22319.567429979164,
+              "k": 0.01846470462511274,
+              "G0_err": 2.4876707928821657e-05,
+              "V0_err": 0.0008477371982407038,
+              "b_err": 0.32873223280436553,
+              "c_err": 81.31924826923257,
+              "k_err": 2.4946317400447157e-05,
+              "chi2": 23413.037149862274,
+              "rmse": 23.605690908698325,
+              "mape_percent": 0.8542740569002276,
+              "chi2_reduced": 396.8311381332589,
+              "n_points": 64,
+              "channel": 0,
+              "payload": "10B"
+            },
+            {
+              "G0": 0.005557109728835075,
+              "V0": 24.072456317585715,
+              "b": 47.95712533619288,
+              "c": 28425.55361133378,
+              "k": 0.018370954862889463,
+              "G0_err": 2.4576803023109888e-05,
+              "V0_err": 0.0007296071492080211,
+              "b_err": 0.3302849556552335,
+              "c_err": 122.53765378969393,
+              "k_err": 1.987598708286752e-05,
+              "chi2": 30637.78378298921,
+              "rmse": 25.892713915379453,
+              "mape_percent": 0.9045090357803913,
+              "chi2_reduced": 519.2844708981222,
+              "n_points": 64,
+              "channel": 1,
+              "payload": "10B"
+            },
+            {
+              "G0": 0.005959108323198197,
+              "V0": 24.06858041300628,
+              "b": 34.31586115263839,
+              "c": 24829.571920633232,
+              "k": 0.018893715581761537,
+              "G0_err": 2.1820827060256626e-05,
+              "V0_err": 0.0006013644926865052,
+              "b_err": 0.254952196840906,
+              "c_err": 88.77754503665986,
+              "k_err": 1.7820177030625807e-05,
+              "chi2": 33643.711013633496,
+              "rmse": 25.44777629960861,
+              "mape_percent": 0.9532745641627517,
+              "chi2_reduced": 570.2323900615846,
+              "n_points": 64,
+              "channel": 2,
+              "payload": "10B"
+            },
+            null
+          ],
+          "output_json": "2610251703_10B_TB.l2.json",
+          "output_figures": [
+            "2610251703_10B_ch0_TB_fit.l2.png",
+            "2610251703_10B_ch1_TB_fit.l2.png",
+            "2610251703_10B_ch2_TB_fit.l2.png"
+          ],
+          "errors": [],
+          "warnings": [
+            "13 suspected points included in TB surface fitting"
+          ],
+          "quality_policy": "warning_only",
+          "included_points": [
+            "10B:094_observe_50C_290:0",
+            "10B:101_observe_50C_285:0",
+            "10B:102_observe_50C_287:0",
+            "10B:103_observe_50C_283:0",
+            "10B:104_observe_50C_280:0",
+            "10B:105_observe_50C_275:0",
+            "10B:106_observe_50C_270:0",
+            "10B:108_observe_50C_265:0",
+            "10B:113_observe_40C_290:0",
+            "10B:114_observe_40C_287:0",
+            "10B:115_observe_40C_285:0",
+            "10B:116_observe_40C_283:0",
+            "10B:117_observe_40C_280:0",
+            "10B:118_observe_40C_275:0",
+            "10B:119_observe_40C_270:0",
+            "10B:120_observe_40C_265:0",
+            "10B:125_observe_30C_290:0",
+            "10B:126_observe_30C_285:0",
+            "10B:127_observe_30C_287:0",
+            "10B:128_observe_30C_283:0",
+            "10B:129_observe_30C_280:0",
+            "10B:130_observe_30C_275:0",
+            "10B:131_observe_30C_270:0",
+            "10B:132_observe_30C_265:0",
+            "10B:136_observe_20C_290:0",
+            "10B:137_observe_20C_287:0",
+            "10B:138_observe_20C_285:0",
+            "10B:139_observe_20C_283:0",
+            "10B:140_observe_20C_280:0",
+            "10B:141_observe_20C_275:0",
+            "10B:142_observe_20C_270:0",
+            "10B:143_observe_20C_265:0",
+            "10B:147_observe_10C_290:0",
+            "10B:148_observe_10C_287:0",
+            "10B:149_observe_10C_285:0",
+            "10B:150_observe_10C_283:0",
+            "10B:151_observe_10C_280:0",
+            "10B:152_observe_10C_275:0",
+            "10B:153_observe_10C_270:0",
+            "10B:154_observe_10C_265:0",
+            "10B:155_observe_0C_290:0",
+            "10B:156_observe_0C_287:0",
+            "10B:157_observe_0C_285:0",
+            "10B:158_observe_0C_283:0",
+            "10B:160_observe_0C_280:0",
+            "10B:161_observe_0C_275:0",
+            "10B:162_observe_0C_270:0",
+            "10B:163_observe_0C_265:0",
+            "10B:169_observe_-10C_290:0",
+            "10B:170_observe_-10C_287:0",
+            "10B:171_observe_-10C_285:0",
+            "10B:172_observe_-10C_283:0",
+            "10B:173_observe_-10C_280:0",
+            "10B:175_observe_-10C_275:0",
+            "10B:176_observe_-10C_270:0",
+            "10B:177_observe_-10C_265:0",
+            "10B:181_observe_-20C_290:0",
+            "10B:182_observe_-20C_287:0",
+            "10B:183_observe_-20C_285:0",
+            "10B:184_observe_-20C_283:0",
+            "10B:185_observe_-20C_280:0",
+            "10B:187_observe_-20C_275:0",
+            "10B:188_observe_-20C_270:0",
+            "10B:189_observe_-20C_265:0",
+            "10B:094_observe_50C_290:1",
+            "10B:101_observe_50C_285:1",
+            "10B:102_observe_50C_287:1",
+            "10B:103_observe_50C_283:1",
+            "10B:104_observe_50C_280:1",
+            "10B:105_observe_50C_275:1",
+            "10B:106_observe_50C_270:1",
+            "10B:108_observe_50C_265:1",
+            "10B:113_observe_40C_290:1",
+            "10B:114_observe_40C_287:1",
+            "10B:115_observe_40C_285:1",
+            "10B:116_observe_40C_283:1",
+            "10B:117_observe_40C_280:1",
+            "10B:118_observe_40C_275:1",
+            "10B:119_observe_40C_270:1",
+            "10B:120_observe_40C_265:1",
+            "10B:125_observe_30C_290:1",
+            "10B:126_observe_30C_285:1",
+            "10B:127_observe_30C_287:1",
+            "10B:128_observe_30C_283:1",
+            "10B:129_observe_30C_280:1",
+            "10B:130_observe_30C_275:1",
+            "10B:131_observe_30C_270:1",
+            "10B:132_observe_30C_265:1",
+            "10B:136_observe_20C_290:1",
+            "10B:137_observe_20C_287:1",
+            "10B:138_observe_20C_285:1",
+            "10B:139_observe_20C_283:1",
+            "10B:140_observe_20C_280:1",
+            "10B:141_observe_20C_275:1",
+            "10B:142_observe_20C_270:1",
+            "10B:143_observe_20C_265:1",
+            "10B:147_observe_10C_290:1",
+            "10B:148_observe_10C_287:1",
+            "10B:149_observe_10C_285:1",
+            "10B:150_observe_10C_283:1",
+            "10B:151_observe_10C_280:1",
+            "10B:152_observe_10C_275:1",
+            "10B:153_observe_10C_270:1",
+            "10B:154_observe_10C_265:1",
+            "10B:155_observe_0C_290:1",
+            "10B:156_observe_0C_287:1",
+            "10B:157_observe_0C_285:1",
+            "10B:158_observe_0C_283:1",
+            "10B:160_observe_0C_280:1",
+            "10B:161_observe_0C_275:1",
+            "10B:162_observe_0C_270:1",
+            "10B:163_observe_0C_265:1",
+            "10B:169_observe_-10C_290:1",
+            "10B:170_observe_-10C_287:1",
+            "10B:171_observe_-10C_285:1",
+            "10B:172_observe_-10C_283:1",
+            "10B:173_observe_-10C_280:1",
+            "10B:175_observe_-10C_275:1",
+            "10B:176_observe_-10C_270:1",
+            "10B:177_observe_-10C_265:1",
+            "10B:181_observe_-20C_290:1",
+            "10B:182_observe_-20C_287:1",
+            "10B:183_observe_-20C_285:1",
+            "10B:184_observe_-20C_283:1",
+            "10B:185_observe_-20C_280:1",
+            "10B:187_observe_-20C_275:1",
+            "10B:188_observe_-20C_270:1",
+            "10B:189_observe_-20C_265:1",
+            "10B:094_observe_50C_290:2",
+            "10B:101_observe_50C_285:2",
+            "10B:102_observe_50C_287:2",
+            "10B:103_observe_50C_283:2",
+            "10B:104_observe_50C_280:2",
+            "10B:105_observe_50C_275:2",
+            "10B:106_observe_50C_270:2",
+            "10B:108_observe_50C_265:2",
+            "10B:113_observe_40C_290:2",
+            "10B:114_observe_40C_287:2",
+            "10B:115_observe_40C_285:2",
+            "10B:116_observe_40C_283:2",
+            "10B:117_observe_40C_280:2",
+            "10B:118_observe_40C_275:2",
+            "10B:119_observe_40C_270:2",
+            "10B:120_observe_40C_265:2",
+            "10B:125_observe_30C_290:2",
+            "10B:126_observe_30C_285:2",
+            "10B:127_observe_30C_287:2",
+            "10B:128_observe_30C_283:2",
+            "10B:129_observe_30C_280:2",
+            "10B:130_observe_30C_275:2",
+            "10B:131_observe_30C_270:2",
+            "10B:132_observe_30C_265:2",
+            "10B:136_observe_20C_290:2",
+            "10B:137_observe_20C_287:2",
+            "10B:138_observe_20C_285:2",
+            "10B:139_observe_20C_283:2",
+            "10B:140_observe_20C_280:2",
+            "10B:141_observe_20C_275:2",
+            "10B:142_observe_20C_270:2",
+            "10B:143_observe_20C_265:2",
+            "10B:147_observe_10C_290:2",
+            "10B:148_observe_10C_287:2",
+            "10B:149_observe_10C_285:2",
+            "10B:150_observe_10C_283:2",
+            "10B:151_observe_10C_280:2",
+            "10B:152_observe_10C_275:2",
+            "10B:153_observe_10C_270:2",
+            "10B:154_observe_10C_265:2",
+            "10B:155_observe_0C_290:2",
+            "10B:156_observe_0C_287:2",
+            "10B:157_observe_0C_285:2",
+            "10B:158_observe_0C_283:2",
+            "10B:160_observe_0C_280:2",
+            "10B:161_observe_0C_275:2",
+            "10B:162_observe_0C_270:2",
+            "10B:163_observe_0C_265:2",
+            "10B:169_observe_-10C_290:2",
+            "10B:170_observe_-10C_287:2",
+            "10B:171_observe_-10C_285:2",
+            "10B:172_observe_-10C_283:2",
+            "10B:173_observe_-10C_280:2",
+            "10B:175_observe_-10C_275:2",
+            "10B:176_observe_-10C_270:2",
+            "10B:177_observe_-10C_265:2",
+            "10B:181_observe_-20C_290:2",
+            "10B:182_observe_-20C_287:2",
+            "10B:183_observe_-20C_285:2",
+            "10B:184_observe_-20C_283:2",
+            "10B:185_observe_-20C_280:2",
+            "10B:187_observe_-20C_275:2",
+            "10B:188_observe_-20C_270:2",
+            "10B:189_observe_-20C_265:2"
+          ],
+          "excluded_points": [],
+          "suspect_points": [
+            {
+              "id": "10B:108_observe_50C_265:2",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:119_observe_40C_270:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:120_observe_40C_265:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:120_observe_40C_265:1",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:131_observe_30C_270:1",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:132_observe_30C_265:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:132_observe_30C_265:1",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:142_observe_20C_270:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:143_observe_20C_265:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:143_observe_20C_265:1",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:154_observe_10C_265:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:177_observe_-10C_265:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            },
+            {
+              "id": "10B:189_observe_-20C_265:0",
+              "warnings": [
+                "Counting residuals exceed the single-peak/background model (reduced chi-square > 3)"
+              ]
+            }
+          ]
+        },
+        "processor_class": "TBL2Processor",
+        "acquisition": {
+          "revision": 1,
+          "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+          "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\profile.json",
+          "file_sha256": "9bd6226091f036568338e7b87414725c2a6e43ada2f726de850eba495a41b5e0",
+          "xml": [
+            {
+              "role": "event",
+              "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\event.xml",
+              "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+            },
+            {
+              "role": "hk",
+              "path": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-111431-6e9fdd63c95a\\acquisition\\0001-f8ff6d238df2\\hk.xml",
+              "sha256": "acd58a72c1a8e5d314715b813b7caf18bb7989625a3c827268f8da107fa34710"
+            }
+          ]
+        }
+      },
+      "validation": {
+        "status": "passed",
+        "checker": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\cali_format\\src\\check\\TB_L2.py",
+        "checker_sha256": "5b8f4e51ae650c60aceecd19659f91033e311a2ba18255e22823435b0c23faee",
+        "files": [
+          {
+            "file": "2610251703_10B_TB.l2.json",
+            "valid": true,
+            "details": "\n============================================================\n文件：2610251703_10B_TB.l2.json\n============================================================\n[合法] 文件格式完全符合要求。✓\n\n"
+          }
+        ],
+        "passed": 1,
+        "total": 1
+      },
+      "outputs": [
+        {
+          "path": "10B/tb/L2/figures/2610251703_10B_ch0_TB_fit.l2.png",
+          "sha256": "2796e68daaa6079a3ce27505f3e3dd4db093c7de829b194ab60d064584518c15",
+          "job_id": "d2fbe15c9f88"
+        },
+        {
+          "path": "10B/tb/L2/figures/2610251703_10B_ch1_TB_fit.l2.png",
+          "sha256": "c8c7beffcd33cff24b26a5a26cea8fe75b37207486d8514e2755785d0962eb25",
+          "job_id": "d2fbe15c9f88"
+        },
+        {
+          "path": "10B/tb/L2/figures/2610251703_10B_ch2_TB_fit.l2.png",
+          "sha256": "b05d4a471a6ba84612fed29c867756e61d9cd184f12abd6a97b49b648ec0bf73",
+          "job_id": "d2fbe15c9f88"
+        },
+        {
+          "path": "10B/tb/L2/json/2610251703_10B_TB.l2.json",
+          "sha256": "699444d0df6bb30447b1897fd231b9773e835f432945b788c9a48b7a8bf92b59",
+          "job_id": "d2fbe15c9f88"
+        },
+        {
+          "path": "10B/tb/L2/json/L2_manifest.json",
+          "sha256": "9edae3e434651fc52712c8a34eff8e33355900eac3ded9a8eb3fc06a59442736",
+          "job_id": "d2fbe15c9f88"
+        }
+      ],
+      "finished_at": "2026-10-25T09:03:34+00:00",
+      "acquisition_coverage": {
+        "completed": 1,
+        "required": 1,
+        "missing": [],
+        "current": true,
+        "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b"
+      }
+    }
+  },
+  "browser": {
+    "url": "http://127.0.0.1:8765/",
+    "screenshot": "warning-only-review.png",
+    "console_errors": 0,
+    "suspect_fit_completed": true,
+    "subsequent_tb_l2_completed": true
+  },
+  "wheel": {
+    "file": "grid_calibration_lib-0.1.0-py3-none-any.whl",
+    "sha256": "338dd7c25fd721bcaec7d09bc8adab01e4c1324d8e7d53fe16fccc8c51a356d6",
+    "source_byte_matches": 72
+  },
+  "preserved_experiments": {
+    "experiment/cp2-quality-a": "3f2621085ef9b582c7a82b49114141e942959115",
+    "experiment/cp2-quality-b": "8e66e62afc6e1d0ca20c6782d46f80e040e279f0"
+  },
+  "git_status": "?? uv.lock"
+}

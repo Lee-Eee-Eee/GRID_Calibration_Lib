@@ -1,0 +1,29 @@
+{
+  "folder": "01-main-part1",
+  "title": "实现 GRID Calibration 可视化 Demo：第一段",
+  "source_file": "rollout-2026-10-19T08-12-07-01a15180-56ce-7a71-8908-19447fc47174.jsonl",
+  "source_bytes": 35114447,
+  "source_lines": 7251,
+  "source_sha256": "7c4d88d2aefdb40b71f327b17a48a8874aa86beb2086c90cfcdb02aadfb3f9bb",
+  "event_lines": 7251,
+  "events_sha256": "19ff7f3ab2c2b3f2f289f230df4f065e12d5b1ddaceaf3c5f0d887ef9b02a3e2",
+  "events_bytes": 30336148,
+  "gzip_bytes": 13005500,
+  "readable_parts": [
+    "conversation-01.md"
+  ],
+  "redaction_counts": {
+    "account_identifiers": 2,
+    "instruction_fields": 39,
+    "instruction_items": 37,
+    "reasoning_items": 1662,
+    "encrypted_fields": 251
+  },
+  "session_meta": {
+    "session_id": "01a15180-56ce-7a71-8908-19447fc47174",
+    "id": "01a15180-56ce-7a71-8908-19447fc47174",
+    "timestamp": "2026-10-19T00:12:07.766Z",
+    "cwd": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding",
+    "history_mode": "paginated"
+  }
+}

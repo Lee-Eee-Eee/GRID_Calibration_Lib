@@ -1,0 +1,56 @@
+{
+  "verified_at_utc": "2026-10-25T14:49:02.754359+00:00",
+  "checks": [
+    {
+      "folder": "01-main-part1",
+      "lines": 7251,
+      "gzip_matches": true,
+      "sha256_matches": true
+    },
+    {
+      "folder": "02-main-part2",
+      "lines": 6876,
+      "gzip_matches": true,
+      "sha256_matches": true
+    },
+    {
+      "folder": "03-common-before-fork",
+      "lines": 75,
+      "gzip_matches": true,
+      "sha256_matches": true
+    },
+    {
+      "folder": "04-common-full",
+      "lines": 220,
+      "gzip_matches": true,
+      "sha256_matches": true
+    },
+    {
+      "folder": "05-experiment-a",
+      "lines": 921,
+      "gzip_matches": true,
+      "sha256_matches": true
+    },
+    {
+      "folder": "06-experiment-b",
+      "lines": 861,
+      "gzip_matches": true,
+      "sha256_matches": true
+    },
+    {
+      "folder": "07-planning-part1",
+      "lines": 297,
+      "gzip_matches": true,
+      "sha256_matches": true
+    },
+    {
+      "folder": "08-planning-part2",
+      "lines": 3814,
+      "gzip_matches": true,
+      "sha256_matches": true
+    }
+  ],
+  "credential_pattern_scan": "passed",
+  "reasoning_and_encrypted_content_check": "passed",
+  "all_files_below_45_MiB": true
+}
