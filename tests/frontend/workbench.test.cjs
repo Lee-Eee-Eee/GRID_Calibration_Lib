@@ -14,7 +14,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function controller() {
+function controller({ absentSelectors = [] } = {}) {
   const elements = new Map();
   const stored = new Map();
   class Element {
@@ -50,7 +50,7 @@ function controller() {
     return elements.get(id);
   }
   const context = vm.createContext({
-    document: { getElementById: element, createElement: () => new Element(), querySelectorAll: () => [], querySelector: element, body: new Element() },
+    document: { getElementById: element, createElement: () => new Element(), querySelectorAll: () => [], querySelector: selector => absentSelectors.includes(selector) ? null : element(selector), body: new Element() },
     window: { addEventListener() {} },
     Option: class { constructor(text, value) { this.text = text; this.value = value; } },
     fetch: () => new Promise(() => {}), // Bootstrap remains pending; every test supplies explicit data.
@@ -69,6 +69,10 @@ function controller() {
   `, context);
   return { run: source => vm.runInContext(source, context), element };
 }
+
+test('the controller starts without decorative pipeline help paragraphs', () => {
+  assert.doesNotThrow(() => controller({ absentSelectors: ['.pipeline-menu p'] }));
+});
 
 test('TB layer switch while rendering cannot select a point from the old layer', async () => {
   const ui = controller();
@@ -1300,7 +1304,7 @@ test('saved source windows remain pending despite an existing fit until that ene
   await ui.run('selectEcPoint(oldFit)');
   assert.equal(Number(ui.element('window-lo').value),6500);
   assert.equal(Number(ui.element('window-hi').value),7900);
-  assert.equal(ui.element('window-status').textContent,'修订已保存 · 待拟合');
+  assert.equal(ui.element('window-status').textContent,'待重拟合');
   ui.run('state.run.pending_ec_windows=[];renderEcSourceConfig();');
   assert.equal(ui.element('ec-peak-rows').children[1].children[4].textContent,'已拟合');
 });

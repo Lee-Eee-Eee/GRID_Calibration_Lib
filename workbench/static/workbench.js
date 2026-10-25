@@ -135,7 +135,7 @@ function renderUnpackWorkspace() {
   const holder = clear($("unpack-files"));
   for (const [label, value] of [["Event", state.point?.event], ["HK", state.point?.hk]]) { const row = node("span"); row.title = value || ""; row.append(node("b", "", label), node("span", "", value ? value.split(/[\\/]/).pop() : state.point ? "未匹配原始文件" : "选择文件后显示配对文件")); holder.append(row); }
   const reason = unpackDisabledReason();
-  $("unpack-action-hint").textContent = reason || `将解包 ${state.point.stem} · 输出包含全部通道`;
+  $("unpack-action-hint").textContent = reason || "";
   updateUnpackControls();
   const job = currentLayerJob();
   if (job) renderUnpackProgress(job);
@@ -146,13 +146,13 @@ function updateUnpackControls() {
   $("unpack-file").disabled = state.loading || state.busy;
   $("unpack-settings").disabled = !state.run || state.busy;
   $("unpack-data").disabled = state.busy;
-  if (isUnpackLayer()) $("unpack-action-hint").textContent = unpackDisabledReason() || `将解包 ${state.point.stem} · 输出包含全部通道`;
+  if (isUnpackLayer()) $("unpack-action-hint").textContent = unpackDisabledReason() || "";
 }
 function renderUnpackProgress(job) {
   if (!isUnpackLayer() || job.layer !== state.layer) return;
   const holder = $("unpack-progress"), status = normalizedStatus(job.status);
   holder.hidden = false; holder.dataset.status = status;
-  holder.textContent = `${statusNames[status] || status} · ${job.config?.only?.join(", ") || job.stem || job.request?.stem || "本层解包任务"}${job.error ? ` · ${jobErrorText(job.error)}` : status === "succeeded" ? " · 新产物与日志已保存" : " · 可在运行记录中查看处理器日志"}`;
+  holder.textContent = `${statusNames[status] || status} · ${job.config?.only?.join(", ") || job.stem || job.request?.stem || "本层解包任务"}${job.error ? ` · ${jobErrorText(job.error)}` : ""}`;
 }
 async function runUnpack(all = false) {
   const reason = unpackDisabledReason(all); if (reason) throw new Error(reason);
@@ -289,7 +289,7 @@ function renderStage() {
   $("stage-analysis").hidden = true;
   configureLayerPanels(); renderCurrentStatus(); renderUnpackWorkspace();
   $("stage-overview-title").textContent = layer.heading;
-  $("stage-overview-caption").textContent = "处理依赖与产物预览";
+  $("stage-overview-caption").textContent = "";
   const flow = clear($("stage-flow"));
   [{ label: "输入", text: layer.input }, { label: "处理", text: layer.process }, { label: "输出", text: layer.output }].forEach((item, index) => {
     if (index) flow.append(node("span", "flow-arrow", "→"));
@@ -352,7 +352,7 @@ function renderArtifacts() {
   state.artifactListSignature = signature;
   const list = clear($("artifact-list"));
   $("artifact-count").textContent = items.length;
-  if (!items.length) { list.append(node("p", "empty-list", "本层暂无产物；运行处理器后会显示真实输出。")); return; }
+  if (!items.length) { list.append(node("p", "empty-list", "暂无产物")); return; }
   for (const item of items) {
     const row = node("div", "artifact-row"); const name = item.name || String(item.path).split(/[\\/]/).pop();
     const extension = name.includes(".") ? name.split(".").pop().toUpperCase() : "FILE";
@@ -524,8 +524,8 @@ async function renderTBSurface() {
   const active = points.filter(isUsed); const residuals = active.map(residualPercent).filter(Number.isFinite);
   $("residual-metric").textContent = residuals.length ? `MAPE ${number(residuals.reduce((sum, val) => sum + Math.abs(val), 0) / residuals.length, 2)}%` : "—";
   $("point-count").textContent = `${active.length} / ${points.length} 参与拟合`;
-  $("surface-caption").textContent = `${state.run.payload} / CH ${state.channel} · 选择测量点查看能谱`;
-  if (data.dirty) $("surface-caption").textContent += " · 配置已变化，曲面待重算";
+  $("surface-caption").textContent = "";
+  if (data.dirty) $("surface-caption").textContent = "曲面待重算";
   renderParams();
 }
 
@@ -635,7 +635,7 @@ async function renderL1QualityOverview() {
     const item = node("span", `l1-quality-count status-${status}`, `${style.glyph} ${style.label} ${summary.counts[status]}`);
     item.dataset.qualityStatus = status; counts.append(item);
   }
-  $("l1-quality-note").textContent = `CH ${state.channel} · ${summary.total} 个工况 · ${summary.total - summary.missingCoordinates} 个已定位 · 约化 χ² 缺失 ${summary.missingMetrics}${summary.missingCoordinates ? ` · 缺少实测坐标 ${summary.missingCoordinates}` : ""} · 灰色表示指标缺失${state.point ? ` · 当前复核 ${state.point.stem}` : ""}`;
+  $("l1-quality-note").textContent = [summary.missingMetrics ? `${summary.missingMetrics} 个工况缺少约化 χ²` : "", summary.missingCoordinates ? `${summary.missingCoordinates} 个工况缺少实测坐标` : ""].filter(Boolean).join(" · ");
   const unlocated = $("l1-quality-unlocated"); unlocated.hidden = !summary.missingCoordinates;
   const missingList = clear($("l1-quality-unlocated-list"));
   for (const point of points.filter(item => l1QualityNumber(item.temp) === null || l1QualityNumber(item.bias) === null)) {
@@ -676,7 +676,7 @@ function ecPeakIdentity(key, energy, channel = state.channel) {
   const label=exponent < -4 || exponent >= 6 ? value.toExponential().replace(/e([+-])(\d)$/, "e$10$2") : String(value);
   return `${state.run.payload}:ec:${key}:${channel}:${label}`;
 }
-function ecPeakChanged() { state.ecPeakDirty = true; $("ec-peak-save-status").textContent = "能线配置已修改 · 待保存"; }
+function ecPeakChanged() { state.ecPeakDirty = true; $("ec-peak-save-status").textContent = "待保存"; }
 function captureEcPeakWindow() {
   const draft = state.ecPeakDraft;
   if (!draft || draft.energy_key !== currentEcSourceKey() || !state.dirty) return;
@@ -690,18 +690,18 @@ function renderEcSourceConfig() {
   if (panel.hidden) return;
   const select = clear($("ec-spectrum-select")), source = currentEcSource();
   select.append(new Option("切换至放射源谱…", ""));
-  for (const item of spectra) select.append(new Option(`${item.source_name || item.energy_key} · ${String(item.signal_file || item.energy_key).split(/[\\/]/).pop()}`, item.energy_key));
+  for (const item of spectra) select.append(new Option(String(item.signal_file || item.source_name || item.energy_key).split(/[\\/]/).pop(), item.energy_key));
   select.value = source?.energy_key || ""; $("ec-source-channel").textContent = `CH ${state.channel}`;
   $("ec-source-editor").hidden = !source; $("ec-source-name").disabled = !source || state.busy;
-  if (!source) { $("ec-source-name").value = ""; $("ec-source-caption").textContent = "从文件名与载荷预设预载能线，选择源谱后可增添或修改"; return; }
+  if (!source) { $("ec-source-name").value = ""; $("ec-source-caption").textContent = ""; return; }
   const key = `${state.run.id}:${source.energy_key}`;
   if (!state.ecPeakDraft || state.ecPeakDraftKey !== key || !state.ecPeakDirty) {
     state.ecPeakDraft = JSON.parse(JSON.stringify(source)); state.ecPeakDraftKey = key; state.ecPeakDirty = false;
   }
   const draft = state.ecPeakDraft, holder = clear($("ec-peak-rows"));
   $("ec-source-name").value = draft.source_name || "";
-  $("ec-source-caption").textContent = `${String(source.signal_file || source.energy_key).split(/[\\/]/).pop()} · 每条能线独立对应 ADC 窗口`;
-  $("ec-peak-save-status").textContent = state.ecPeakDirty ? "能线配置已修改 · 待保存" : "能线配置已保存";
+  $("ec-source-caption").textContent = "";
+  $("ec-peak-save-status").textContent = state.ecPeakDirty ? "待保存" : "";
   for (const [index, line] of draft.lines.entries()) {
     const active = Number(line.energy_keV) === Number(state.point?.E), row = node("tr", active ? "active" : ""); row.dataset.energy = line.energy_keV;
     if(active) state.ecPeakSelectedIndex=index;
@@ -722,7 +722,8 @@ function renderEcSourceConfig() {
       }); cell.append(input); row.append(cell);
     }
     row.append(node("td", "", pending ? "待重拟合" : point?.fit_status === "not_fitted" || !point || point.center == null ? "待拟合" : hasQualityWarning(point) ? "疑似问题" : "已拟合"));
-    const actions = node("td", "ec-peak-actions"), choose = node("button", "text-button", active ? "当前峰" : "查看 / 选窗"), remove = node("button", "text-button", "移除");
+    const actions = node("td", "ec-peak-actions"), choose = node("button", "text-button", "查看"), remove = node("button", "text-button", "移除");
+    choose.setAttribute("aria-pressed", String(active));
     choose.type = remove.type = "button";
     choose.addEventListener("click", handleError(() => selectEcPeakLine(index)));
     remove.addEventListener("click", () => { draft.lines.splice(index, 1); if(index <= state.ecPeakSelectedIndex) state.ecPeakSelectedIndex=Math.max(0,state.ecPeakSelectedIndex-1); ecPeakChanged(); renderEcSourceConfig(); });
@@ -777,7 +778,7 @@ async function saveEcPeakConfig(reload = true) {
     state.ecPeakConfig = result; state.ecPeakDirty = false; state.ecPeakDraft = null;
     if (selectedEnergy && state.point?.id === selectedId && currentEcSourceKey() === body.energy_key && Number(state.point.E) !== selectedEnergy) { state.point={...state.point,id:ecPeakIdentity(body.energy_key,selectedEnergy),E:selectedEnergy,center:null,fit_status:"not_fitted"}; rememberView(); }
     recordSavedFiles(result.saved_files || result.files || [], "能线与窗口配置");
-    $("ec-peak-save-status").textContent = "能线与窗口已保存";
+    $("ec-peak-save-status").textContent = "已保存";
     if (reload && context === ecSourceContext()) { await refreshRun(false); await loadSurfaceSafely(); }
     else renderEcSourceConfig();
     return result;
@@ -1013,7 +1014,7 @@ async function selectPoint(point) {
     displayWindowValue("window-lo", override?.lo ?? fit.window_lo ?? fit.lo ?? spectrum.histogram_config?.min ?? "");
     displayWindowValue("window-hi", override?.hi ?? fit.window_hi ?? fit.hi ?? spectrum.histogram_config?.max ?? "");
     $("window-lo").disabled = state.busy; $("window-hi").disabled = state.busy;
-    $("window-status").textContent = unsupportedSpectralModel() ? "康普顿响应 · 拟合方案待定" : (state.run.pending_windows || []).includes(point.id) ? "修订已保存 · 待拟合" : override ? "已应用修订窗" : spectrum.fit ? "当前拟合窗" : "尚未拟合 · 可自动寻峰或设置窗口";
+    $("window-status").textContent = unsupportedSpectralModel() ? "模型待定" : (state.run.pending_windows || []).includes(point.id) ? "待重拟合" : spectrum.fit ? "" : "未拟合";
     const params = clear($("spectrum-params"));
     for (const [label, value] of [["峰位 / ADC", `${number(fit.center, 3)} ± ${number(fit.center_err, 3)}`], ["σ / ADC", number(fit.sigma, 3)], ["分辨率", fit.resolution === undefined ? "—" : `${number(fit.resolution * (fit.resolution > 1 ? 1 : 100), 2)}%`], ["R²", number(fit.rsquared, 5)], ["拟合模型", fit.fit_mode || fit.mode || "—"]]) {
       const item = node("div", "param-item"); item.append(node("span", "", label), node("strong", "", value)); params.append(item);
@@ -1053,7 +1054,7 @@ async function renderSpectrum() {
   await Plotly.react(plotTarget(chart), traces, { margin: { l: 55, r: 16, t: editable ? 28 : 14, b: 41 }, font: chartFont, hoverlabel: chartHover, paper_bgcolor: "#fff", plot_bgcolor: "#fff", showlegend: false, xaxis: { ...axisStyle, title: { text: state.layer.startsWith("EC") && state.layer !== "EC_L0" ? "校正 ADC" : "ADC", standoff: 5 }, range }, yaxis: { ...axisStyle, title: { text: data.y_label || (binWidth ? `计数 / ${number(binWidth, 3)} ADC bin` : "计数 / bin"), standoff: 6 }, type: hasNegative ? "linear" : "log", exponentformat: "power" }, shapes: [...sourceWindows.shapes, ...(editable ? windowShapes(lo, hi) : []), ...peak.shapes], annotations: sourceWindows.annotations, hovermode: "closest", uirevision: `${state.run.id}-${state.channel}-${state.point.id || state.point.stem}` }, plotConfig);
   if (context !== plotContext()) return;
   if (isPeakReviewLayer()) {
-    $("surface-caption").textContent = `${state.point.stem}${state.layer === "EC_L2" ? ` · ${number(state.point.E, 3)} keV` : ""} · CH ${state.channel}${binWidth ? ` · bin ${number(binWidth, 3)} ADC` : ""} · 拖动蓝色边界改窗`;
+    $("surface-caption").textContent = `${state.point.stem}${state.layer === "EC_L2" ? ` · ${number(state.point.E, 3)} keV` : ""}${binWidth && !rateSpectrum ? ` · ${number(binWidth, 3)} ADC/bin` : ""}`;
     $("observed-spectrum-label").textContent = rateSpectrum ? "净计数率" : "计数谱";
     $("fitted-spectrum-label").textContent = curve.y?.length ? "峰 + 背景拟合" : "高斯峰分量";
     $("l1-spectrum-legend").dataset.fitAvailable = String(Boolean(curve.y?.length || curve.gaussian?.length));
@@ -1090,7 +1091,8 @@ async function renderL1Residual(data, range) {
   await Plotly.react(plotTarget(chart), [{type:"scatter",mode:"markers",...residual,marker:{size:3,color:chartColors.blue},hovertemplate:"ADC %{x:.1f}<br>标准化残差 %{y:.2f}<extra></extra>"}], basicPlotLayout("ADC", "标准化残差", {margin:{l:65,r:22,t:8,b:38},xaxis:{...axisStyle,title:{text:"ADC"},range},shapes:guides,uirevision:`${state.run.id}-${state.channel}-${state.point.stem}-residual`}), plotConfig);
   if (context !== plotContext()) return;
   $("residual-metric").textContent = `RMS ${number(Math.sqrt(residual.y.reduce((sum,y)=>sum+y*y,0)/residual.y.length),2)}`;
-  $("residual-caption").textContent = state.layer === "EC_L2" ? "(净计数率 − 拟合) / 传播误差 · 虚线 ±3 · 横轴联动" : "(计数 − 拟合) / √max(观测计数, 1) · 虚线 ±3 · 横轴联动";
+  $("residual-caption").textContent = "";
+  $("residual-chart").title = state.layer === "EC_L2" ? "(净计数率 − 拟合) / 传播误差；虚线 ±3" : "(计数 − 拟合) / √max(观测计数, 1)；虚线 ±3";
 }
 
 function bindL1Axes() {
@@ -1166,7 +1168,7 @@ async function loadEcSpectrum() {
   if (token !== state.ecToken || state.run.id !== runId || state.layer !== layer) return;
   const preview = clear($("artifact-preview"));
   const heading = node("div", "ec-spectrum-heading");
-  heading.append(node("strong", "", `${data.stem} · CH ${channel}`), badge("idle", ["history", "historical"].includes(data.source) ? "历史谱参考" : "本次真实谱"));
+  heading.append(node("strong", "", `${data.stem} · CH ${channel}`));
   const chart = node("div", "chart ec-spectrum-chart"); chart.id = "ec-spectrum-chart";
   preview.append(heading, chart);
   const displayNote = /Histogram is focused/i.test(data.display_note || "") ? "图中聚焦既有 EC 复核窗口，区间外事件已单独计数。" : data.display_note || "";
@@ -1178,7 +1180,7 @@ async function loadEcSpectrum() {
 }
 
 function windowShapes(lo, hi) { if (!(hi > lo)) return []; return [{ type: "rect", xref: "x", yref: "paper", x0: lo, x1: hi, y0: 0, y1: 1, fillcolor: "rgba(36,87,167,0.045)", line: { width: 0 }, layer: "below" }, ...[lo, hi].map((value) => ({ type: "line", xref: "x", yref: "paper", x0: value, x1: value, y0: 0, y1: 1, line: { color: "#6b84a6", width: 1, dash: "dash" } }))]; }
-function renderRunBadge() { $("run-state").textContent = state.loading ? "载入中" : !state.run ? "未选择试算" : state.busy ? "运行中" : state.dirty ? "有未保存修改" : "已保存"; $("run-state").className = `badge ${state.busy ? "running" : state.dirty ? "stale" : "neutral"}`; }
+function renderRunBadge() { $("run-state").textContent = state.loading ? "载入中" : !state.run ? "未选择试算" : state.busy ? "运行中" : state.dirty ? "待保存" : ""; $("run-state").hidden = !$("run-state").textContent; $("run-state").className = `badge ${state.busy ? "running" : state.dirty ? "stale" : "neutral"}`; }
 function updateExcludedButton() { const excluded = isExcluded(state.point); $("toggle-excluded").textContent = excluded ? "恢复此点" : "屏蔽此点"; $("toggle-excluded").className = `button${excluded ? "" : " danger"}`; $("toggle-excluded").disabled = !state.point || state.busy; }
 function setBusy(busy) { state.busy = busy; ["run-layer", "run-pipeline", "refit-tb", "save-run", "new-run", "dataset-settings", "acquisition-settings", "run-select", "payload"].forEach((id) => { $(id).disabled = busy || (!state.run && !["new-run", "dataset-settings", "payload"].includes(id) && !(id === "run-select" && state.bootstrap?.runs?.length)); }); ["fit-spectrum", "window-lo", "window-hi","l1-fit-all-channels"].forEach((id) => { $(id).disabled = busy || state.selecting || !state.spectrum; }); $("review-next-layer").disabled = busy || state.selecting || state.loading; $("apply-tb-version").disabled = busy || !$("tb-version-select").value; $("channel").disabled = state.loading; $("point-select").disabled = state.loading || busy; updateAutoFitControls(); if (state.selecting) $("auto-fit-spectrum").disabled = true; updateExcludedButton(); renderRunBadge(); updateCapabilityControls(); updateSpectralModelControls(); renderEcReviewFiles(); updateUnpackControls(); updateEcSourceControls(); }
 
@@ -1238,7 +1240,7 @@ async function bootstrap() {
   state.loading = true; setBusy(true);
   try {
   state.bootstrap = await api("/api/bootstrap"); state.datasets = state.bootstrap.datasets || []; renderPayloadOptions(); renderRunOptions(); renderNavigation();
-  $("connection-label").textContent = "本地处理服务已连接";
+  $("connection-label").textContent = "已连接";
   const active = state.bootstrap.active_run;
   const ids = (state.bootstrap.runs || []).map((run) => run.id);
   const remembered = localStorage.getItem("grid-workbench-active-run");
@@ -1304,9 +1306,9 @@ async function saveRevision(extra = {}, silent = false) {
   if (context === `${viewContext()}:${state.point?.id}` && values === [$("window-lo").value,$("window-hi").value].join(":")) state.dirty = false;
   renderRun();
   const pending = state.layer.startsWith("EC") ? state.run.pending_ec_windows : state.run.pending_windows;
-  $("window-status").textContent = (pending || []).includes(state.point?.id) ? "修订已保存 · 待拟合" : "已保存修订窗";
+  $("window-status").textContent = (pending || []).includes(state.point?.id) ? "待重拟合" : "";
   if (state.layer === "EC_L2") renderEcSourceConfig();
-  if (!silent) notify("修订配置与说明已保存，重开此试算可恢复。尚未执行的拟合需要点击计算按钮。", "success");
+  if (!silent) notify("修订已保存。", "success");
 }
 
 async function toggleExcluded() {
@@ -1317,7 +1319,7 @@ async function toggleExcluded() {
   const ec = state.layer.startsWith("EC");
   await saveRevision({ [ec ? "ec_excluded" : "excluded"]: ids }, true);
   await loadSurfaceSafely();
-  notify(`${point.stem} · CH ${state.channel} 已${excluded ? "恢复" : "屏蔽"}。点击“${ec ? "重新拟合 EC L3" : "重新拟合 TB"}”计算新的标定结果。`, "success");
+  notify(`${point.stem} · CH ${state.channel} 已${excluded ? "恢复" : "屏蔽"}。`, "success");
 }
 
 function showTab(tab) {
@@ -1429,13 +1431,14 @@ async function runCurrentLayer() {
 
 function configureLayerPanels() {
   const ec = state.layer.startsWith("EC"), raw = ["TB_L0", "EC_L0", "EC_L1"].includes(state.layer);
-  const titles = { TB_L0: "工况原始脉冲谱", TB_L1: "当前工况能谱与拟合", TB_L2: "温度–偏压响应与残差", EC_L0: "EC 原始脉冲谱", EC_L1: "EC 温度–偏压校正谱", EC_L2: "当前能线谱与拟合", EC_L3: "能量刻度与拟合残差" };
+  const titles = { TB_L0: "原始脉冲谱", TB_L1: "能谱与拟合", TB_L2: "温度–偏压响应", EC_L0: "原始脉冲谱", EC_L1: "校正谱", EC_L2: "能谱与拟合", EC_L3: "能量刻度" };
   $("tb-analysis").dataset.layer = state.layer;
   const l1 = state.layer === "TB_L1", review = isPeakReviewLayer(), ec2 = state.layer === "EC_L2";
   $("l1-quality-overview").hidden = !l1 || !state.l1Overview;
   $("tb-analysis").dataset.peakReview = String(review);
   for (const id of ["l1-workbench","l1-channel-overview","l1-fit-all-channels"]) $(id).hidden = !l1;
   $("l1-spectrum-legend").hidden = !review;
+  $("point-count").hidden = review;
   for (const id of ["peak-file-search","peak-file-controls"]) $(id).hidden = !ec2;
   $("point-select").closest?.(".point-field")?.classList.toggle("l1-hidden",l1);
   $("point-select").hidden = l1;
@@ -1457,10 +1460,10 @@ function configureLayerPanels() {
   document.querySelector(".spectrum-legend").hidden = raw || review;
   $("refit-tb").hidden = raw;
   $("refit-tb").textContent = ec ? "计算 EC L3" : l1 ? "计算 TB L2" : "重新拟合 TB";
-  $("fitting-help").textContent = review ? `窗口只用于当前文件、当前通道。拟合后从“下一层”进入${l1 ? "曲面" : "能量刻度"}复核。` : "窗口只用于当前文件、当前通道；修改后重新拟合标定结果。";
+  $("fitting-help").textContent = "";
   $("analysis-tab-residual").firstChild.textContent = raw ? "数据与元信息 " : "拟合残差 ";
   $("analysis-tab-comparison").textContent = raw ? "输入与依赖" : ec ? "刻度参数" : "参数比较";
-  $("residual-caption").textContent = raw ? "当前通道的真实输入数据与文件来源" : ec ? "点击能线点，联动右侧校正谱与拟合窗口" : state.layer === "TB_L1" ? "点击工况点，下钻真实 L0 谱与当前 L1 峰拟合" : "相对曲面的偏差 · 点击测量点定位工况";
+  $("residual-caption").textContent = "";
   $("main-chart-legend").hidden = raw || review;
   const unpack = isUnpackLayer();
   document.body.classList.toggle("l0-workspace", unpack);
@@ -1493,7 +1496,7 @@ async function renderSurface() {
   if (context !== plotContext()) return;
   await Plotly.react(plotTarget($("residual-chart")), [{ type: "scatter", mode: "markers", x: points.map((p) => p.temp), y: points.map((p) => p.rsquared ?? p.fit?.rsquared ?? null), customdata: points.map((p) => p.id), text: points.map((p) => p.stem), marker: { color: points.map((p) => isExcluded(p) ? chartColors.excluded : pointUsage(p) === false ? chartColors.muted : chartColors.blue), size: 7 }, hovertemplate: "%{text}<br>R² %{y:.5f}<extra></extra>" }], basicPlotLayout("温度 / °C", "R²", { margin: { l: 65, r: 25, t: 10, b: 42 }, yaxis: { ...axisStyle, title: {text:"R²"}, range:[Math.min(0,...points.map(p=>Number(p.rsquared ?? p.fit?.rsquared)).filter(Number.isFinite)),1.05] } }), plotConfig); if (context !== plotContext()) return; bindPointClicks($("residual-chart"));
   if (context !== plotContext()) return;
-  $("point-count").textContent = `${points.length} 个工况`; $("surface-caption").textContent = "每个点对应真实 L1 拟合结果，点击复核窗口与谱峰"; $("residual-metric").textContent = ""; renderParams();
+  $("point-count").textContent = `${points.length} 个工况`; $("surface-caption").textContent = ""; $("residual-metric").textContent = ""; renderParams();
 }
 
 function renderMetadata(data) {
@@ -1583,7 +1586,7 @@ async function renderEcOverview() {
   if (!showResidual && data.resolution_curve?.x?.length) secondary.unshift({ type: "scatter", mode: "lines", x: data.resolution_curve.x, y: data.resolution_curve.y, line: { color: chartColors.fit, width: 1.6 }, hoverinfo: "skip" });
   await Plotly.react(plotTarget($("residual-chart")), secondary, basicPlotLayout("能量 / keV", showResidual ? "能量残差 / %" : "分辨率 / %", { margin: { l: 65, r: 25, t: 10, b: 42 }, yaxis: { ...axisStyle, title: { text: showResidual ? "能量残差 / %" : "分辨率 / %" }, zeroline: true, zerolinecolor: "#9daab6" } }), plotConfig); if (context !== plotContext()) return; bindEcClicks($("residual-chart"));
   if (context !== plotContext()) return;
-  $("surface-caption").textContent = l3 ? "校正峰位与已知能量 · 点击点复核输入谱峰" : "所选通道的 X 射线与放射源能线 · 点击点修改峰窗口";
+  $("surface-caption").textContent = "";
   $("point-count").textContent = `${points.filter(isUsed).length} / ${points.length} 参与 L3`;
   $("residual-metric").textContent = "";
   renderEcParams();
@@ -1630,7 +1633,7 @@ async function selectEcPoint(point) {
     state.selecting=false; setBusy(state.busy); return;
   }
   $("spectrum-evidence-status").hidden = true; $("spectrum-provenance").hidden = true;
-  const conditions = clear($("point-condition")); for (const [key, value] of raw ? [["通道", `CH ${state.channel}`]] : unsupportedSpectralModel() ? [["能量", `${number(point.E, 3)} keV`]] : [["能量", `${number(point.E, 3)} keV`], ["峰位", `${number(point.center, 3)} ADC`]]) { const item = node("span", "", key); item.append(node("strong", "", value)); conditions.append(item); }
+  clear($("point-condition"));
   chartMessage(isPeakReviewLayer() ? "surface-chart" : "spectrum-chart", "正在读取真实校正谱…");
   const query = raw ? `layer=${layer}&stem=${encodeURIComponent(point.stem)}&channel=${state.channel}` : `layer=EC_L2&point_id=${encodeURIComponent(point.id)}&channel=${state.channel}`;
   let spectrum;
@@ -1640,9 +1643,9 @@ async function selectEcPoint(point) {
   state.spectrum = spectrum;
   const fit = spectrum.fit || point, override = fit.peak_detection?.manual_window === false && !(state.run.pending_ec_windows || []).includes(point.id) ? null : state.run.config?.ec_windows?.[point.id];
   displayWindowValue("window-lo", override?.lo ?? spectrum.lo ?? fit.lo ?? point.lo ?? ""); displayWindowValue("window-hi", override?.hi ?? spectrum.hi ?? fit.hi ?? point.hi ?? "");
-  $("window-status").textContent = (state.run.pending_ec_windows || []).includes(point.id) || point.pending_window ? "修订已保存 · 待拟合" : override ? "已应用修订窗" : spectrum.fit ? "当前拟合窗" : "尚未拟合 · 可自动寻峰或设置窗口";
+  $("window-status").textContent = (state.run.pending_ec_windows || []).includes(point.id) || point.pending_window ? "待重拟合" : spectrum.fit ? "" : "未拟合";
   const holder = clear($("spectrum-params"));
-  if (!raw) for (const [label, value] of [["峰位 / ADC", `${number(fit.center, 3)} ± ${number(fit.center_err, 3)}`], ["σ / ADC", number(fit.sigma, 3)], ["能量 / keV", number(point.E, 3)], ["R²", number(fit.rsquared, 5)], ["拟合模型", fit.fit_mode || "—"], ["能峰来源", point.origin || spectrum.fit_source || spectrum.source || "历史参考"]]) { const item = node("div", "param-item"); item.append(node("span", "", label), node("strong", "", value)); holder.append(item); }
+  if (!raw) for (const [label, value] of [["峰位 / ADC", `${number(fit.center, 3)} ± ${number(fit.center_err, 3)}`], ["σ / ADC", number(fit.sigma, 3)], ["R²", number(fit.rsquared, 5)], ["拟合模型", fit.fit_mode || "—"]]) { const item = node("div", "param-item"); item.append(node("span", "", label), node("strong", "", value)); holder.append(item); }
   if (!raw && spectrum.curve?.note) { const item = node("div", "param-item wide"); item.append(node("span", "", "历史曲线说明"), node("strong", "", "历史记录缺少背景参数，图中仅显示高斯峰分量；重拟合后保存完整曲线。")); holder.append(item); }
   if (!raw && point.quality_reasons?.length) { const item = node("div", "param-item wide"); item.append(node("span", "", "拟合问题提示"), node("strong", "", point.quality_reasons.join(" · "))); holder.append(item); }
   renderSpectrumProvenance(spectrum); renderEcSourceConfig();
@@ -1751,7 +1754,7 @@ async function loadTbVersions() {
   for (const version of state.tbVersions) { const origin = { historical: "历史产品", computed: "已计算版本", external: "外部导入", selected: "已选版本" }[version.origin] || version.origin || "TB L2"; const modified = version.modified_at ? timestamp(typeof version.modified_at === "number" ? version.modified_at * 1000 : version.modified_at) : "时间未知"; const option = new Option(`${version.filename || version.label}${version.selected ? " · 当前" : ""}`, version.id); option.title = `${modified}\n${origin}\n${version.source_path || version.path || version.filename}\n${version.sha256 || ""}`; select.append(option); }
   const selected = state.tbVersions.find((v) => v.selected); if (selected) select.value = selected.id;
   if (!state.tbVersions.length) select.append(new Option("未找到有效 TB L2 参数包，请先载入产品目录", ""));
-  $("tb-binding-state").textContent = selected ? "已应用" : "选择 EC 校正使用的 TB 参数";
+  $("tb-binding-state").textContent = "";
   $("apply-tb-version").disabled = state.busy || !select.value;
 }
 async function applyTbVersion() { if (state.dirty) await saveRevision({}, true); const id = $("tb-version-select").value; if (!id) throw new Error("请先选择 TB L2 参数包。"); state.run = await api(runPath("/dependency"), { method: "PATCH", body: { tb_version_id: id } }); state.run = state.run.run || state.run; renderRun(); await loadSurfaceSafely(); notify("已应用 TB 参数，运行 EC L1 更新校正谱。", "success"); }
@@ -2044,7 +2047,6 @@ $("refit-tb").addEventListener("click", handleError(async () => { if (unsupporte
 $("run-layer").addEventListener("click", handleError(runCurrentLayer));
 $("run-scope").addEventListener("change", () => { updateRunScopeCaption(); setBusy(state.busy); });
 $("run-pipeline").textContent="运行流程…"; $("run-pipeline").title="选择输入文件与处理步骤";
-document.querySelector(".pipeline-menu p").textContent="选择输入文件与处理步骤";
 $("run-pipeline").addEventListener("click", handleError(openPipelineDialog));
 $("refresh-run").addEventListener("click", handleError(() => refreshRun()));
 $("tab-artifacts").addEventListener("click", () => showTab("artifacts"));
@@ -2062,7 +2064,7 @@ $("directory-go").addEventListener("click", handleError(() => loadDirectory($("d
 $("directory-location").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); loadDirectory(event.target.value.trim()).catch(messageError); } });
 $("choose-directory").addEventListener("click", handleError(async () => { if (!directoryState) return; $(directoryTarget).value = directoryState.path; $("directory-dialog").close(); if (directoryTarget === "reference-directory") await referenceScan(); else datasetPathsChanged(); }));
 $("apply-tb-version").addEventListener("click", handleError(applyTbVersion));
-$("tb-version-select").addEventListener("change", () => { const selected = state.tbVersions.find((v) => v.id === $("tb-version-select").value); $("tb-binding-state").textContent = selected ? `SHA-256 ${(selected.sha256 || "").slice(0, 10)} · 点击采用后生效` : ""; });
+$("tb-version-select").addEventListener("change", () => { const selected = state.tbVersions.find((v) => v.id === $("tb-version-select").value); $("tb-binding-state").textContent = selected && !selected.selected ? "待应用" : ""; });
 $("import-tb-version").addEventListener("click", handleError(async () => { const path = $("tb-import-path").value.trim(); if (!path) throw new Error("请填写 TB L2 JSON 的完整路径。"); if (state.dirty) await saveRevision({}, true); const result = await api(runPath("/dependency"), { method: "PATCH", body: { path } }); state.run = result.run || result; $("tb-import-path").value = ""; renderRun(); await loadSurfaceSafely(); notify("TB 参数已载入，可运行 EC L1。", "success"); }));
 $("tb-analysis").after($("ec-coverage-details"));
 for (const view of ["residual", "comparison"]) {

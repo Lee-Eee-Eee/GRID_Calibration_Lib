@@ -741,6 +741,7 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
 /* Workspace information hierarchy. */
 .l1-quality-overview { margin-bottom: 14px; }
 .ec-source-workbench { margin-bottom: 14px; }
+.ec-source-workbench > .panel-heading { padding-bottom: 14px; }
 .ec-source-toolbar { display: grid; grid-template-columns: auto minmax(220px,1fr) auto minmax(100px,180px); align-items: center; gap: 10px; padding: 0 18px 14px; font-size: 12px; color: var(--secondary); }
 .ec-source-toolbar select,.ec-source-toolbar input { width: 100%; min-width: 0; }
 .ec-peak-table-wrap { padding: 0 18px; max-height: 290px; overflow: auto; }
@@ -752,7 +753,8 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
 .ec-peak-table .ec-peak-actions { white-space: nowrap; }
 .ec-peak-table .ec-peak-actions button + button { margin-left: 8px; }
 .ec-source-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 12px 18px 16px; }
-.ec-source-actions > span { flex: 1; min-width: 120px; }
+.ec-source-actions > span { min-width: 0; }
+.ec-source-actions > #ec-save-lines { margin-left: auto; }
 .job-output-files { display: grid; gap: 6px; margin: 10px 0; padding-left: 12px; border-left: 2px solid #dfe7f1; }
 .job-output-file > summary { cursor: pointer; font-size: 12px; color: #2457a7; overflow-wrap: anywhere; }
 .job-output-file > a { font-size: 12px; overflow-wrap: anywhere; }
@@ -804,6 +806,8 @@ dialog input, dialog select { width: 100%; font-size: 14px; }
 .dataset-preset-selection > p { grid-column: 1 / -1; margin: 6px 0 0; font-size: 12px; }
 .dataset-dialog .dialog-actions { border-top: 1px solid var(--line-light); padding-top: 16px; margin-top: 22px; }
 .form-error { margin: 16px 0 0; padding: 9px 11px; color: var(--red); background: #fcf1ee; border-left: 2px solid #bc6c62; font-size: 13px; }
+.panel-heading p:empty, .plot-caption:empty, #ec-peak-save-status:empty,
+#auto-fit-status:empty, #window-status:empty, #point-condition:empty { display: none; }
 .acquisition-header #acquisition-version { display: block; font-size: 12px; margin: 6px 0 0; text-align: left; }
 .profile-template-menu { font-size: 12px; margin-bottom: 12px; color: var(--secondary); }
 .profile-template-menu summary { cursor: pointer; }
