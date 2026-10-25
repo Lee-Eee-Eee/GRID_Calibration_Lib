@@ -1,0 +1,439 @@
+<?xml version="1.0"?>
+<grid>
+
+    <iv_packet packet_len="412" head="0x29;0x41;0x6c;0x8e">
+        <header endian="LSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <iv endian="LSB">
+            <start>4</start>
+            <size>2</size>
+            <len>200</len>
+        </iv>
+    </iv_packet>
+    <vbr_packet packet_len="412" head="0x18;0x30;0x5b;0x7d">
+        <header endian="LSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <vbr endian="LSB">
+            <start>4</start>
+            <size>2</size>
+            <len>200</len>
+        </vbr>
+    </vbr_packet>
+
+
+
+    <grid1x_ft_packet packet_len="516" head="0x1c;0x1c;0x22;0x88" tail="0xcc;0x11;0x88;0x22">
+        <header endian="MSB" multi="1">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc endian="MSB" multi="1">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc>
+        <pps_for_utc endian="MSB" multi="1">
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </pps_for_utc>
+        <timestamp_for_pps endian="MSB" multi="1">
+            <start>12</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp_for_pps>
+        <channel_n endian="MSB" multi="1">
+            <start>20</start>
+            <size>2</size>
+            <len>1</len>
+        </channel_n>
+        <event_number endian="MSB" multi="1" incre="1">
+            <start>22</start>
+            <size>4</size>
+            <len>1</len>
+        </event_number>
+        <pkg_event_num endian="MSB" multi="1">
+            <start>26</start>
+            <size>2</size>
+            <len>1</len>
+        </pkg_event_num>
+        <timestamp endian="MSB" repeat="1">
+            <start>28</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp>
+        <data_max endian="MSB" repeat="1">
+            <start>36</start>
+            <size>2</size>
+            <len>1</len>
+        </data_max>
+        <data_base endian="MSB" repeat="1">
+            <start>38</start>
+            <size>2</size>
+            <len>1</len>
+        </data_base>
+        <CRC endian="MSB" multi="1" skip0="0" skip1="0">
+            <start vary_repeat="1" base_start="28">2</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+        <tail endian="MSB" multi="1">
+            <start vary_repeat="1" base_start="28">4</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </grid1x_ft_packet>
+
+    <grid1x_wf_packet packet_len="560" head="0x2e;0x2e;0x33;0xff" tail="0x22;0xee;0xff;0x33">
+        <header endian="MSB">
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc endian="MSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc>
+        <pps_for_utc endian="MSB">
+            <start>8</start>
+            <size>4</size>
+            <len>1</len>
+        </pps_for_utc>
+        <timestamp_for_pps endian="MSB">
+            <start>12</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp_for_pps>
+        <channel_n endian="MSB">
+            <start>20</start>
+            <size>2</size>
+            <len>1</len>
+        </channel_n>
+        <event_number endian="MSB" incre="1">
+            <start>22</start>
+            <size>4</size>
+            <len>1</len>
+        </event_number>
+        <sample_length endian="MSB">
+            <start>26</start>
+            <size>2</size>
+            <len>1</len>
+        </sample_length>
+        <waveform_data endian="MSB">
+            <start>28</start>
+            <size>2</size>
+            <len>256</len>
+        </waveform_data>grid1x_wf_packet
+        <timestamp endian="MSB">
+            <start vary_wf="1">0</start>
+            <size>8</size>
+            <len>1</len>
+        </timestamp>
+        <data_max endian="MSB">
+            <start vary_wf="1">8</start>
+            <size>2</size>
+            <len>1</len>
+        </data_max>
+        <data_base endian="MSB">
+            <start vary_wf="1">10</start>
+            <size>2</size>
+            <len>1</len>
+        </data_base>
+        <CRC endian="MSB" skip0="0" skip1="0">
+            <start vary_wf="1">14</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+        <tail endian="MSB">
+            <start vary_wf="1">16</start>
+            <size>4</size>
+            <len>1</len>
+        </tail>
+    </grid1x_wf_packet>
+
+    <hk_grid1x_packet packet_len="106" head="0x1a;0x2b;0x3c;0x4d">
+        <header>
+            <start>0</start>
+            <size>4</size>
+            <len>1</len>
+        </header>
+        <utc_time endian="LSB">
+            <start>4</start>
+            <size>4</size>
+            <len>1</len>
+        </utc_time>
+        <fee_z5v_v>
+            <start>8</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v_v>
+        <fee_z5v_i>
+            <start>10</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v_i>
+        <fee_z2v1_v>
+            <start>12</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z2v1_v>
+        <fee_z2v1_i>
+            <start>14</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z2v1_i>
+        <fee_z5v4_v>
+            <start>16</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v4_v>
+        <fee_z5v4_i>
+            <start>18</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5v4_i>
+        <fee_z5vA_v>
+            <start>20</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5vA_v>
+        <fee_z5vA_i>
+            <start>22</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_z5vA_i>
+
+        <fee_5vA_v>
+            <start>24</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_5vA_v>
+        <fee_5vA_i>
+            <start>26</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_5vA_i>
+
+        <fee_1v8a_v>
+            <start>28</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8a_v>
+        <fee_1v8a_i>
+            <start>30</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8a_i>
+
+        <fee_3v3_v>
+            <start>32</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_3v3_v>
+        <fee_3v3_i>
+            <start>34</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_3v3_i>
+
+        <fee_1v8d_v>
+            <start>36</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8d_v>
+        <fee_1v8d_i>
+            <start>38</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_1v8d_i>
+
+        <fee_p5va1_v>
+            <start>40</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va1_v>
+        <fee_p5va1_i>
+            <start>42</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va1_i>
+        <fee_p5va2_v>
+            <start>44</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va2_v>
+        <fee_p5va2_i>
+            <start>46</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va2_i>
+        <fee_p5va3_v>
+            <start>48</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va3_v>
+        <fee_p5va3_i>
+            <start>50</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va3_i>
+        <fee_p5va4_v>
+            <start>52</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va4_v>
+        <fee_p5va4_i>
+            <start>54</start>
+            <size>2</size>
+            <len>1</len>
+        </fee_p5va4_i>
+
+        <daq_1v0_v>
+            <start>56</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v0_v>
+        <daq_1v0_i>
+            <start>58</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v0_i>
+
+        <daq_1v8_v>
+            <start>60</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v8_v>
+        <daq_1v8_i>
+            <start>62</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v8_i>
+
+         <daq_2v5_v>
+            <start>64</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_2v5_v>
+        <daq_2v5_i>
+            <start>66</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_2v5_i>
+
+        <daq_3v3_v>
+            <start>68</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_3v3_v>
+        <daq_3v3_i>
+            <start>70</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_3v3_i>
+
+        <daq_1v5_v>
+            <start>72</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v5_v>
+        <daq_1v5_i>
+            <start>74</start>
+            <size>2</size>
+            <len>1</len>
+        </daq_1v5_i>
+
+        <board_temp endian="MSB">
+            <start>76</start>
+            <size>2</size>
+            <len>1</len>
+        </board_temp>
+        <cpu_temp endian="MSB">
+            <start>78</start>
+            <size>2</size>
+            <len>1</len>
+        </cpu_temp>
+
+        <sipm_voltage0 endian="MSB">
+            <start>80</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage0>
+        <sipm_current0 endian="MSB">
+            <start>82</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current0>
+        <sipm_temp0 endian="MSB">
+            <start>84</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp0>
+
+        <sipm_voltage1 endian="MSB">
+            <start>86</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage1>
+        <sipm_current1 endian="MSB">
+            <start>88</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current1>
+        <sipm_temp1 endian="MSB">
+            <start>90</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp1>
+
+        <sipm_voltage2 endian="MSB">
+            <start>92</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage2>
+        <sipm_current2 endian="MSB">
+            <start>94</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current2>
+        <sipm_temp2 endian="MSB">
+            <start>96</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp2>
+
+        <sipm_voltage3 endian="MSB">
+            <start>98</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_voltage3>
+        <sipm_current3 endian="MSB">
+            <start>100</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_current3>
+        <sipm_temp3 endian="MSB">
+            <start>102</start>
+            <size>2</size>
+            <len>1</len>
+        </sipm_temp3>
+
+        <CRC endian="MSB" skip0="0" skip1="0">
+            <start>104</start>
+            <size>2</size>
+            <len>1</len>
+        </CRC>
+
+
+    </hk_grid1x_packet>
+
+
+</grid>

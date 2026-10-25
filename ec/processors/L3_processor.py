@@ -9,7 +9,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from lmfit.models import QuadraticModel
 
+from ...common.fit_policy import quality_warnings, unavailable_fit
 from ...common.utils import DataLayout, get_timestamp, read_json, write_json
+from ...workbench.ec_peaks import normalize_peak_sets
 
 MIN_RSQUARED = 0.7
 MAX_CENTER_RELERR = 0.15
@@ -21,15 +23,35 @@ def res_fit(E, a, b, c):
     return np.sqrt(np.abs(a * E + b * E**2 + c)) / E
 
 
+def _empty_channel_result(channel: int) -> Dict[str, Any]:
+    """Keep unavailable fits explicit and compliant with the documented schema."""
+    result: Dict[str, Any] = {"channel": channel}
+    for name in ("EC_low", "EC_high", "resolution_low", "resolution_high"):
+        result[name] = None
+        result[f"{name}_err"] = [None, None, None]
+    return result
+
+
+def _number(value):
+    """A damaged optional record must not stop the other channels."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 class ECL3Processor:
     """EC L3层处理器 - 能量标定与分辨率拟合。每个通道独立。"""
 
-    def __init__(self, payload_name: str, product_root: Path):
+    def __init__(self, payload_name: str, product_root: Path, *, response_payload: str | None = None):
         self.payload_name = payload_name
+        self.response_payload = response_payload or payload_name
         self.layout = DataLayout(product_root, payload_name)
 
     def process(self, ec_l2_dir: Path, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from ...common.spectral_models import unsupported_spectral_model
         cfg = config or {}
+        peak_sets = normalize_peak_sets(cfg.get("ec_peak_sets", {}))
         e_cut = float(cfg.get("energy_split_low", 50.2))
 
         results: Dict[str, Any] = {
@@ -41,110 +63,68 @@ class ECL3Processor:
             "output_json": None,
             "output_figures": [],
             "errors": [],
+            "warnings": [],
+            "quality_policy": "warning_only",
+            "fit_weight_fallbacks": [],
+            "excluded_points": sorted(set(cfg.get("ec_excluded", []))),
+            "ec_peak_sets": peak_sets,
+            "inactive_points": [],
         }
 
         try:
             fit_data_all = self._collect_l2_results(ec_l2_dir)
+            active = []
+            for row in fit_data_all:
+                selected = peak_sets.get(self._energy_key(row))
+                if selected is not None and not any(
+                    np.isclose(row["E"], line["energy_keV"], rtol=1e-10, atol=1e-8) for line in selected["lines"]
+                ):
+                    results["inactive_points"].append(self._point_id(row))
+                else:
+                    active.append(row)
+            fit_data_all = active
+            excluded = set(cfg.get("ec_excluded", []))
+            fit_data_all = [row for row in fit_data_all if self._point_id(row) not in excluded]
             if not fit_data_all:
                 raise ValueError("No L2 fit data collected")
 
             ts = get_timestamp()
 
             for ch in range(4):
+                if unsupported_spectral_model(self.response_payload, ch):
+                    results["calibration_params"][str(ch)] = _empty_channel_result(ch)
+                    continue
                 ch_data_raw = [d for d in fit_data_all if d["channel"] == ch]
                 if not ch_data_raw:
-                    results["calibration_params"][str(ch)] = None
+                    results["calibration_params"][str(ch)] = _empty_channel_result(ch)
+                    results["errors"].append(f"Channel {ch}: no L2 points available")
                     continue
 
                 ch_data = self._filter_quality(ch_data_raw)
                 if not ch_data:
-                    print(f"⚠ EC L3 ch{ch}: all {len(ch_data_raw)} points filtered out by quality check")
-                    results["calibration_params"][str(ch)] = None
+                    print(f"⚠ EC L3 ch{ch}: no finite usable L2 parameters")
+                    results["calibration_params"][str(ch)] = _empty_channel_result(ch)
+                    results["errors"].append(f"Channel {ch}: no finite usable L2 parameters")
                     continue
 
                 ch_data = self._filter_monotonic(ch_data)
-                if not ch_data:
-                    print(f"⚠ EC L3 ch{ch}: all points removed by monotonic check")
-                    results["calibration_params"][str(ch)] = None
-                    continue
+                for row in ch_data:
+                    if row.get("quality_warnings"):
+                        results["warnings"].append(
+                            f"Channel {ch}, {row['E']:g} keV: {'; '.join(row['quality_warnings'])}; retained for fitting"
+                        )
 
                 n_raw = len(ch_data_raw)
                 n_kept = len(ch_data)
                 if n_kept < n_raw:
-                    print(f"  EC L3 ch{ch}: kept {n_kept}/{n_raw} points after filtering")
+                    print(f"  EC L3 ch{ch}: {n_kept}/{n_raw} points have usable parameters")
 
-                ch_result = {"channel": ch}
-
-                energies = np.array([d["E"] for d in ch_data], dtype=float)
-                centers = np.array([d["center"] for d in ch_data], dtype=float)
-                center_errs = np.array([d["center_err"] for d in ch_data], dtype=float)
-                sources = [d["source"] for d in ch_data]
-
-                if len(ch_data) >= 3:
-                    ec_result = self._fit_quadratic_weighted(centers, energies, center_errs)
-                    a_val = ec_result.params["a"].value
-                    adc_min, adc_max = float(np.min(centers)), float(np.max(centers))
-                    deriv_lo = 2 * a_val * adc_min + ec_result.params["b"].value
-                    deriv_hi = 2 * a_val * adc_max + ec_result.params["b"].value
-                    if deriv_lo <= 0 or deriv_hi <= 0:
-                        print(f"  EC L3 ch{ch}: quadratic non-monotonic (a={a_val:.6f}), falling back to linear")
-                        from lmfit.models import LinearModel
-                        lin_mod = LinearModel()
-                        lin_params = lin_mod.guess(energies, x=centers)
-                        ec_result = lin_mod.fit(energies, lin_params, x=centers, weights=1.0 / center_errs)
-                        ch_result["EC_low"] = [0.0, ec_result.params["slope"].value, ec_result.params["intercept"].value]
-                        ch_result["EC_low_err"] = [0.0, ec_result.params["slope"].stderr or 0.0, ec_result.params["intercept"].stderr or 0.0]
-                    else:
-                        ch_result["EC_low"] = [a_val, ec_result.params["b"].value, ec_result.params["c"].value]
-                        ch_result["EC_low_err"] = [ec_result.params["a"].stderr or 0.0, ec_result.params["b"].stderr or 0.0, ec_result.params["c"].stderr or 0.0]
-                    ch_result["EC_high"] = ch_result["EC_low"]
-                    ch_result["EC_high_err"] = ch_result["EC_low_err"]
-                    all_ec_result = ec_result
-                else:
-                    ch_result["EC_low"] = None
-                    ch_result["EC_high"] = None
-                    all_ec_result = None
-
-                resolutions = np.array([d["resolution"] for d in ch_data], dtype=float)
-                resolution_errs = np.array([d["resolution_err"] for d in ch_data], dtype=float)
-
-                res_low_data = [(e, r, re_) for e, r, re_, s in zip(energies, resolutions, resolution_errs, sources) if e <= e_cut]
-                res_high_data = [(e, r, re_) for e, r, re_, s in zip(energies, resolutions, resolution_errs, sources) if e > e_cut]
-
-                if len(res_low_data) >= 3:
-                    res_low_result = self._fit_resolution_weighted(
-                        [d[0] for d in res_low_data], [d[1] for d in res_low_data], [d[2] for d in res_low_data],
-                    )
-                    ch_result["resolution_low"] = [res_low_result.params["a"].value, res_low_result.params["b"].value, res_low_result.params["c"].value]
-                    ch_result["resolution_low_err"] = [res_low_result.params["a"].stderr or 0.0, res_low_result.params["b"].stderr or 0.0, res_low_result.params["c"].stderr or 0.0]
-                else:
-                    ch_result["resolution_low"] = None
-
-                if len(res_high_data) >= 3:
-                    res_high_result = self._fit_resolution_weighted(
-                        [d[0] for d in res_high_data], [d[1] for d in res_high_data], [d[2] for d in res_high_data],
-                    )
-                    ch_result["resolution_high"] = [res_high_result.params["a"].value, res_high_result.params["b"].value, res_high_result.params["c"].value]
-                    ch_result["resolution_high_err"] = [res_high_result.params["a"].stderr or 0.0, res_high_result.params["b"].stderr or 0.0, res_high_result.params["c"].stderr or 0.0]
-                else:
-                    ch_result["resolution_high"] = None
-
-                results["calibration_params"][str(ch)] = ch_result
-
-                ec_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_ecfit_ch{ch}.l3.png")
-                self._plot_ec_fit(ch, ch_data, ch_data_raw, all_ec_result, e_cut, ec_fig_path)
-                results["output_figures"].append(ec_fig_path.name)
-
-                res_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_resolution_fit_ch{ch}.l3.png")
-                self._plot_resolution_fit(
-                    ch, ch_data,
-                    ch_result.get("resolution_low"), ch_result.get("resolution_high"),
-                    e_cut, res_fig_path,
-                )
-                results["output_figures"].append(res_fig_path.name)
-
-                ch_json_path = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_ec_coef_ch{ch}.l3.json")
-                write_json(ch_json_path, ch_result)
+                try:
+                    self._fit_channel(ch, ch_data, ch_data_raw, ts, e_cut, results)
+                except Exception as exc:
+                    results["calibration_params"].setdefault(str(ch), _empty_channel_result(ch))
+                    results["errors"].append(f"Channel {ch}: {exc}")
+                    print(f"⚠ EC L3 ch{ch}: {exc}; continuing other channels")
 
             out_json = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_EC.l3.json")
             write_json(
@@ -168,9 +148,97 @@ class ECL3Processor:
         write_json(self.layout.get_ec_l3_json("L3_manifest.json"), results)
         return results
 
+    def _fit_channel(self, ch, ch_data, ch_data_raw, ts, e_cut, results):
+        # Error vectors remain part of the schema even when a segment
+        # has too few points and its coefficient vector is null.
+        ch_result = _empty_channel_result(ch)
+
+        energies = np.array([d["E"] for d in ch_data], dtype=float)
+        centers = np.array([d["center"] for d in ch_data], dtype=float)
+        center_errs = self._effective_errors(ch_data, "center_err", results)
+        resolution_errs = self._effective_errors(ch_data, "resolution_err", results)
+        sources = [d["source"] for d in ch_data]
+
+        if len(ch_data) >= 3:
+            ec_result = self._fit_quadratic_weighted(centers, energies, center_errs)
+            a_val = ec_result.params["a"].value
+            adc_min, adc_max = float(np.min(centers)), float(np.max(centers))
+            deriv_lo = 2 * a_val * adc_min + ec_result.params["b"].value
+            deriv_hi = 2 * a_val * adc_max + ec_result.params["b"].value
+            if deriv_lo <= 0 or deriv_hi <= 0:
+                print(f"  EC L3 ch{ch}: quadratic non-monotonic (a={a_val:.6f}), falling back to linear")
+                from lmfit.models import LinearModel
+                lin_mod = LinearModel()
+                lin_params = lin_mod.guess(energies, x=centers)
+                ec_result = lin_mod.fit(energies, lin_params, x=centers, weights=1.0 / center_errs)
+                ch_result["EC_low"] = [0.0, ec_result.params["slope"].value, ec_result.params["intercept"].value]
+                ch_result["EC_low_err"] = [0.0, ec_result.params["slope"].stderr or 0.0, ec_result.params["intercept"].stderr or 0.0]
+            else:
+                ch_result["EC_low"] = [a_val, ec_result.params["b"].value, ec_result.params["c"].value]
+                ch_result["EC_low_err"] = [ec_result.params["a"].stderr or 0.0, ec_result.params["b"].stderr or 0.0, ec_result.params["c"].stderr or 0.0]
+            ch_result["EC_high"] = ch_result["EC_low"]
+            ch_result["EC_high_err"] = ch_result["EC_low_err"]
+            all_ec_result = ec_result
+        else:
+            ch_result["EC_low"] = None
+            ch_result["EC_high"] = None
+            all_ec_result = None
+
+        resolutions = np.array([d["resolution"] for d in ch_data], dtype=float)
+
+        res_low_data = [(e, r, re_) for e, r, re_, s in zip(energies, resolutions, resolution_errs, sources) if e <= e_cut]
+        res_high_data = [(e, r, re_) for e, r, re_, s in zip(energies, resolutions, resolution_errs, sources) if e > e_cut]
+
+        if len(res_low_data) >= 3:
+            res_low_result = self._fit_resolution_weighted(
+                [d[0] for d in res_low_data], [d[1] for d in res_low_data], [d[2] for d in res_low_data],
+            )
+            ch_result["resolution_low"] = [res_low_result.params["a"].value, res_low_result.params["b"].value, res_low_result.params["c"].value]
+            ch_result["resolution_low_err"] = [res_low_result.params["a"].stderr or 0.0, res_low_result.params["b"].stderr or 0.0, res_low_result.params["c"].stderr or 0.0]
+        else:
+            ch_result["resolution_low"] = None
+
+        if len(res_high_data) >= 3:
+            res_high_result = self._fit_resolution_weighted(
+                [d[0] for d in res_high_data], [d[1] for d in res_high_data], [d[2] for d in res_high_data],
+            )
+            ch_result["resolution_high"] = [res_high_result.params["a"].value, res_high_result.params["b"].value, res_high_result.params["c"].value]
+            ch_result["resolution_high_err"] = [res_high_result.params["a"].stderr or 0.0, res_high_result.params["b"].stderr or 0.0, res_high_result.params["c"].stderr or 0.0]
+        else:
+            ch_result["resolution_high"] = None
+
+        results["calibration_params"][str(ch)] = ch_result
+
+        ec_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_ecfit_ch{ch}.l3.png")
+        self._plot_ec_fit(ch, ch_data, ch_data_raw, all_ec_result, e_cut, ec_fig_path)
+        results["output_figures"].append(ec_fig_path.name)
+
+        res_fig_path = self.layout.get_ec_l3_figure(f"{ts}_{self.payload_name}_resolution_fit_ch{ch}.l3.png")
+        self._plot_resolution_fit(
+            ch, ch_data,
+            ch_result.get("resolution_low"), ch_result.get("resolution_high"),
+            e_cut, res_fig_path,
+        )
+        results["output_figures"].append(res_fig_path.name)
+
+        ch_json_path = self.layout.get_ec_l3_json(f"{ts}_{self.payload_name}_ec_coef_ch{ch}.l3.json")
+        write_json(ch_json_path, ch_result)
+
+
     # ------------------------------------------------------------------ #
     # Data collection & quality filtering
     # ------------------------------------------------------------------ #
+
+    def _point_id(self, row: dict[str, Any]) -> str:
+        stem = self._energy_key(row)
+        return f"{self.payload_name}:ec:{stem}:{int(row['channel'])}:{float(row['E']):g}"
+
+    @staticmethod
+    def _energy_key(row):
+        stem = str(row.get("file", ""))
+        if stem.endswith("_l2_fit_results"):
+            return stem.removesuffix("_l2_fit_results")
+        return stem.removesuffix(".l2").removesuffix("_fit_results")
 
     def _collect_l2_results(self, ec_l2_dir: Path) -> List[Dict[str, Any]]:
         json_dir = ec_l2_dir / "json"
@@ -193,17 +261,20 @@ class ECL3Processor:
                     if not isinstance(rec, dict):
                         continue
                     rows.append({
-                        "E": float(rec.get("E", 0.0)),
-                        "center": float(rec.get("center", 0.0)),
-                        "center_err": float(rec.get("center_err", 0.0)),
-                        "sigma": float(rec.get("sigma", 0.0)),
-                        "sigma_err": float(rec.get("sigma_err", 0.0)),
-                        "resolution": float(rec.get("resolution", 0.0)),
-                        "resolution_err": float(rec.get("resolution_err", 0.0)),
-                        "FWHM": float(rec.get("fwhm", rec.get("FWHM", 0.0))),
+                        "E": _number(rec.get("E")),
+                        "center": _number(rec.get("center")),
+                        "center_err": _number(rec.get("center_err")),
+                        "sigma": _number(rec.get("sigma")),
+                        "sigma_err": _number(rec.get("sigma_err")),
+                        "resolution": _number(rec.get("resolution")),
+                        "resolution_err": _number(rec.get("resolution_err")),
+                        "FWHM": _number(rec.get("fwhm", rec.get("FWHM"))),
                         "channel": int(rec.get("channel", 0)),
                         "source": str(rec.get("source", "x")) if rec.get("source") in ("x", "xray", "src") else "x",
-                        "rsquared": float(rec.get("rsquared", 0.0)),
+                        "rsquared": _number(rec.get("rsquared")),
+                        "fit_quality": rec.get("fit_quality", {}),
+                        "placeholder": rec.get("placeholder", False),
+                        "fit_performed": rec.get("fit_performed", True),
                         "file": fp.stem,
                     })
                 continue
@@ -212,17 +283,20 @@ class ECL3Processor:
             is_source = str(energy_key).startswith("src_")
             for ch_str, ch_dict in data.get("channels", {}).items():
                 rows.append({
-                    "E": float(ch_dict.get("E", 0.0)),
-                    "center": float(ch_dict.get("center", 0.0)),
-                    "center_err": float(ch_dict.get("center_err", 0.0)),
-                    "sigma": float(ch_dict.get("sigma", 0.0)),
-                    "sigma_err": float(ch_dict.get("sigma_err", 0.0)),
-                    "resolution": float(ch_dict.get("resolution", 0.0)),
-                    "resolution_err": float(ch_dict.get("resolution_err", 0.0)),
-                    "FWHM": float(ch_dict.get("FWHM", 0.0)),
+                    "E": _number(ch_dict.get("E")),
+                    "center": _number(ch_dict.get("center")),
+                    "center_err": _number(ch_dict.get("center_err")),
+                    "sigma": _number(ch_dict.get("sigma")),
+                    "sigma_err": _number(ch_dict.get("sigma_err")),
+                    "resolution": _number(ch_dict.get("resolution")),
+                    "resolution_err": _number(ch_dict.get("resolution_err")),
+                    "FWHM": _number(ch_dict.get("FWHM")),
                     "channel": int(ch_str),
                     "source": "src" if is_source else "x",
-                    "rsquared": float(ch_dict.get("rsquared", 0.0)),
+                    "rsquared": _number(ch_dict.get("rsquared")),
+                    "fit_quality": ch_dict.get("fit_quality", {}),
+                    "placeholder": ch_dict.get("placeholder", False),
+                    "fit_performed": ch_dict.get("fit_performed", True),
                     "file": fp.stem,
                 })
 
@@ -231,45 +305,64 @@ class ECL3Processor:
         return sorted(rows, key=lambda x: x["E"])
 
     @staticmethod
+    def usable_record(record: dict[str, Any]) -> bool:
+        """Only missing/nonnumeric fit inputs prevent numerical aggregation."""
+        if unavailable_fit(record):
+            return False
+        return all(np.isfinite(value := _number(record.get(key))) and value > 0
+                   for key in ("E", "center", "sigma", "resolution"))
+
+    @staticmethod
+    def quality_reasons(record: dict[str, Any]) -> list[str]:
+        """Saved quality diagnostics are annotations, never vetoes."""
+        reasons = quality_warnings(record)
+        r2 = _number(record.get("rsquared"))
+        if not np.isfinite(r2) or r2 < MIN_RSQUARED:
+            reasons.append(f"R² < {MIN_RSQUARED}" if np.isfinite(r2) else "R² is missing")
+        center, ce = _number(record.get("center")), _number(record.get("center_err"))
+        if not np.isfinite(center) or center <= 0:
+            reasons.append("center is missing or non-positive")
+        if not np.isfinite(ce) or ce <= 0:
+            reasons.append("center_err is missing or non-positive")
+        elif center > 0 and ce / center > MAX_CENTER_RELERR:
+            reasons.append(f"center relative error > {MAX_CENTER_RELERR:.0%}")
+        sigma, se = _number(record.get("sigma")), _number(record.get("sigma_err"))
+        if not np.isfinite(sigma) or sigma <= 0:
+            reasons.append("sigma is missing or non-positive")
+        if not np.isfinite(se) or se <= 0:
+            reasons.append("sigma_err is missing or non-positive")
+        elif sigma > 0 and se / sigma > 2:
+            reasons.append("sigma relative error > 200%")
+        resolution, re_ = _number(record.get("resolution")), _number(record.get("resolution_err"))
+        if not np.isfinite(resolution) or resolution <= 0 or resolution > MAX_RESOLUTION:
+            reasons.append(f"resolution outside (0, {MAX_RESOLUTION}] %")
+        if not np.isfinite(re_) or re_ <= 0:
+            reasons.append("resolution_err is missing or non-positive")
+        return list(dict.fromkeys(reasons))
+
+    @staticmethod
     def _filter_quality(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        filtered = []
-        for d in rows:
-            r2 = d.get("rsquared", 0.0)
-            if r2 < MIN_RSQUARED:
-                continue
-            c = d.get("center", 0.0)
-            ce = d.get("center_err", float("nan"))
-            if not np.isfinite(ce) or ce <= 0:
-                continue
-            if c > 0 and ce / c > MAX_CENTER_RELERR:
-                continue
-            se = d.get("sigma_err", float("nan"))
-            s = d.get("sigma", 0.0)
-            if not np.isfinite(se) or se <= 0:
-                continue
-            if s > 0 and se / s > 2.0:
-                continue
-            res = d.get("resolution", 0.0)
-            re_ = d.get("resolution_err", float("nan"))
-            if not np.isfinite(res) or res <= 0 or res > MAX_RESOLUTION:
-                continue
-            if not np.isfinite(re_) or re_ <= 0:
-                continue
-            filtered.append(d)
-        return filtered
+        """Retain every numerically usable point and annotate possible problems."""
+        retained = []
+        for row in rows:
+            row["quality_warnings"] = ECL3Processor.quality_reasons(row)
+            row["quality_suspect"] = bool(row["quality_warnings"])
+            if ECL3Processor.usable_record(row):
+                retained.append(row)
+        return retained
 
     @staticmethod
     def _filter_monotonic(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if len(rows) < 2:
             return rows
         sorted_rows = sorted(rows, key=lambda d: d["E"])
-        keep = [True] * len(sorted_rows)
         for i in range(1, len(sorted_rows)):
             if sorted_rows[i]["center"] <= sorted_rows[i - 1]["center"] * 0.99:
-                keep[i] = False
-                print(f"    ✗ non-monotonic: E={sorted_rows[i]['E']:.1f} center={sorted_rows[i]['center']:.1f} "
-                      f"<= prev E={sorted_rows[i-1]['E']:.1f} center={sorted_rows[i-1]['center']:.1f}")
-        return [r for r, k in zip(sorted_rows, keep) if k]
+                warnings = sorted_rows[i].setdefault("quality_warnings", [])
+                if "non-monotonic center" not in warnings:
+                    warnings.append("non-monotonic center")
+                sorted_rows[i]["quality_suspect"] = True
+        return sorted_rows
 
     @staticmethod
     def _filter_adc_proximity(rows: List[Dict[str, Any]], adc_tol: float = 0.05, energy_ratio_min: float = 1.5) -> List[Dict[str, Any]]:
@@ -293,17 +386,32 @@ class ECL3Processor:
             if e_max / e_min < energy_ratio_min:
                 result.extend(grp)
                 continue
-            best = max(grp, key=lambda g: g.get("rsquared", 0.0))
-            result.append(best)
-            removed = [g for g in grp if g is not best]
-            for g in removed:
-                print(f"    ✗ ADC proximity: E={g['E']:.1f} center={g['center']:.1f} R²={g.get('rsquared',0):.3f} "
-                      f"(kept E={best['E']:.1f} R²={best.get('rsquared',0):.3f})")
+            for point in grp:
+                warnings = point.setdefault("quality_warnings", [])
+                if "ADC proximity of distinct energy lines" not in warnings:
+                    warnings.append("ADC proximity of distinct energy lines")
+                point["quality_suspect"] = True
+            result.extend(grp)
         return sorted(result, key=lambda d: d["E"])
 
     # ------------------------------------------------------------------ #
     # Fitting
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _effective_errors(rows, field, results):
+        """Fallback weights are derived fit inputs, never measured errors."""
+        values = np.asarray([_number(row.get(field)) for row in rows])
+        valid = np.isfinite(values) & (values > 0)
+        fallback = float(np.median(values[valid])) if np.any(valid) else 1.
+        source = "median_positive_error" if np.any(valid) else "unit_weight"
+        for row, available in zip(rows, valid, strict=True):
+            if not available:
+                results["fit_weight_fallbacks"].append({
+                    "channel": row["channel"], "E": row["E"], "file": row.get("file"),
+                    "field": field, "source": source, "effective_uncertainty": fallback,
+                })
+        return np.where(valid, values, fallback)
 
     def _fit_quadratic_weighted(self, x: list, y: list, yerr: list) -> lmfit.model.ModelResult:
         """Weighted quadratic fit: y = a*x^2 + b*x + c, weighted by 1/yerr."""
@@ -311,7 +419,8 @@ class ECL3Processor:
         x_arr = np.array(x, dtype=float)
         y_arr = np.array(y, dtype=float)
         w_arr = np.array(yerr, dtype=float)
-        w_arr = np.where(np.isfinite(w_arr) & (w_arr > 0), w_arr, np.nanmedian(w_arr[w_arr > 0]) if np.any(w_arr > 0) else 1.0)
+        valid = np.isfinite(w_arr) & (w_arr > 0)
+        w_arr = np.where(valid, w_arr, np.median(w_arr[valid]) if np.any(valid) else 1.0)
         params = mod.guess(y_arr, x=x_arr)
         return mod.fit(y_arr, params, x=x_arr, weights=1.0 / w_arr)
 
@@ -354,11 +463,11 @@ class ECL3Processor:
         fig = plt.figure(figsize=(12, 8))
         ax = fig.add_subplot(gs[0])
 
-        rejected = [d for d in ch_data_raw if d not in ch_data]
-        if rejected:
+        unavailable = [d for d in ch_data_raw if d not in ch_data]
+        if unavailable:
             ax.scatter(
-                [d["center"] for d in rejected], [d["E"] for d in rejected],
-                marker="x", c="lightgray", s=20, zorder=0, label="rejected",
+                [d["center"] for d in unavailable], [d["E"] for d in unavailable],
+                marker="x", c="lightgray", s=20, zorder=0, label="missing fit inputs",
             )
 
         x_pts = [d for d in ch_data if d["source"] == "x"]
@@ -367,17 +476,23 @@ class ECL3Processor:
         if x_pts:
             ax.errorbar(
                 [d["center"] for d in x_pts], [d["E"] for d in x_pts],
-                xerr=[d.get("center_err", 0) for d in x_pts],
+                xerr=[value if np.isfinite(value := _number(d.get("center_err"))) and value > 0 else 0 for d in x_pts],
                 fmt="s", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=1, label=f"x CH{ch}",
             )
         if src_pts:
             ax.errorbar(
                 [d["center"] for d in src_pts], [d["E"] for d in src_pts],
-                xerr=[d.get("center_err", 0) for d in src_pts],
+                xerr=[value if np.isfinite(value := _number(d.get("center_err"))) and value > 0 else 0 for d in src_pts],
                 fmt="^", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=0, label=f"source CH{ch}",
             )
+
+        suspect = [point for point in ch_data if point.get("quality_suspect")]
+        if suspect:
+            ax.scatter([point["center"] for point in suspect], [point["E"] for point in suspect],
+                       marker="o", facecolors="none", edgecolors="#a87824", s=90, zorder=4,
+                       label="review: included in fit")
 
         r2 = 0.0
         all_centers = np.asarray([d["center"] for d in ch_data])
@@ -428,17 +543,23 @@ class ECL3Processor:
         if x_pts:
             ax.errorbar(
                 [d["E"] for d in x_pts], [d["resolution"] for d in x_pts],
-                yerr=[d.get("resolution_err", 0) for d in x_pts],
+                yerr=[value if np.isfinite(value := _number(d.get("resolution_err"))) and value > 0 else 0 for d in x_pts],
                 fmt="s", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=1, label=f"x CH{ch}",
             )
         if src_pts:
             ax.errorbar(
                 [d["E"] for d in src_pts], [d["resolution"] for d in src_pts],
-                yerr=[d.get("resolution_err", 0) for d in src_pts],
+                yerr=[value if np.isfinite(value := _number(d.get("resolution_err"))) and value > 0 else 0 for d in src_pts],
                 fmt="^", mfc="white", ms=6, elinewidth=1, capsize=3,
                 barsabove=True, zorder=0, label=f"source CH{ch}",
             )
+
+        suspect = [point for point in ch_data if point.get("quality_suspect")]
+        if suspect:
+            ax.scatter([point["E"] for point in suspect], [point["resolution"] for point in suspect],
+                       marker="o", facecolors="none", edgecolors="#a87824", s=90, zorder=4,
+                       label="review: included in fit")
 
         all_E = np.array([d["E"] for d in ch_data])
         if res_low_params is not None:

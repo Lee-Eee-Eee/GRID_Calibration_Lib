@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-25",
+  "tb": {
+    "run": "20261023-111431-6e9fdd63c95a",
+    "preset": {
+      "id": "b5bc272f0378488ba85880b1",
+      "name": "10B · 560B 波形与稳态遥测",
+      "payload": "10B",
+      "version": 1,
+      "sha256": "f8ff6d238df267b5a0517b5c79b579761dd0c0a48556378ddfe96890e3574d9b",
+      "created_at": "2026-10-20T12:02:25+00:00",
+      "origin": "manual",
+      "modified": false
+    },
+    "profile_histogram": {
+      "min": 0.0,
+      "max": 16384.0,
+      "bin_width": 6.0
+    },
+    "fit_record_histogram_configs": [
+      {
+        "bin_width": 6.0,
+        "max": 16384.0,
+        "min": 0.0
+      }
+    ],
+    "supported_record_count": 192,
+    "bin_count": 2731,
+    "first_edge": 0.0,
+    "actual_last_edge": 16386.0,
+    "display_step": 6.0,
+    "min_sigma_ADC": 11.863147236340684,
+    "max_bin_width_over_sigma": 0.5057679788058304,
+    "data_kind": "original validated event counts per fixed ADC bin",
+    "counting_error": "sqrt(max(N,1))",
+    "smoothing": "candidate/diagnostic use only; fit uses original bin counts"
+  },
+  "ec": {
+    "run": "20261023-114209-7646c5ca45c2",
+    "preset": {
+      "id": "286b59d74b7245d29c8512a5",
+      "name": "14B 默认实验读取",
+      "payload": "14B",
+      "version": 3,
+      "sha256": "8a9857e5b163c3c3fc6a820f5edde0b09b1938927195fa467bcb52dee54a891e",
+      "created_at": "2026-10-20T12:08:14+00:00",
+      "origin": "manual",
+      "modified": false
+    },
+    "profile_fitting": null,
+    "saved_fit_bin_width_ADC": 4.0,
+    "display_step_ADC": 4.0,
+    "display_bins": 6559,
+    "display_counts_match_processor": true,
+    "display_errors_match_processor": true,
+    "data_kind": "TB-corrected ADC signal/background rate per fixed bin",
+    "normalization": "net = N_signal/t_signal - N_background/t_background",
+    "error": "sqrt(max(N_signal,1)/t_signal^2 + max(N_background,1)/t_background^2)",
+    "time_axis": "per-channel observed UTC max-min, fallback 1 second if insufficient span",
+    "export_display_merge": "PNG only: 3-bin means (12 ADC sampling at default 4 ADC); fit and interactive UI retain native bins"
+  },
+  "observations": [
+    "No adaptive binning or keV binning is used in TB L1 / EC L2.",
+    "Equal-width TB bins extend the final edge upwards if requested range is not an exact width multiple.",
+    "Gaussian is evaluated at bin centers; current models do not integrate the Gaussian over each bin.",
+    "Current saved default EC bin width is 4 ADC; custom process cfg.bin_width was not exposed through Workbench submit/execute at audit start.",
+    "EC background-channel candidate scoring used hard-coded 4 ADC before the current change; EC owner notified.",
+    "Legacy UI minimum fit-window span 8 ADC may contain fewer than 8 fit bins; minimum should follow bin width."
+  ],
+  "warning_policy_gate_watchlist": [
+    "tb/processors/L2_processor.py _collect_fit_data accepted and MIN_RSQUARED filters",
+    "workbench/compute.py surface point.used accepted and MIN_RSQUARED filters",
+    "workbench/service.py ec_overview draft_used quality_pass gate",
+    "workbench/ec_interactive.py overview quality_pass and monotonic filters",
+    "ec/processors/L3_processor.py _quality_filter and _filter_monotonic",
+    "ec/processors/L2_processor.py consensus/energy-anchor accepted checks and quality failure exceptions",
+    "workbench/static/workbench.js pipeline partial-result pauses should distinguish numerical absence from warning-only quality"
+  ]
+}

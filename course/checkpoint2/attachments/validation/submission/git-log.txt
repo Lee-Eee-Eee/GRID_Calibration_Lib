@@ -1,0 +1,31 @@
+* ced4e8c  (HEAD -> feat/calibration-workbench, origin/feat/calibration-workbench) docs: clarify portable setup and advisory quality review
+* b9cae10  Repair legacy spectrum inputs and CRC recovery flow
+* 4c6ffe2  Integrate official black Tiange GRID branding
+* d3fce61  Simplify workbench labels and visual hierarchy
+* ed49665  Add editable EC source peaks and faster spectrum review
+* c3ee6b4  Treat fit quality as advisory and preserve spectrum binning
+* 33bc599  fix: ignore stale TB L1 quality plot errors
+* 8e66e62  (origin/experiment/cp2-quality-b) Add TB L1 fit quality overview and spectrum drill-down
+| * 3f26210  (origin/experiment/cp2-quality-a) feat: add per-channel TB L1 fit quality overview
+|/  
+* b90b3aa  Improve dark-region peak selection and unify spectrum review
+* 5d430b6  fix: make L1 fitting responsive and preserve per-channel results
+* a162496  fix: stabilize 10B decoding and clarify calibration workflows
+* bb5f5e2  feat: streamline L0 unpack workflow and speed interactive reads
+* 3f4e059  feat: add reusable payload presets and validated peak workbench
+* 99a5c67  feat: make payload acquisition standards editable and versioned
+* 48954b9  feat: decouple dataset and TB dependencies with interactive layer review
+* 6549e09  feat: redesign calibration workbench as a compact research interface
+* f15dede  feat: add persistent interactive calibration workbench demo
+* 5641c26  feat: add calibration workflow overview
+* 01b5456  EC/TB: robustness improvements across L2/L3 pipeline and xray window tool
+* dca726f  tools: auto_xray_windows for automated spectrum-based EC window selection
+* ee08974  EC L3: fix fit direction (Energy=f(ADC)), single weighted quadratic, proper ADC range plotting
+* e8e8204  EC L2: add xray forced-window config loading, write initial window configs from spectrum analysis
+* 9790a3b  EC L3: double log scale plots, ADC-vs-Energy axis order, GridSpec layout matching calibration_process
+* f7e4b37  EC L2: consensus-based refitting, noise pedestal filter, multi-peak energy-ratio estimation
+* 72a879b  EC schema: new source naming, tb_correction metadata key, T/V from data columns, prefer .cut xray files
+* b1e7db7  TB schema: hk_data metadata key, flat 4-list, strict 11-field L2, true chi-square
+* 72faa4f  Align lib schema and naming with cali_format wiki
+* f0e89ee  Polish project metadata and align with calibration_process
+* 5a5c54a  init

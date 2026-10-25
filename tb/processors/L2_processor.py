@@ -1,13 +1,15 @@
 """温度偏压(TB)标定 - L2层处理器。"""
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import numpy as np
 from scipy.optimize import curve_fit
 
+from ...common.fit_policy import finite_number, quality_warnings, usable_peak
+from ...common.spectral_models import unsupported_spectral_model
 from ...common.utils import DataLayout, get_timestamp, read_json, read_parquet_metadata, write_json
 
 
@@ -44,17 +46,19 @@ class TBL2Processor:
     C_INIT = 23459.83
     C_LO, C_HI = 1e3, 1e8
 
-    # L1 拟合质量低于此 R² 的点不参与曲面拟合（仍作 outlier 提示）
+    # Historical R² threshold now adds a warning without dropping the point.
     MIN_RSQUARED = 0.5
 
-    def __init__(self, payload_name: str, product_root: Path):
+    def __init__(self, payload_name: str, product_root: Path, *, response_payload: str | None = None):
         self.payload_name = payload_name
+        self.response_payload = response_payload or payload_name
         self.layout = DataLayout(product_root, payload_name)
 
     def process(
         self,
         tb_l1_dir: Path,
         tb_l0_dir: Optional[Path] = None,
+        excluded_points: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         l0_dir = tb_l0_dir if tb_l0_dir is not None else self.layout.get_tb_l0_dir()
 
@@ -67,10 +71,23 @@ class TBL2Processor:
             "output_json": None,
             "output_figures": [],
             "errors": [],
+            "warnings": [],
+            "quality_policy": "warning_only",
+            "included_points": [],
         }
 
         try:
             fit_data = self._collect_fit_data(tb_l1_dir, l0_dir)
+            excluded = set(excluded_points or [])
+            results["excluded_points"] = sorted(excluded)
+            fit_data = [row for row in fit_data
+                        if f"{self.payload_name}:{row['file']}:{row['channel']}" not in excluded]
+            results["suspect_points"] = [
+                {"id": f"{self.payload_name}:{row['file']}:{row['channel']}", "warnings": row["quality_warnings"]}
+                for row in fit_data if row.get("quality_warnings")
+            ]
+            if results["suspect_points"]:
+                results["warnings"].append(f"{len(results['suspect_points'])} suspected points included in TB surface fitting")
             if not fit_data:
                 raise ValueError("No TB L1/L0 matched data for L2 fit")
 
@@ -79,13 +96,20 @@ class TBL2Processor:
             files_list = []
 
             for ch in range(4):
+                if unsupported_spectral_model(self.response_payload, ch):
+                    params_list.append(None)
+                    continue
                 ch_data = [d for d in fit_data if d["channel"] == ch]
                 if len(ch_data) < 8:
                     print(f"Channel {ch} has too few data points ({len(ch_data)}) for L2 fit.")
+                    results["errors"].append(f"Channel {ch}: requires at least 8 usable points, got {len(ch_data)}")
                     params_list.append(None)
                     continue
 
                 params = self._fit_surface(ch_data)
+                results["included_points"].extend(
+                    f"{self.payload_name}:{row['file']}:{ch}" for row in ch_data
+                )
                 params["channel"] = ch
                 params["payload"] = self.payload_name
                 params_list.append(params)
@@ -160,6 +184,8 @@ class TBL2Processor:
             per_ch_tv: Dict[int, Dict[str, float]] = {}
             for rec in channel_records:
                 ch = int(rec.get("channel", -1))
+                if unsupported_spectral_model(self.response_payload, ch):
+                    continue
                 if ch < 0:
                     continue
                 t = rec.get("temp")
@@ -176,6 +202,8 @@ class TBL2Processor:
                     temps = meta.get("temp", []) if isinstance(meta, dict) else []
                     biases = meta.get("bias", []) if isinstance(meta, dict) else []
                     for ch in range(4):
+                        if unsupported_spectral_model(self.response_payload, ch):
+                            continue
                         t = temps[ch] if ch < len(temps) else float("nan")
                         b = biases[ch] if ch < len(biases) else float("nan")
                         if isinstance(t, (int, float)) and np.isfinite(t) and isinstance(b, (int, float)) and np.isfinite(b):
@@ -188,20 +216,20 @@ class TBL2Processor:
                 ch = int(rec.get("channel", -1))
                 if ch not in per_ch_tv:
                     continue
+                if unsupported_spectral_model(self.response_payload, ch):
+                    continue
+                if not usable_peak(rec):
+                    continue
                 gain = rec.get("center", 0.0)
                 gain_err = rec.get("center_err", 0.0)
-                rsq = rec.get("rsquared", 0.0)
-                if not (np.isfinite(gain) and gain > 0):
-                    continue
-                if np.isfinite(rsq) and rsq < self.MIN_RSQUARED:
-                    continue
                 rows.append({
                     "temp": per_ch_tv[ch]["temp"],
                     "bias": per_ch_tv[ch]["bias"],
                     "gain": float(gain),
-                    "gain_err": float(gain_err) if np.isfinite(gain_err) and gain_err > 0 else 0.0,
+                    "gain_err": float(gain_err) if finite_number(gain_err) and gain_err > 0 else 0.0,
                     "channel": ch,
                     "file": str(stem),
+                    "quality_warnings": quality_warnings(rec, min_rsquared=self.MIN_RSQUARED),
                 })
         return rows
 

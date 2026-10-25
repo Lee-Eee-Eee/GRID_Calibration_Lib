@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-25",
+  "selected_commit": "8e66e62afc6e1d0ca20c6782d46f80e040e279f0",
+  "integration": "fast-forward b90b3aa to selected 8e66e62, followed by 33bc599 review fix",
+  "review": {
+    "backend": "no blocking findings; read-only real-data index verified",
+    "frontend_finding": "late Plotly rendering failures could appear after switching views",
+    "resolution": "33bc599 checks render token and run/layer/channel/load context; adds three regressions"
+  },
+  "heads": {
+    "feat/calibration-workbench": "33bc599aa7e21710c4f9bb155b1677c104f5d849",
+    "experiment/cp2-quality-a": "3f2621085ef9b582c7a82b49114141e942959115",
+    "experiment/cp2-quality-b": "8e66e62afc6e1d0ca20c6782d46f80e040e279f0"
+  },
+  "verified_remote_heads": {
+    "experiment/cp2-quality-a": "3f2621085ef9b582c7a82b49114141e942959115",
+    "experiment/cp2-quality-b": "8e66e62afc6e1d0ca20c6782d46f80e040e279f0",
+    "feat/calibration-workbench": "33bc599aa7e21710c4f9bb155b1677c104f5d849"
+  },
+  "other_experiment_merged": false,
+  "worktrees": "worktree C:/Users/HP/Desktop/Files/Courses/26Fall/ai_coding/GRID-calibration/calibration_lib\nHEAD 33bc599aa7e21710c4f9bb155b1677c104f5d849\nbranch refs/heads/feat/calibration-workbench\n\nworktree C:/Users/HP/.codex/worktrees/5316/calibration_lib\nHEAD 8e66e62afc6e1d0ca20c6782d46f80e040e279f0\nbranch refs/heads/experiment/cp2-quality-b\n\nworktree C:/Users/HP/.codex/worktrees/95fa/calibration_lib\nHEAD 3f2621085ef9b582c7a82b49114141e942959115\nbranch refs/heads/experiment/cp2-quality-a",
+  "tests": {
+    "pytest": {
+      "passed": 432,
+      "seconds": 130.15
+    },
+    "node": {
+      "passed": 80
+    },
+    "ruff_changed_python": "passed",
+    "git_diff_check": "passed"
+  },
+  "real_data_index": {
+    "seconds": 1.10022270004265,
+    "files": 64,
+    "points": 256,
+    "status": {
+      "fitted": 179,
+      "model_pending": 64,
+      "rejected": 13
+    },
+    "coordinates_present": 256,
+    "metrics_present": 192,
+    "quality_accepted": 179,
+    "rejected_with_reasons": 13,
+    "plastic_with_numeric_metrics": 0,
+    "test_l1_review": {
+      "passed": 10,
+      "seconds": 24.75
+    }
+  },
+  "browser": {
+    "url": "http://127.0.0.1:8765/",
+    "run": "20261023-111431-6e9fdd63c95a",
+    "clicked_quality_state": "rejected",
+    "selected_stem": "143_observe_20C_265",
+    "channel": 1,
+    "window_ADC": [
+      517.469,
+      712.531
+    ],
+    "selected_point_restored_after_reload": true,
+    "plastic_ch3_model_pending_count": 64,
+    "plastic_gaussian_fit_enabled": false,
+    "console_errors": 0,
+    "screenshot": "quality-drilldown.png"
+  },
+  "wheel": {
+    "file": "grid_calibration_lib-0.1.0-py3-none-any.whl",
+    "sha256": "e1613362f0a29edba4eab7b21fe325c4d2d142cf8d56e41b032bbf3a0ac23938",
+    "source_byte_matches": 71
+  },
+  "remaining_status": "?? uv.lock"
+}

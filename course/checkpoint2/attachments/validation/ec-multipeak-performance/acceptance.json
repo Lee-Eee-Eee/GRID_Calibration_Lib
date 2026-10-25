@@ -1,0 +1,213 @@
+{
+  "commit": "ed496652fd331547e718aa73afbe88ffc188aa53",
+  "run_id": "20261025-171410-224e4170da14",
+  "name": "放射源多峰与性能验收",
+  "job_id": "e9bee5490352",
+  "browser_actions": [
+    "preloaded Na22 511/1274.5",
+    "removed and saved 1274.5",
+    "manually added 1274.5 with window 6500..7900 and ADC anchor 7202",
+    "saved configuration",
+    "reopened configuration",
+    "viewed full source spectrum",
+    "fitted all source lines on CH0",
+    "switched to second peak",
+    "opened configuration JSON and output PNG previews",
+    "restarted and restored workspace"
+  ],
+  "channel": 0,
+  "bin_width_ADC": 4,
+  "signal_file": "src_Na22_5m_corr.l1.parquet",
+  "background_file": "src_bkg_30m_corr.l1.parquet",
+  "current_channel_fits": [
+    {
+      "E": 511.0,
+      "center": 2885.6393055417097,
+      "center_err": 0.6896920983230183,
+      "sigma": 152.28202628495293,
+      "lo": 2500.0,
+      "hi": 3400.0,
+      "rsquared": 0.996639430476658,
+      "fit_quality": {
+        "delta_bic_background": 25214.977804728733,
+        "amplitude_snr": 152.00114442696295,
+        "redchi": 1.0558537662527951,
+        "center_at_boundary": false,
+        "warnings": [],
+        "accepted": true,
+        "quality_pass": true,
+        "suspect": false,
+        "warning_only": true,
+        "status": "resolved"
+      }
+    },
+    {
+      "E": 1274.5,
+      "center": 7293.812437145181,
+      "center_err": 4.489064904048692,
+      "sigma": 286.53419043285083,
+      "lo": 6500.0,
+      "hi": 7900.0,
+      "rsquared": 0.9478470433323649,
+      "fit_quality": {
+        "delta_bic_background": 1443.560771695342,
+        "amplitude_snr": 32.73985661233611,
+        "redchi": 1.0693117338293407,
+        "center_at_boundary": false,
+        "warnings": [],
+        "accepted": true,
+        "quality_pass": true,
+        "suspect": false,
+        "warning_only": true,
+        "status": "resolved"
+      }
+    }
+  ],
+  "other_channels_unchanged": true,
+  "other_channels_pending_retained": [
+    "14B:ec:src_Na22:1:1274.5",
+    "14B:ec:src_Na22:2:1274.5",
+    "14B:ec:src_Na22:3:1274.5"
+  ],
+  "validation": "passed",
+  "output_names": [
+    "src_Na22_fit.l2.png",
+    "L2_manifest.json",
+    "src_Na22_fit_results.l2.json"
+  ],
+  "saved_operations": [
+    {
+      "id": "332e5ffc66df",
+      "kind": "config",
+      "label": "保存源峰配置",
+      "layer": "EC_L2",
+      "created_at": "2026-10-25T09:35:42+00:00",
+      "files": [
+        {
+          "name": "0001_src_Na22.json",
+          "path": "peak-config/0001_src_Na22.json",
+          "kind": "json",
+          "url": "/api/runs/20261025-171410-224e4170da14/files/peak-config/0001_src_Na22.json"
+        }
+      ]
+    },
+    {
+      "id": "0580dbb191e3",
+      "kind": "config",
+      "label": "保存源峰配置",
+      "layer": "EC_L2",
+      "created_at": "2026-10-25T09:35:53+00:00",
+      "files": [
+        {
+          "name": "0002_src_Na22.json",
+          "path": "peak-config/0002_src_Na22.json",
+          "kind": "json",
+          "url": "/api/runs/20261025-171410-224e4170da14/files/peak-config/0002_src_Na22.json"
+        }
+      ]
+    }
+  ],
+  "spectrum_performance": {
+    "source": "14B Na22, 20261025 new CRC-valid L1",
+    "channel": 0,
+    "energies_keV": [
+      511.0,
+      1274.5
+    ],
+    "valid_signal_events": 561374,
+    "bins": 2508,
+    "bin_width_ADC": 4.0,
+    "before_cold_seconds": 0.8271107000182383,
+    "after_cold_seconds": 0.38848939997842535,
+    "before_warm_median_seconds": 0.6156710999784991,
+    "after_warm_median_seconds": 0.02180779998889193,
+    "warm_speedup": 28.231692343661386,
+    "warm_reduction_percent": 96.45788149067684,
+    "counting_arrays_identical": true,
+    "inputs_unchanged": true,
+    "method": "Six alternating reads in each fresh Python process; first cold, five warm; no profiler enabled."
+  },
+  "http_before": {
+    "run": {
+      "milliseconds": [
+        669.7536000283435,
+        212.69040001789108,
+        284.0519000310451,
+        160.28030001325533,
+        222.2192999906838
+      ],
+      "warm_median_ms": 217.45485000428744,
+      "response_bytes": 270496
+    },
+    "compact_run": {
+      "milliseconds": [
+        242.4353000242263,
+        174.4194999919273,
+        167.69899998325855,
+        86.86060004401952,
+        210.26480000000447
+      ],
+      "warm_median_ms": 171.05924998759292,
+      "response_bytes": 270496
+    },
+    "source_peak": {
+      "milliseconds": [
+        1282.138100010343,
+        729.2086000088602,
+        826.3232999597676,
+        553.9621000061743,
+        600.5154000013135
+      ],
+      "warm_median_ms": 664.8620000050869,
+      "response_bytes": 246316
+    }
+  },
+  "http_after": {
+    "run": {
+      "milliseconds": [
+        240.31149997608736,
+        242.21689999103546,
+        122.35900002997369,
+        143.53070000652224,
+        106.38549999566749
+      ],
+      "warm_median_ms": 132.94485001824796,
+      "response_bytes": 270496
+    },
+    "compact_run": {
+      "milliseconds": [
+        112.18570003984496,
+        151.9558999571018,
+        156.69370000250638,
+        211.6393000469543,
+        257.2087000007741
+      ],
+      "warm_median_ms": 184.16650002473034,
+      "response_bytes": 242469
+    },
+    "source_peak": {
+      "milliseconds": [
+        73.4962000278756,
+        96.61219996633008,
+        80.82899998407811,
+        133.20609997026622,
+        91.80049999849871
+      ],
+      "warm_median_ms": 94.2063499824144,
+      "response_bytes": 246516
+    }
+  },
+  "python_tests": "498 passed in 104.05s (0:01:44)",
+  "frontend_tests": 96,
+  "wheel": {
+    "file": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\dist\\grid_calibration_lib-0.1.0-py3-none-any.whl",
+    "runtime_files_identical": 75,
+    "sha256": "83719962fa10f1812bbad23fd39afe1a5fd3b3dd6a6a9cdf66dd11bbfb2c57b7"
+  },
+  "browser_console_errors": 0,
+  "screenshots": [
+    "multipeak-workbench.png",
+    "output-plot-preview.png",
+    "saved-config-preview.png"
+  ]
+}

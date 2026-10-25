@@ -1,0 +1,40 @@
+{
+  "folder": "05-experiment-a",
+  "title": "CP2-A-质量地图",
+  "source_file": "rollout-2026-10-25T02-30-29-01a16f2d-b76a-7b81-8f10-0b65e6fc5947.jsonl",
+  "source_bytes": 4236188,
+  "source_lines": 921,
+  "source_sha256": "1d7c1f3840af9c8c815a3f54c2661eb3afd8fd098795a5db001628d36470a999",
+  "event_lines": 921,
+  "events_sha256": "03e632b0928614664321c4db9177b4f8c3ecba8a18d7e94313a7bb72b20fa47e",
+  "events_bytes": 3516561,
+  "gzip_bytes": 1344636,
+  "readable_parts": [
+    "conversation-01.md"
+  ],
+  "redaction_counts": {
+    "account_identifiers": 2,
+    "instruction_fields": 8,
+    "instruction_items": 4,
+    "reasoning_items": 226,
+    "encrypted_fields": 27
+  },
+  "session_meta": {
+    "session_id": "01a16f2d-b76a-7b81-8f10-0b65e6fc5947",
+    "id": "01a16f2d-b76a-7b81-8f10-0b65e6fc5947",
+    "forked_from_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+    "forked_from_ordinal_exclusive": 75,
+    "timestamp": "2026-10-24T18:30:29.736Z",
+    "cwd": "C:\\Users\\HP\\.codex\\worktrees\\95fa\\calibration_lib",
+    "history_mode": "paginated",
+    "history_base": {
+      "thread_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+      "end_ordinal_exclusive": 75,
+      "end_byte_offset": 583655
+    },
+    "git": {
+      "commit_hash": "b90b3aa11a0a95b482e1ddb05c6f79f0c15d753b",
+      "repository_url": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib.git"
+    }
+  }
+}

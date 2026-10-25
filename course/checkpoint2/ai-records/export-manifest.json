@@ -1,0 +1,236 @@
+{
+  "exported_at_utc": "2026-10-25T14:47:11.772187+00:00",
+  "scope": "Complete visible user/assistant messages and tool activity. Internal reasoning, encrypted internal content, non-visible system/developer instructions, credentials and account identifiers are omitted or redacted. Original event order and one-to-one line mapping are preserved.",
+  "source_files_frozen_at_export": true,
+  "records": [
+    {
+      "folder": "01-main-part1",
+      "title": "实现 GRID Calibration 可视化 Demo：第一段",
+      "source_file": "rollout-2026-10-19T08-12-07-01a15180-56ce-7a71-8908-19447fc47174.jsonl",
+      "source_bytes": 35114447,
+      "source_lines": 7251,
+      "source_sha256": "7c4d88d2aefdb40b71f327b17a48a8874aa86beb2086c90cfcdb02aadfb3f9bb",
+      "event_lines": 7251,
+      "events_sha256": "19ff7f3ab2c2b3f2f289f230df4f065e12d5b1ddaceaf3c5f0d887ef9b02a3e2",
+      "events_bytes": 30336148,
+      "gzip_bytes": 13005500,
+      "readable_parts": [
+        "conversation-01.md"
+      ],
+      "redaction_counts": {
+        "account_identifiers": 2,
+        "instruction_fields": 39,
+        "instruction_items": 37,
+        "reasoning_items": 1662,
+        "encrypted_fields": 251
+      },
+      "session_meta": {
+        "session_id": "01a15180-56ce-7a71-8908-19447fc47174",
+        "id": "01a15180-56ce-7a71-8908-19447fc47174",
+        "timestamp": "2026-10-19T00:12:07.766Z",
+        "cwd": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding",
+        "history_mode": "paginated"
+      }
+    },
+    {
+      "folder": "02-main-part2",
+      "title": "实现 GRID Calibration 可视化 Demo：续段",
+      "source_file": "rollout-2026-10-22T19-27-25-01a15180-56ce-7a71-8908-19447fc47174_01a1635d-abb7-7ba3-809b-f8461c2ce0f4.jsonl",
+      "source_bytes": 36319156,
+      "source_lines": 6876,
+      "source_sha256": "b439c2c00da800430e6a85619584acd6331aa74e030a882420f7406d3d9496e3",
+      "event_lines": 6876,
+      "events_sha256": "510e572b8be42b26dc1ab629dd3e6ce83661aa6ff06ab8d01d6c2a3b78a7e254",
+      "events_bytes": 30786046,
+      "gzip_bytes": 13442772,
+      "readable_parts": [
+        "conversation-01.md"
+      ],
+      "redaction_counts": {
+        "account_identifiers": 2,
+        "instruction_fields": 49,
+        "instruction_items": 39,
+        "reasoning_items": 1688,
+        "encrypted_fields": 251
+      },
+      "session_meta": {
+        "session_id": "01a15180-56ce-7a71-8908-19447fc47174",
+        "id": "01a15180-56ce-7a71-8908-19447fc47174",
+        "timestamp": "2026-10-22T11:27:25.624Z",
+        "cwd": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding",
+        "history_mode": "paginated",
+        "history_base": {
+          "thread_id": "01a15180-56ce-7a71-8908-19447fc47174",
+          "end_ordinal_exclusive": 7245,
+          "end_byte_offset": 35109362
+        }
+      }
+    },
+    {
+      "folder": "03-common-before-fork",
+      "title": "CP2 共同起点：分叉前上下文",
+      "source_file": "rollout-2026-10-25T02-26-02-01a16f29-a3c5-7650-847f-93f03224191a.jsonl",
+      "source_bytes": 583655,
+      "source_lines": 75,
+      "source_sha256": "910c8baf658a3a9e2de3c8054580bf38bf592a0cbe9875b6f8b91293c6c4bfb9",
+      "event_lines": 75,
+      "events_sha256": "23a3d6191791fd47bd2b6db5bacfe69d2329462274831391bf689851ef037113",
+      "events_bytes": 386721,
+      "gzip_bytes": 124132,
+      "readable_parts": [
+        "conversation-01.md"
+      ],
+      "redaction_counts": {
+        "account_identifiers": 2,
+        "instruction_fields": 6,
+        "instruction_items": 7,
+        "reasoning_items": 10,
+        "encrypted_fields": 1
+      },
+      "session_meta": {
+        "session_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+        "id": "01a16f29-a3c5-7650-847f-93f03224191a",
+        "timestamp": "2026-10-24T18:26:02.587Z",
+        "cwd": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\calibration_lib",
+        "history_mode": "paginated",
+        "git": {
+          "commit_hash": "b90b3aa11a0a95b482e1ddb05c6f79f0c15d753b",
+          "branch": "feat/calibration-workbench",
+          "repository_url": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib.git"
+        }
+      }
+    },
+    {
+      "folder": "04-common-full",
+      "title": "CP2-共同起点：完整会话",
+      "source_file": "rollout-2026-10-25T02-26-02-01a16f29-a3c5-7650-847f-93f03224191a.jsonl",
+      "source_bytes": 1336817,
+      "source_lines": 220,
+      "source_sha256": "1b0e94db4485a7a3a2e3e241583d42dfcd46e1060db63f1d3115fe70f8c85530",
+      "event_lines": 220,
+      "events_sha256": "9094b0779d99548346b5a059b2bd57ef3c985e73b99e3293762d351367717a84",
+      "events_bytes": 1072284,
+      "gzip_bytes": 343154,
+      "readable_parts": [
+        "conversation-01.md"
+      ],
+      "redaction_counts": {
+        "account_identifiers": 2,
+        "instruction_fields": 9,
+        "instruction_items": 7,
+        "reasoning_items": 32,
+        "encrypted_fields": 8
+      },
+      "session_meta": {
+        "session_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+        "id": "01a16f29-a3c5-7650-847f-93f03224191a",
+        "timestamp": "2026-10-24T18:26:02.587Z",
+        "cwd": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\calibration_lib",
+        "history_mode": "paginated",
+        "git": {
+          "commit_hash": "b90b3aa11a0a95b482e1ddb05c6f79f0c15d753b",
+          "branch": "feat/calibration-workbench",
+          "repository_url": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib.git"
+        }
+      }
+    },
+    {
+      "folder": "05-experiment-a",
+      "title": "CP2-A-质量地图",
+      "source_file": "rollout-2026-10-25T02-30-29-01a16f2d-b76a-7b81-8f10-0b65e6fc5947.jsonl",
+      "source_bytes": 4236188,
+      "source_lines": 921,
+      "source_sha256": "1d7c1f3840af9c8c815a3f54c2661eb3afd8fd098795a5db001628d36470a999",
+      "event_lines": 921,
+      "events_sha256": "03e632b0928614664321c4db9177b4f8c3ecba8a18d7e94313a7bb72b20fa47e",
+      "events_bytes": 3516561,
+      "gzip_bytes": 1344636,
+      "readable_parts": [
+        "conversation-01.md"
+      ],
+      "redaction_counts": {
+        "account_identifiers": 2,
+        "instruction_fields": 8,
+        "instruction_items": 4,
+        "reasoning_items": 226,
+        "encrypted_fields": 27
+      },
+      "session_meta": {
+        "session_id": "01a16f2d-b76a-7b81-8f10-0b65e6fc5947",
+        "id": "01a16f2d-b76a-7b81-8f10-0b65e6fc5947",
+        "forked_from_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+        "forked_from_ordinal_exclusive": 75,
+        "timestamp": "2026-10-24T18:30:29.736Z",
+        "cwd": "C:\\Users\\HP\\.codex\\worktrees\\95fa\\calibration_lib",
+        "history_mode": "paginated",
+        "history_base": {
+          "thread_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+          "end_ordinal_exclusive": 75,
+          "end_byte_offset": 583655
+        },
+        "git": {
+          "commit_hash": "b90b3aa11a0a95b482e1ddb05c6f79f0c15d753b",
+          "repository_url": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib.git"
+        }
+      }
+    },
+    {
+      "folder": "06-experiment-b",
+      "title": "CP2-B-质量地图",
+      "source_file": "rollout-2026-10-25T02-32-26-01a16f2f-7ec0-7692-a12d-f5c410cf4f9f.jsonl",
+      "source_bytes": 2442820,
+      "source_lines": 861,
+      "source_sha256": "a08bc7e7ae36cfabb2cbd149126c8cae78e7ac743e91946b1faa01ee7b100fae",
+      "event_lines": 861,
+      "events_sha256": "078f639eb354cf8827059eee2e1b24e8c883ee8ce67b4a818f8f44eb703eea4e",
+      "events_bytes": 1776269,
+      "gzip_bytes": 376200,
+      "readable_parts": [
+        "conversation-01.md"
+      ],
+      "redaction_counts": {
+        "account_identifiers": 2,
+        "instruction_fields": 8,
+        "instruction_items": 4,
+        "reasoning_items": 198,
+        "encrypted_fields": 31
+      },
+      "session_meta": {
+        "session_id": "01a16f2f-7ec0-7692-a12d-f5c410cf4f9f",
+        "id": "01a16f2f-7ec0-7692-a12d-f5c410cf4f9f",
+        "forked_from_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+        "forked_from_ordinal_exclusive": 75,
+        "timestamp": "2026-10-24T18:32:26.345Z",
+        "cwd": "C:\\Users\\HP\\.codex\\worktrees\\5316\\calibration_lib",
+        "history_mode": "paginated",
+        "history_base": {
+          "thread_id": "01a16f29-a3c5-7650-847f-93f03224191a",
+          "end_ordinal_exclusive": 75,
+          "end_byte_offset": 583655
+        },
+        "git": {
+          "commit_hash": "b90b3aa11a0a95b482e1ddb05c6f79f0c15d753b",
+          "repository_url": "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib.git"
+        }
+      }
+    }
+  ],
+  "total_redaction_counts": {
+    "api_key": 0,
+    "github_token": 0,
+    "gitlab_token": 0,
+    "aws_key": 0,
+    "bearer": 0,
+    "private_key": 0,
+    "account_identifiers": 12,
+    "instruction_fields": 119,
+    "instruction_items": 98,
+    "reasoning_items": 3816,
+    "encrypted_fields": 569
+  },
+  "included_formats": [
+    "Markdown",
+    "JSONL"
+  ],
+  "gzip_export_metadata": "Gzip was verified against JSONL during export; duplicate gzip files are omitted from the submission."
+}

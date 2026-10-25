@@ -34,6 +34,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+workbench = ["plotly>=5.18"]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
@@ -42,6 +43,7 @@ dev = [
 
 [project.scripts]
 grid-calib = "calibration_lib.run_layer:main"
+grid-workbench = "calibration_lib.workbench.server:main"
 
 [project.urls]
 Homepage = "https://github.com/Lee-Eee-Eee/GRID_Calibration_Lib"
@@ -55,11 +57,15 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# Map the on-disk layout (this repo IS the package) to module name calibration_lib
-packages = ["calibration_lib"]
+# The repository itself is the package; there is no nested calibration_lib/.
+# Include only runtime modules and assets, then prefix them with the import name.
+only-include = [
+    "__init__.py", "run_layer.py", "pipeline.py", "common", "config",
+    "tb", "ec", "checks", "tools", "resources", "integration", "workbench",
+]
 
 [tool.hatch.build.targets.wheel.sources]
-"." = "calibration_lib"
+"" = "calibration_lib"
 
 # ── Ruff (lint + format) ────────────────────────────────────────────────
 [tool.ruff]

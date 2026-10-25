@@ -1,0 +1,261 @@
+{
+  "date": "2026-10-25",
+  "entries": [
+    {
+      "file": "ab-comparison/A-01-quality-map-CH0.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\A-01-quality-map-CH0.png",
+      "bytes": 79633,
+      "sha256": "d8f255f580f4d1c76b5d28ff5c262768635bbf9d10626d9c0cf0a5b94f41dbae"
+    },
+    {
+      "file": "ab-comparison/A-01-quality-overview-CH0.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\A-01-quality-overview-CH0.jpg",
+      "bytes": 180313,
+      "sha256": "ce0ab1279b2b5715a2c78985a027d3e7ee60db7f805cda4f0845ee859cb2c3cd"
+    },
+    {
+      "file": "ab-comparison/A-02-rejected-point-CH2.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\A-02-rejected-point-CH2.jpg",
+      "bytes": 179183,
+      "sha256": "4d888a369fd2be713606dda7b1ab3b1c27df949d4abbc1827ac8ad3879c029d6"
+    },
+    {
+      "file": "ab-comparison/A-02-residual-108-CH2.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\A-02-residual-108-CH2.png",
+      "bytes": 26804,
+      "sha256": "d1bbd21e9a8298aea20e44bad9dbc74d6a2b2fe73cfba6e45d5e59c929055684"
+    },
+    {
+      "file": "ab-comparison/A-02-spectrum-108-CH2.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\A-02-spectrum-108-CH2.png",
+      "bytes": 46143,
+      "sha256": "cc55a50f3a28e07bf94b4b80aede53ea9b45382f4936ade6b552d44a4ddec4cc"
+    },
+    {
+      "file": "ab-comparison/A-03-model-pending-CH3.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\A-03-model-pending-CH3.jpg",
+      "bytes": 129361,
+      "sha256": "88d604e6fbb878b5cc6aa9cad8b0001dabe221f245efbf6f33625e6bb626b1ca"
+    },
+    {
+      "file": "ab-comparison/B-01-quality-map-CH0.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\B-01-quality-map-CH0.png",
+      "bytes": 117841,
+      "sha256": "ddba78e3e48c7e05bea33ab96452f40323ada2a2997abf42a3eebcc03e2030e8"
+    },
+    {
+      "file": "ab-comparison/B-01-quality-overview-CH0.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\B-01-quality-overview-CH0.jpg",
+      "bytes": 153188,
+      "sha256": "61de3c3289f59d3284ce7a547083726f8fbb50811b765166860579e5afe4d6fc"
+    },
+    {
+      "file": "ab-comparison/B-02-quality-panel-CH2.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\B-02-quality-panel-CH2.jpg",
+      "bytes": 37966,
+      "sha256": "28ec4c93fb773cd48629ae570a55af30cd30f24bc729a69d3522175131e1f022"
+    },
+    {
+      "file": "ab-comparison/B-02-rejected-point-CH2.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\B-02-rejected-point-CH2.jpg",
+      "bytes": 159181,
+      "sha256": "b14893371efd4b372b29a4535643ee47bc8f90d0236d6ee1d98b0748b3281631"
+    },
+    {
+      "file": "ab-comparison/B-02-spectrum-and-details-CH2.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\B-02-spectrum-and-details-CH2.jpg",
+      "bytes": 94775,
+      "sha256": "6f9e60b469c49f163fe83e249ee7d6fb58737e2b4922154aa5d18c87d68c8bf9"
+    },
+    {
+      "file": "ab-comparison/B-03-model-pending-CH3.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\B-03-model-pending-CH3.jpg",
+      "bytes": 147338,
+      "sha256": "b15bc53b848ed9ab867ae33219a4675c75ae54c3e43fc1b08173d2597200e7e5"
+    },
+    {
+      "file": "ab-comparison/B-03-quality-panel-CH3.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\B-03-quality-panel-CH3.jpg",
+      "bytes": 34763,
+      "sha256": "5e88f24dc9ec68b702129b3f69fa480985c4cd5679a53125b40f38f784815550"
+    },
+    {
+      "file": "ab-comparison/capture-manifest.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\capture-manifest.json",
+      "bytes": 7491,
+      "sha256": "0af582c2c67b7b8ffb0dc63c6ebd21852c0ef38e5f9557ea76c31358a5983140"
+    },
+    {
+      "file": "ab-comparison/README.md",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\docs\\course-project\\checkpoint2\\screenshots\\2026-10-25-ab-quality\\README.md",
+      "bytes": 3294,
+      "sha256": "d07e91ed72ec5328bd051f5b80cc42520ee3ffb6ddf1a31170f831201e07a97e",
+      "transformation": "Only local absolute links changed to portable relative links."
+    },
+    {
+      "file": "current-demo/tb-workbench.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ui-quiet\\tb-workbench.png",
+      "bytes": 88047,
+      "sha256": "5d217f4bb07212845e9a63b65010ce0362332c04d49105b8ae0133a189549383"
+    },
+    {
+      "file": "current-demo/ec-workbench.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ui-quiet\\ec-workbench.png",
+      "bytes": 79984,
+      "sha256": "1af4e7d97dcbc33c8c6c42dda6a685d8bfc7ae37eebfb202054ac5ffc4c611dd"
+    },
+    {
+      "file": "current-demo/multipeak-workbench.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\multipeak-workbench.png",
+      "bytes": 86867,
+      "sha256": "242a623fdced8f7cb912ab43c5ef96d542f5b677cacfe89ea21c08324a8b51c3"
+    },
+    {
+      "file": "current-demo/saved-config-preview.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\saved-config-preview.png",
+      "bytes": 64851,
+      "sha256": "401510fb5fa0fa14843391d067db34590940f89ba3eea38bf16510563d7a0515"
+    },
+    {
+      "file": "current-demo/output-plot-preview.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\output-plot-preview.png",
+      "bytes": 77737,
+      "sha256": "3c33b0c6b493fadff4dd8ce7a8a47f505cadb319cee380dd46e3f7a2ab109622"
+    },
+    {
+      "file": "current-demo/15b-corrected-spectrum.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\15b-corrected-spectrum.png",
+      "bytes": 75077,
+      "sha256": "7b34e35e4c3485c33a972f6985bf6f0a8942422886971807ee1266066f166d14"
+    },
+    {
+      "file": "current-demo/co60-corrected-spectrum.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\co60-corrected-spectrum.png",
+      "bytes": 84116,
+      "sha256": "5c3b3c9f0b80336df4e66c2ce24e646f6adafdbdf44542e3afd9b43357e9e7ca"
+    },
+    {
+      "file": "validation/input-review/acceptance.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\acceptance.json",
+      "bytes": 2173,
+      "sha256": "da0d266b39638d7fed320e25a036ab1e6d76f83ae4e23ce118d5aaf2ffc6f955"
+    },
+    {
+      "file": "validation/input-review/pytest.txt",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\pytest.txt",
+      "bytes": 599,
+      "sha256": "4e9a4f8c17c712925e84916e1194ba0ba8ae2e6367296994641133edb5f3d057"
+    },
+    {
+      "file": "validation/input-review/node-tests.txt",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\node-tests.txt",
+      "bytes": 10764,
+      "sha256": "3ac7137995acc41b62b0d5265608882a1a943583542191b3ce98951e81fe9c99"
+    },
+    {
+      "file": "validation/input-review/browser-validation.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\browser-validation.json",
+      "bytes": 763,
+      "sha256": "083646f9e5ce006703f0759886664f4da0745180861f73c3e6896fe823efcb1a"
+    },
+    {
+      "file": "validation/input-review/source-l2-validation.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\source-l2-validation.json",
+      "bytes": 1458,
+      "sha256": "49183aa7aaab4bda7e5d1e8b54d72a78f819f0db2c8bc1a34a52eef86a692b37"
+    },
+    {
+      "file": "validation/input-review/focused-axis-validation.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-input-review\\focused-axis-validation.json",
+      "bytes": 170,
+      "sha256": "fc0666dcc6b0ee561d1b364625c3f039f2884926106474d4efced126fd2cb623"
+    },
+    {
+      "file": "validation/ec-multipeak-performance/acceptance.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\acceptance.json",
+      "bytes": 6265,
+      "sha256": "ee3f048fb12d8c7c4d0438da788f252c04d52274f56cc7f99348327f85303417"
+    },
+    {
+      "file": "validation/ec-multipeak-performance/comparison.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\comparison.json",
+      "bytes": 663,
+      "sha256": "7dfa8bb96de9f7d53904b1b2f27113b995da2cb809abcedee5f6b899e816393b"
+    },
+    {
+      "file": "validation/ec-multipeak-performance/http-before.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\http-before.json",
+      "bytes": 775,
+      "sha256": "29d5529e6abc52c82bc4c94c792ef20ccc02c50f649c3fd0987b43a16be194ff"
+    },
+    {
+      "file": "validation/ec-multipeak-performance/http-after.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-ec-multipeak-performance\\http-after.json",
+      "bytes": 777,
+      "sha256": "989b7eee94da67bd3a72da8cd7a1377a973ad855fc83d58ccb8dad3d87cccb3a"
+    },
+    {
+      "file": "validation/warning-quality/acceptance.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-warning-quality\\acceptance.json",
+      "bytes": 59338,
+      "sha256": "c840c0733d972425a5ba1ff4f417b6066404303d4f2ae0d682f645fb474e030d"
+    },
+    {
+      "file": "validation/warning-quality/binning-audit.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-warning-quality\\binning-audit.json",
+      "bytes": 3560,
+      "sha256": "f6da6b758a2794e36d7358717d0d3c6c5a1dfc069e9bea8b26d0d8a5dee0522c"
+    },
+    {
+      "file": "validation/warning-quality/binning-audit.md",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-warning-quality\\binning-audit.md",
+      "bytes": 2517,
+      "sha256": "c195e21e9d9af07015961696345db5a2d41b5026adba313b7e7e7d922a03659f"
+    },
+    {
+      "file": "validation/warning-quality/real-tb-result.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-warning-quality\\real-tb-result.json",
+      "bytes": 20692,
+      "sha256": "66a8a67415654edb5a599efb26a2104e8c0c4d9c14ae570d8a15a28836ce826a"
+    },
+    {
+      "file": "validation/cp2-b-integration/acceptance.json",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261025-cp2-b-integration\\acceptance.json",
+      "bytes": 2911,
+      "sha256": "c04fd25e20e1df1c867d2ebc7a1e62c6b4d3a214e74e60832d90b31e3a901b7e"
+    },
+    {
+      "file": "samples/108_observe_50C_265_fit_results.l1.json",
+      "source": "C:\\Users\\HP\\.codex\\worktrees\\95fa\\cp2-quality-a-workspace\\runs\\20261023-111431-6e9fdd63c95a\\products\\10B\\tb\\L1\\json\\108_observe_50C_265_fit_results.l1.json",
+      "bytes": 30463,
+      "sha256": "e69fd46d7b590b91c5312095aaa29a823ae2eab0cc17f7e58bd10dbf986b68ac"
+    },
+    {
+      "file": "samples/cache-histograms.npz",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261023-10b-peak-study\\cache-histograms.npz",
+      "bytes": 770124,
+      "sha256": "78ab6c7a244c7794bc5ab5534496d1fc8ec14e9b96d45623859a5b8e51784ea0"
+    },
+    {
+      "file": "background/calibration-pipeline.png",
+      "source": "C:\\Users\\HP\\AppData\\Local\\Temp\\codex-clipboard-75af5bea-bf99-4f26-9410-32abc42157cf.png",
+      "description": "用户提供的原项目TB/EC标定数据处理流程图，原样收录",
+      "bytes": 611255,
+      "sha256": "815ad9c1269c318fc7c378ecfe3a0fca3acf7453208a3bb41dc0d84523c0fd1d"
+    },
+    {
+      "file": "current-demo/tb-l2-3d-surface.jpg",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261019-ui-redesign\\evidence\\workbench-redesigned.jpg",
+      "description": "14B CH0 早期TB L2三维曲面、原谱及残差联动演示",
+      "bytes": 112685,
+      "sha256": "b84d4c146cb88c99543194e985f970ae4e9edfc70008e79df047111a3f0bf693"
+    },
+    {
+      "file": "current-demo/tb-l2-3d-residual.png",
+      "source": "C:\\Users\\HP\\Desktop\\Files\\Courses\\26Fall\\ai_coding\\GRID-calibration\\runs\\20261019-090055-df4dfe323ec3\\evidence\\tb-3d-residual.png",
+      "description": "使用14B真实数据的DEMO-16交互演示：TB L2三维残差与原谱联动",
+      "bytes": 128435,
+      "sha256": "da46c58944a56baacfdb5c3e444330782783de41b40054a7a6b1535dcb196039"
+    }
+  ]
+}

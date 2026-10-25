@@ -1,0 +1,75 @@
+{
+  "source_records_checked": 12,
+  "center_order_valid": true,
+  "crc_failed_inputs": 0,
+  "current_input_hashes_match": true,
+  "tb_sha256": "a5d46f27f85c832049154c12387781542343d0db783fa8bb59101e91cbfb84d7",
+  "Na22_fit_file_unchanged": true,
+  "remaining_pending": [
+    "14B:ec:src_Na22:1:1274.5",
+    "14B:ec:src_Na22:2:1274.5",
+    "14B:ec:src_Na22:3:1274.5"
+  ],
+  "centers": [
+    {
+      "source": "Co60",
+      "channel": 0,
+      "centers": [
+        6653.392506629165,
+        7676.646125839174
+      ]
+    },
+    {
+      "source": "Co60",
+      "channel": 1,
+      "centers": [
+        7426.770988463848,
+        8455.247786593349
+      ]
+    },
+    {
+      "source": "Co60",
+      "channel": 2,
+      "centers": [
+        6793.749775320176,
+        7724.797298307142
+      ]
+    },
+    {
+      "source": "Co60",
+      "channel": 3,
+      "centers": [
+        7783.3445358691315,
+        8875.014051561602
+      ]
+    },
+    {
+      "source": "Cs137",
+      "channel": 0,
+      "centers": [
+        3761.916408777528
+      ]
+    },
+    {
+      "source": "Cs137",
+      "channel": 1,
+      "centers": [
+        4182.681047853281
+      ]
+    },
+    {
+      "source": "Cs137",
+      "channel": 2,
+      "centers": [
+        3814.8937593755304
+      ]
+    },
+    {
+      "source": "Cs137",
+      "channel": 3,
+      "centers": [
+        4373.694470124631
+      ]
+    }
+  ]
+}
