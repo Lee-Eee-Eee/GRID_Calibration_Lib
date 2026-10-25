@@ -75,6 +75,11 @@
           <p id="l1-quality-note" class="plot-caption"></p>
           <details id="l1-quality-unlocated" class="l1-quality-unlocated" hidden><summary>缺少实测坐标的工况</summary><div id="l1-quality-unlocated-list"></div></details>
         </section>
+        <section id="ec-source-workbench" class="panel ec-source-workbench" aria-label="放射源多峰配置" hidden>
+          <div class="panel-heading"><div><h3>放射源能线与 ADC 窗口</h3><p id="ec-source-caption">选择源谱，逐条设置能量与当前通道的拟合范围</p></div><span id="ec-source-channel" class="badge neutral"></span></div>
+          <div class="ec-source-toolbar"><label for="ec-spectrum-select">源谱文件</label><select id="ec-spectrum-select"><option value="">选择放射源谱</option></select><label for="ec-source-name">放射源</label><input id="ec-source-name" aria-label="放射源名称" placeholder="例如 Na22"></div>
+          <div id="ec-source-editor" hidden><div class="table-wrap ec-peak-table-wrap"><table class="ec-peak-table"><thead><tr><th>能量 / keV</th><th>ADC 下限</th><th>ADC 上限</th><th>期望 ADC（可选）</th><th>峰状态</th><th></th></tr></thead><tbody id="ec-peak-rows"></tbody></table></div><div class="ec-source-actions"><button id="ec-add-line" class="button small">增添能线</button><button id="ec-view-full-source" class="button small" aria-pressed="false">显示整张谱</button><span id="ec-peak-save-status" role="status" class="muted-text"></span><button id="ec-save-lines" class="button small">保存能线与窗口</button><button id="ec-fit-source" class="button primary small">拟合本谱全部能线</button></div></div>
+        </section>
         <section id="tb-analysis" class="analysis-grid">
           <aside id="l1-workbench" class="panel l1-files-panel" aria-label="L1 工况文件" hidden>
             <div class="l1-files-heading"><h3>工况文件</h3><span id="l1-file-position">—</span></div>
@@ -88,7 +93,7 @@
               <div class="panel-heading"><div><h3 id="main-chart-title">温度–偏压响应</h3><p id="surface-caption">选择测量点，查看对应工况能谱</p></div><div class="chart-controls"><select id="surface-mode" aria-label="三维图显示量"><option value="response">峰位 + 残差连线</option><option value="residual">三维残差</option></select><span id="point-count" class="badge neutral">— 个工况</span></div></div>
               <div id="surface-chart" class="chart surface-chart" aria-label="温度偏压响应三维图"></div>
               <div id="l1-spectrum-legend" class="chart-legend l1-spectrum-legend" aria-label="能谱曲线图例" hidden><span><i class="legend-line raw"></i><span id="observed-spectrum-label">计数谱</span></span><span><i class="legend-line fit"></i><span id="fitted-spectrum-label">峰 + 背景拟合</span></span><span><i class="legend-line background"></i>背景</span></div>
-              <div id="main-chart-legend" class="chart-legend"><span><i class="legend-dot blue"></i>参与拟合</span><span><i class="legend-cross"></i>已屏蔽</span><span title="沿用原 TB L2 处理器的 R² ≥ 0.5 质量阈值"><i class="legend-dot grey"></i>质量筛除</span><span><i class="legend-ring"></i>选中点</span><span id="tb-version" class="version-label"></span></div>
+              <div id="main-chart-legend" class="chart-legend"><span><i class="legend-dot blue"></i>参与拟合</span><span><i class="legend-cross"></i>已屏蔽</span><span title="峰参数缺失或无效，暂无可参与拟合的参数"><i class="legend-dot grey"></i>无可用参数</span><span><i class="legend-ring"></i>选中点</span><span id="tb-version" class="version-label"></span></div>
             </article>
             <section class="panel secondary-analysis" aria-label="残差与参数比较">
               <div class="analysis-tabs" role="tablist" aria-label="分析视图"><button id="analysis-tab-residual" role="tab" aria-selected="true" class="analysis-tab active" data-analysis-view="residual">拟合残差 <span id="residual-metric" class="metric-inline">—</span></button><button id="analysis-tab-comparison" role="tab" aria-selected="false" class="analysis-tab" data-analysis-view="comparison">参数比较</button><select id="ec-detail-mode" aria-label="EC 诊断量" hidden><option value="residual">刻度残差</option><option value="resolution">能量分辨率</option></select><button id="refit-tb" class="button small">重新拟合 TB</button></div>

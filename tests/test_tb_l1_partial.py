@@ -182,10 +182,11 @@ def test_invalid_channel_scope_fails_before_job_creation(channels):
         peak_job_settings("TB_L1", {"fit_channels": channels})
 
 
-def test_channel_scope_is_specific_to_tb_l1():
+def test_channel_scope_applies_to_the_two_peak_fitting_layers():
     assert peak_job_settings("TB_L1", {"fit_channels": [2, 0, 2]}) == {"fit_channels": [0, 2]}
+    assert peak_job_settings("EC_L2", {"fit_channels": [0]}) == {"fit_channels": [0]}
     with pytest.raises(ValueError, match="fit_channels"):
-        peak_job_settings("EC_L2", {"fit_channels": [0]})
+        peak_job_settings("EC_L1", {"fit_channels": [0]})
 
 
 def test_four_current_channels_must_accumulate_after_reading_revision(tmp_path):

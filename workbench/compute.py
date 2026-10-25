@@ -880,11 +880,14 @@ class ComputeAdapter:
         if self.acquisition and selection is None and layer not in ("TB_L2", "EC_L3"):
             rows = inventory["raw"]["reading_preview"]["rows"]
             selection = [row["stem"] for row in rows if (row["kind"] == "tb") == layer.startswith("TB_")]
-        if config.get("ec_point_id") and layer in ("EC_L1", "EC_L2"):
-            pieces = str(config["ec_point_id"]).split(":")
-            if len(pieces) != 5 or pieces[0] != payload or pieces[1] != "ec":
-                raise ValueError("EC 能峰点不属于当前载荷")
-            energy_key = pieces[2]
+        if (config.get("ec_point_id") or config.get("energy_key")) and layer in ("EC_L1", "EC_L2"):
+            if config.get("ec_point_id"):
+                pieces = str(config["ec_point_id"]).split(":")
+                if len(pieces) != 5 or pieces[0] != payload or pieces[1] != "ec":
+                    raise ValueError("EC 能峰点不属于当前载荷")
+                energy_key = pieces[2]
+            else:
+                energy_key = config["energy_key"]
             input_layer = "EC_L0" if layer == "EC_L1" else "EC_L1"
             sources = (
                 self._layer_dir(product_root, payload, input_layer) / "parquet",
@@ -900,6 +903,8 @@ class ComputeAdapter:
                     )
                 }
             )
+            if energy_key.startswith("src_") and config.get("only"):
+                selection = [stem for stem in selection if stem in config["only"]]
             if not selection:
                 raise ValueError(f"选中能峰 {energy_key} 没有真实 {input_layer} 输入，请先生成或载入相应产品")
         hydrated = []
@@ -1071,6 +1076,8 @@ class ComputeAdapter:
                     "only_energies": energies,
                     "only_stems": selection,
                     "ec_windows": config.get("ec_windows", {}),
+                    "ec_peak_sets": config.get("ec_peak_sets", {}),
+                    **({"fit_channels": config["fit_channels"]} if "fit_channels" in config else {}),
                     "automatic_window": config.get("automatic_window", False),
                     "peak_detection": config.get("peak_detection", {}),
                     "background_stem": f"src_bkg_{float(cfg.bkg_exposure_minutes):g}m"
@@ -1090,7 +1097,8 @@ class ComputeAdapter:
                     if path.name.removesuffix("_fit_results.l2.json") not in allowed:
                         path.unlink()
             result = ECL3Processor(payload, product_root, response_payload=self.detector_payload(payload)).process(
-                layout.get_ec_l2_dir(), {**EC_PROCESS_PARAMS, "ec_excluded": config.get("ec_excluded", [])}
+                layout.get_ec_l2_dir(), {**EC_PROCESS_PARAMS, "ec_excluded": config.get("ec_excluded", []),
+                                       "ec_peak_sets": config.get("ec_peak_sets", {})}
             )
             selection = None
             if representative:
@@ -1159,8 +1167,9 @@ class ComputeAdapter:
                     if config["ec_point_id"] not in item.get("points_updated", []):
                         errors.append(f"Requested EC point was not fitted: {config['ec_point_id']}")
                     continue
-                expected_channels = {ch for ch in range(4) if not unsupported_spectral_model(self.detector_payload(payload), ch)}
-                if {record.get("channel") for record in records if not record.get("placeholder")} != expected_channels:
+                expected_channels = set(result.get("fit_channels", [ch for ch in range(4) if not unsupported_spectral_model(self.detector_payload(payload), ch)]))
+                updated_channels = set(item.get("channels_updated", [record.get("channel") for record in records if not record.get("placeholder")]))
+                if not expected_channels <= updated_channels:
                     errors.append(f"Incomplete EC L2 channels for {item['energy']}")
         if layer == "TB_L2" and any(not params for ch, params in enumerate(result.get("fit_params") or [None] * 4)
                                    if not unsupported_spectral_model(self.detector_payload(payload), ch)):

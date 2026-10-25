@@ -173,6 +173,13 @@ def test_external_package_selection_is_frozen_persistent_and_does_not_write_sour
     assert Path(selected["path"]).is_relative_to(dependency_service.root(run["id"]) / "dependencies")
     assert Path(selected["path"]).read_bytes() == original
     assert external.read_bytes() == original
+    operation = updated["operations"][-1]
+    assert operation["label"] == "选择 TB 依赖"
+    assert {item["name"] for item in operation["files"]} == {"0001.json", "custom_acquisition.json", "_package.json"}
+    for item in operation["files"]:
+        assert not Path(item["path"]).is_absolute()
+        preview = dependency_service.artifact_preview(run["id"], item["path"])
+        assert preview["name"] == item["name"] and preview["kind"] == "json"
     # A later external edit must not silently alter the selected correction.
     put(external, tb_rows(0.02))
     assert Path(selected["path"]).read_bytes() == original

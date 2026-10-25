@@ -6,6 +6,7 @@ window edits are applied by ECL2Processor; point exclusions by ECL3Processor.
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,9 +14,10 @@ import numpy as np
 from lmfit.models import ExponentialModel, GaussianModel, LinearModel, QuadraticModel
 
 from ..common.spectral_models import unsupported_spectral_model
-from ..common.utils import read_json, read_parquet, read_parquet_metadata, validated_events
+from ..common.utils import read_json, validated_events
 from ..ec.processors.L2_processor import BIN_WIDTH, ECL2Processor
 from ..ec.processors.L3_processor import ECL3Processor, res_fit
+from .read_cache import EC_READ_CACHE, file_fingerprint
 
 if TYPE_CHECKING:
     from .compute import ComputeAdapter
@@ -28,7 +30,11 @@ def point_id(payload: str, stem: str, channel: int, energy: float) -> str:
 def _clean(value):
     if isinstance(value, dict):
         return {str(key): _clean(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, np.ndarray)):
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind in "fiub":
+            return value.tolist() if np.isfinite(value).all() else np.where(np.isfinite(value), value, None).tolist()
+        return _clean(value.tolist())
+    if isinstance(value, (list, tuple)):
         return [_clean(item) for item in value]
     if isinstance(value, (float, np.floating)):
         return float(value) if np.isfinite(value) else None
@@ -85,15 +91,66 @@ class ECInspector:
                 return path
         return None
 
+    @staticmethod
+    def _input(path, fingerprint):
+        def load():
+            import pyarrow.parquet as pq
+
+            names = pq.read_schema(path).names
+            columns = [name for name in ("channel", "amp_corr", "utc", "crc_check") if name in names]
+            frame = pq.read_table(path, columns=columns).to_pandas()
+            frame, quality = validated_events(frame)
+            frame.attrs["crc_input_quality"] = quality
+            if file_fingerprint(path) != fingerprint:
+                raise ValueError("EC 谱文件已更新，请重新读取")
+            return frame, quality
+
+        return EC_READ_CACHE.get(("ec-input", fingerprint), load)
+
+    @staticmethod
+    def _evidence(path, fingerprint):
+        def load():
+            result = ECL2Processor.input_evidence(path)
+            if file_fingerprint(path) != fingerprint:
+                raise ValueError("EC 谱文件已更新，请重新读取")
+            return result
+
+        return EC_READ_CACHE.get(("ec-evidence", fingerprint), load)
+
+    def _prepared(self, processor, path, channel, background_path, background_channel, bin_width):
+        signal_key = file_fingerprint(path)
+        background_key = file_fingerprint(background_path) if background_path else None
+
+        def load():
+            frame, signal_quality = self._input(path, signal_key)
+            signal = frame.loc[frame["channel"] == channel].copy()
+            if signal.empty:
+                raise ValueError(f"No events in {path.name} ch{channel}")
+            background_frame = (signal.iloc[0:0] if background_path is None else frame
+                                if background_key == signal_key else self._input(background_path, background_key)[0])
+            background = background_frame.loc[background_frame["channel"] == background_channel].copy()
+            prepared = processor._prepare_spectrum(signal, background, bin_width)
+            if (file_fingerprint(path) != signal_key
+                    or background_path and file_fingerprint(background_path) != background_key):
+                raise ValueError("EC 谱文件已更新，请重新读取")
+            return prepared, len(signal), signal_quality
+
+        key = ("ec-prepared", signal_key, background_key, channel, background_channel, float(bin_width))
+        return (*EC_READ_CACHE.get(key, load), signal_key, background_key)
+
     def points(self, payload: str, product_root: Path, channel: int | None = None) -> list[dict]:
         if channel is not None:
             self._channel(channel)
         rows = []
+        parquet_files = {path.name: path for path in self._files(payload, product_root, "EC_L1", "parquet", "*_corr.l1.parquet")}
+        priority = {directory / "parquet": rank for rank, directory in enumerate(self._layers(payload, product_root, "EC_L1"))}
+        resolved_root = Path(product_root).resolve()
         for path in self._files(payload, product_root, "EC_L2", "json", "*_fit_results.l2.json"):
             stem = path.name.removesuffix("_fit_results.l2.json")
             records = read_json(path)
             if not isinstance(records, list):
                 continue
+            origin = "run" if resolved_root in path.resolve().parents else "historical"
             for record in records:
                 ch = record.get("channel")
                 if ch not in range(4) or channel is not None and ch != channel:
@@ -104,11 +161,18 @@ class ECInspector:
                     continue
                 if not np.isfinite(energy) or energy <= 0:
                     continue
-                parquet = (
-                    self._named_parquet(payload, product_root, record["signal_file"])
-                    if record.get("signal_file")
-                    else self._parquet(payload, product_root, stem, ch)
-                )
+                if record.get("signal_file"):
+                    name = record["signal_file"]
+                    if Path(name).name != name:
+                        raise ValueError("EC product filename must not contain a path")
+                    parquet = parquet_files.get(name)
+                elif stem.startswith("src_"):
+                    names = sorted(name for name in parquet_files if fnmatch.fnmatchcase(name, f"{stem}_*_corr.l1.parquet"))
+                    rank = min((priority[parquet_files[name].parent] for name in names), default=None)
+                    preferred = [name for name in names if priority[parquet_files[name].parent] == rank]
+                    parquet = parquet_files[preferred[-1]] if preferred else None
+                else:
+                    parquet = parquet_files.get(f"{stem}_ch{ch}_corr.l1.parquet")
                 reasons = self.quality_reasons(record)
                 rows.append(
                     {
@@ -124,9 +188,7 @@ class ECInspector:
                             self.adapter.detector_payload(payload) if hasattr(self.adapter, "detector_payload") else payload, ch),
                         "quality_suspect": bool(reasons),
                         "quality_reasons": reasons,
-                        "source_origin": "run"
-                        if Path(product_root).resolve() in path.resolve().parents
-                        else "historical",
+                        "source_origin": origin,
                     }
                 )
         return _clean(sorted(rows, key=lambda row: (row["E"], row["channel"], row["stem"])))
@@ -136,9 +198,15 @@ class ECInspector:
         """Expose warning annotations using the processor's own diagnostics."""
         return ECL3Processor.quality_reasons(record)
 
-    def overview(self, payload: str, product_root: Path, channel: int) -> dict:
+    def overview(self, payload: str, product_root: Path, channel: int, *, points: list[dict] | None = None) -> dict:
         self._channel(channel)
-        rows = self.points(payload, product_root, channel)
+        rows = self.points(payload, product_root, channel) if points is None else [dict(point) for point in points]
+        for row in rows:
+            pending = row.get("fit_status") == "not_fitted" or row.get("center") is None
+            row.setdefault("quality_pass", ECL3Processor.usable_record(row) and not unsupported_spectral_model(
+                self.adapter.detector_payload(payload) if hasattr(self.adapter, "detector_payload") else payload, channel))
+            row.setdefault("quality_reasons", [] if pending else self.quality_reasons(row))
+            row.setdefault("quality_suspect", not pending and bool(row["quality_reasons"]))
         paths = self._files(payload, product_root, "EC_L3", "json", "*_EC.l3.json")
         current = self.adapter._layer_dir(product_root, payload, "EC_L3") / "json"
         current_paths = sorted(current.glob("*_EC.l3.json"))
@@ -202,13 +270,19 @@ class ECInspector:
         )
 
     def spectrum(
-        self, payload: str, product_root: Path, selected_id: str, channel: int | None = None
+        self, payload: str, product_root: Path, selected_id: str, channel: int | None = None,
+        *, point: dict | None = None,
     ) -> dict:
-        rows = self.points(payload, product_root, channel)
-        point = next((row for row in rows if row["id"] == selected_id), None)
+        if point is None:
+            rows = self.points(payload, product_root, channel)
+            point = next((row for row in rows if row["id"] == selected_id), None)
+        elif point.get("id") != selected_id or channel is not None and point.get("channel") != channel:
+            raise ValueError("EC 能线与所选通道不匹配")
         if point is None:
             raise FileNotFoundError(f"No EC L2 point for {selected_id}")
+        point = dict(point)
         ch, stem = point["channel"], point["stem"]
+        self._channel(ch)
         path = (
             self._named_parquet(payload, product_root, point["signal_file"])
             if point.get("signal_file")
@@ -216,11 +290,6 @@ class ECInspector:
         )
         if path is None:
             raise FileNotFoundError(f"No corrected EC L1 spectrum for {stem} ch{ch}")
-        frame = read_parquet(path)
-        frame, signal_quality = validated_events(frame)
-        signal = frame.loc[frame["channel"] == ch].copy()
-        if signal.empty:
-            raise ValueError(f"No events in {path.name} ch{ch}")
         background_ch = int(point.get("background_channel", ch))
         if "background_file" in point:
             background_path = (
@@ -241,23 +310,15 @@ class ECInspector:
             background_path = self._parquet(payload, product_root, stem, background_ch)
         if background_path is None and "background_file" not in point:
             raise FileNotFoundError(f"No EC background spectrum for {stem} ch{background_ch}")
-        background_frame = (
-            signal.iloc[0:0]
-            if background_path is None
-            else frame
-            if background_path == path
-            else read_parquet(background_path)
-        )
-        if not background_frame.empty:
-            background_frame, _ = validated_events(background_frame)
-        background = background_frame.loc[background_frame["channel"] == background_ch].copy()
         processor = ECL2Processor(payload, product_root)
         bin_width = float(point.get("bin_width", BIN_WIDTH))
-        prepared = processor._prepare_spectrum(signal, background, bin_width)
+        prepared, n_events, signal_quality, signal_key, background_key = self._prepared(
+            processor, path, ch, background_path, background_ch, bin_width)
         input_evidence = {}
         for role, input_path in (("signal", path), ("background", background_path)):
             actual = (
-                processor.input_evidence(input_path) if input_path else {"sha256": None, "tb_correction": {}}
+                self._evidence(input_path, signal_key if role == "signal" else background_key)
+                if input_path else {"sha256": None, "tb_correction": {}}
             )
             expected = point.get(f"{role}_sha256")
             recorded_empty = role == "background" and f"{role}_sha256" in point and input_path is None
@@ -281,11 +342,15 @@ class ECInspector:
             if fit_input_verified is False
             else "Historical fit lacks input hashes. Its relationship to the displayed L1 spectrum is unverified; rerun EC L2 to establish provenance."
         )
-        lo, hi = float(point["lo"]), float(point["hi"])
         x = prepared["mids"]
+        lo, hi = (float(point["lo"]) if point.get("lo") is not None else 0.,
+                  float(point["hi"]) if point.get("hi") is not None else float(x[-1] + bin_width / 2))
         fit_x = x[(x >= lo) & (x <= hi)]
         pending = (point.get("placeholder") or unsupported_spectral_model(
-            self.adapter.detector_payload(payload) if hasattr(self.adapter, "detector_payload") else payload, ch))
+            self.adapter.detector_payload(payload) if hasattr(self.adapter, "detector_payload") else payload, ch)
+            or point.get("fit_status") == "not_fitted"
+            or any(point.get(key) is None or not np.isfinite(point[key]) for key in ("center", "sigma", "amplitude"))
+            or point.get("sigma", 0) <= 0)
         gaussian = (np.zeros_like(fit_x) if pending else GaussianModel().eval(
             x=fit_x, amplitude=point["amplitude"], center=point["center"], sigma=point["sigma"]))
         fitted_background = np.zeros_like(fit_x)
@@ -304,7 +369,7 @@ class ECInspector:
             fitted_background = QuadraticModel().eval(
                 x=fit_x, a=model_params["b_a"], b=model_params["b_b"], c=model_params["b_c"]
             )
-        metadata = read_parquet_metadata(path, "tb_correction")
+        metadata = input_evidence["signal"]["tb_correction"]
         curve_notes = []
         if not exact_curve:
             curve_notes.append(
@@ -318,13 +383,13 @@ class ECInspector:
                 "stem": stem,
                 "channel": ch,
                 "point": point,
-                "fit": point,
+                "fit": None if pending else point,
                 "x": x,
                 "y": prepared["net"],
                 "signal": prepared["spec"],
                 "background": prepared["bkg_spec"],
                 "yerr": prepared["net_err"],
-                "curve": {
+                "curve": None if pending else {
                     "x": fit_x,
                     "y": gaussian + fitted_background if exact_curve else [],
                     "gaussian": gaussian,
@@ -335,11 +400,11 @@ class ECInspector:
                 },
                 "source_path": path,
                 "background_path": background_path,
-                "fit_input_verified": fit_input_verified,
-                "fit_input_note": fit_input_note,
+                "fit_input_verified": None if pending else fit_input_verified,
+                "fit_input_note": None if pending else fit_input_note,
                 "input_evidence": input_evidence,
                 "source": "run" if Path(product_root).resolve() in path.resolve().parents else "historical",
-                "n_events": len(signal),
+                "n_events": n_events,
                 "input_quality": signal_quality,
                 "tb_correction": metadata,
                 "tb_corrfile": metadata.get("tb_corrfile"),

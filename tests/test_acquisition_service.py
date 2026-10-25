@@ -115,6 +115,15 @@ def test_saved_snapshots_and_revisions_restore_without_mutating_inputs(acquisiti
         assert saved["ec_dependency"] is None
         assert saved["config_revision"] == 1
         assert saved["revisions"][-1]["reason"] == "new payload protocol"
+        operation = saved["operations"][-1]
+        assert operation["label"] == "保存读取配置"
+        assert {item["name"] for item in operation["files"]} == {"0001.json", "profile.json", "event.xml", "hk.xml"}
+        for item in operation["files"]:
+            assert not Path(item["path"]).is_absolute()
+            assert (service.root(run["id"]) / item["path"]).is_file()
+            preview = service.artifact_preview(run["id"], item["path"])
+            assert preview["name"] == item["name"]
+            assert preview["kind"] == ("json" if item["name"].endswith(".json") else "text")
         first_bytes = Path(first["path"]).read_bytes()
         for item in first["xml"]:
             assert Path(item["path"]).is_relative_to(service.root(run["id"]))

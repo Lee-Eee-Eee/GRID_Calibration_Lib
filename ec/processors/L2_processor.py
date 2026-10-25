@@ -23,6 +23,7 @@ from ...common.utils import (
     validated_events,
     write_json,
 )
+from ...workbench.ec_peaks import normalize_peak_sets, source_definition
 
 BIN_WIDTH = 4.0
 DISPLAY_BIN_MERGE = 3
@@ -75,6 +76,15 @@ class ECL2Processor:
         if not np.isfinite(bin_width) or bin_width <= 0:
             raise ValueError("bin_width must be finite and positive")
         only_point = self._only_point(cfg.get("only_point"))
+        peak_sets = normalize_peak_sets(cfg.get("ec_peak_sets", {}))
+        selected_channels = cfg.get("fit_channels", list(photopeak_channels(self.response_payload)))
+        if not only_point and (not isinstance(selected_channels, (list, tuple)) or not selected_channels
+                               or any(type(ch) is not int or ch not in range(4) for ch in selected_channels)):
+            raise ValueError("fit_channels must contain channel numbers 0–3")
+        selected_channels = ([only_point[1]] if only_point else
+                             sorted(set(selected_channels) & set(photopeak_channels(self.response_payload))))
+        if not selected_channels:
+            raise ValueError("No supported photopeak channels were selected")
         if only_point and cfg.get("only_energies") is not None and only_point[0] not in cfg["only_energies"]:
             raise ValueError("only_point is outside only_energies")
 
@@ -85,6 +95,8 @@ class ECL2Processor:
             "bin_width": bin_width,
             "automatic_window": bool(cfg.get("automatic_window")),
             "peak_detection_config": cfg.get("peak_detection") or {},
+            "ec_peak_sets": peak_sets,
+            "fit_channels": selected_channels,
             "n_processed": 0,
             "outputs": [],
             "errors": [],
@@ -211,7 +223,7 @@ class ECL2Processor:
             selected_energies = [only_point[0]] if only_point else cfg.get("only_energies")
             if selected_energies is not None and energy_key not in selected_energies:
                 continue
-            required_channels = {only_point[1]} if only_point else set(photopeak_channels(self.response_payload))
+            required_channels = set(selected_channels)
             if not required_channels <= set(ch_map):
                 message = (f"Selected channel {only_point[1]} has no corrected input" if only_point else
                            "Requires all supported photopeak channels")
@@ -226,10 +238,18 @@ class ECL2Processor:
             plot_rows: list[dict[str, Any]] = []
 
             try:
-                first = ch_map[only_point[1] if only_point else 0]
+                first = ch_map[selected_channels[0]]
                 data_type = first["data_type"]
                 source_name = first.get("source_name")
                 peak_energies = first.get("peak_energies_keV") or [self._energy_sort_key(energy_key)]
+                peak_set = peak_sets.get(energy_key) if data_type == "src" else None
+                if peak_set is not None:
+                    peak_energies = [line["energy_keV"] for line in peak_set["lines"]]
+                    source_name = peak_set["source_name"]
+                elif data_type == "src" and not first.get("peak_energies_keV"):
+                    definition = source_definition(source_name)
+                    if definition:
+                        peak_energies = list(definition["energies_keV"])
                 if data_type == "src":
                     if bkg_df_global is None:
                         raise ValueError(f"Source {source_name} requires an explicitly available corrected background")
@@ -240,7 +260,7 @@ class ECL2Processor:
                                           for energy in peak_energies):
                     raise ValueError(f"only_point energy {only_point[2]:g} keV is not configured for {energy_key}")
 
-                for ch in ([only_point[1]] if only_point else range(4)):
+                for ch in selected_channels:
                     if unsupported_spectral_model(self.response_payload, ch):
                         continue
                     signal = ch_map[ch]
@@ -264,6 +284,8 @@ class ECL2Processor:
                     prev_center: float | None = None
                     prev_energy: float | None = None
                     for peak_E in peaks_to_fit:
+                        configured_line = next((line for line in (peak_set or {}).get("lines", [])
+                                                if np.isclose(line["energy_keV"], float(peak_E), rtol=1e-10, atol=1e-8)), {})
                         peak_window = None
                         window_source = "auto"
                         if data_type == "src":
@@ -277,6 +299,8 @@ class ECL2Processor:
                                 window_source = "packaged"
                         point_id = f"{self.payload_name}:ec:{energy_key}:{ch}:{float(peak_E):g}"
                         manual_override = cfg.get("ec_windows", {}).get(point_id)
+                        if manual_override is None:
+                            manual_override = configured_line.get("windows", {}).get(str(ch))
                         if manual_override is not None and not cfg.get("automatic_window"):
                             try:
                                 lo, hi = float(manual_override["lo"]), float(manual_override["hi"])
@@ -294,6 +318,9 @@ class ECL2Processor:
                             peak_window = [center_guess - half_span, center_guess + half_span]
                             window_source = "energy_ratio"
                         detection_config = dict(cfg.get("peak_detection") or {})
+                        if configured_line.get("centers", {}).get(str(ch)) is not None:
+                            detection_config.update(expected_center=configured_line["centers"][str(ch)],
+                                                    expected_energy_keV=float(peak_E))
                         if data_type == "src":
                             detection_config.setdefault("infer_noise", False)
                         if cfg.get("automatic_window"):
@@ -489,11 +516,12 @@ class ECL2Processor:
                 fig_name = f"{energy_key}_fit.l2.png"
 
                 json_path = self.layout.get_ec_l2_json(json_name)
-                if only_point and json_path.is_file():
+                if (only_point or data_type == "src" or cfg.get("fit_channels")) and json_path.is_file():
                     existing = read_json(json_path)
                     if not isinstance(existing, list):
                         raise ValueError(f"Invalid existing EC L2 records: {json_path.name}")
-                    merged = list(existing)
+                    merged = [old for old in existing if peak_set is None or any(
+                        np.isclose(float(old.get("E", -1)), energy, rtol=1e-10, atol=1e-8) for energy in peak_energies)]
                     for rec in records:
                         matches = [index for index, old in enumerate(merged)
                                    if old.get("channel") == rec["channel"]

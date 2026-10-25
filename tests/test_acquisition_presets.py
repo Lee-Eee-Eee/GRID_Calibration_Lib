@@ -192,6 +192,15 @@ def test_manual_edits_mark_parent_preset_and_switch_records_revision(inputs):
         assert same["reference"]["version"] == 2
         assert same["run"]["acquisition"]["revision"] == switched["acquisition"]["revision"]
         assert same["run"]["config_revision"] == switched["config_revision"] + 1
+        operation = same["run"]["operations"][-1]
+        assert operation["label"] == "切换读取预设"
+        assert {item["name"] for item in operation["files"]} == {
+            f"{same['run']['config_revision']:04d}.json", "profile.json", "event.xml", "hk.xml"}
+        for item in operation["files"]:
+            assert not Path(item["path"]).is_absolute()
+            preview = service.artifact_preview(run["id"], item["path"])
+            assert preview["name"] == item["name"]
+            assert preview["kind"] == ("json" if item["name"].endswith(".json") else "text")
     finally:
         service.close()
 

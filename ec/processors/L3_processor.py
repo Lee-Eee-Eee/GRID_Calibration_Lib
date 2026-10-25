@@ -11,6 +11,7 @@ from lmfit.models import QuadraticModel
 
 from ...common.fit_policy import quality_warnings, unavailable_fit
 from ...common.utils import DataLayout, get_timestamp, read_json, write_json
+from ...workbench.ec_peaks import normalize_peak_sets
 
 MIN_RSQUARED = 0.7
 MAX_CENTER_RELERR = 0.15
@@ -50,6 +51,7 @@ class ECL3Processor:
     def process(self, ec_l2_dir: Path, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         from ...common.spectral_models import unsupported_spectral_model
         cfg = config or {}
+        peak_sets = normalize_peak_sets(cfg.get("ec_peak_sets", {}))
         e_cut = float(cfg.get("energy_split_low", 50.2))
 
         results: Dict[str, Any] = {
@@ -65,10 +67,22 @@ class ECL3Processor:
             "quality_policy": "warning_only",
             "fit_weight_fallbacks": [],
             "excluded_points": sorted(set(cfg.get("ec_excluded", []))),
+            "ec_peak_sets": peak_sets,
+            "inactive_points": [],
         }
 
         try:
             fit_data_all = self._collect_l2_results(ec_l2_dir)
+            active = []
+            for row in fit_data_all:
+                selected = peak_sets.get(self._energy_key(row))
+                if selected is not None and not any(
+                    np.isclose(row["E"], line["energy_keV"], rtol=1e-10, atol=1e-8) for line in selected["lines"]
+                ):
+                    results["inactive_points"].append(self._point_id(row))
+                else:
+                    active.append(row)
+            fit_data_all = active
             excluded = set(cfg.get("ec_excluded", []))
             fit_data_all = [row for row in fit_data_all if self._point_id(row) not in excluded]
             if not fit_data_all:
@@ -216,8 +230,15 @@ class ECL3Processor:
     # ------------------------------------------------------------------ #
 
     def _point_id(self, row: dict[str, Any]) -> str:
-        stem = str(row.get("file", "")).removesuffix(".l2").removesuffix("_fit_results")
+        stem = self._energy_key(row)
         return f"{self.payload_name}:ec:{stem}:{int(row['channel'])}:{float(row['E']):g}"
+
+    @staticmethod
+    def _energy_key(row):
+        stem = str(row.get("file", ""))
+        if stem.endswith("_l2_fit_results"):
+            return stem.removesuffix("_l2_fit_results")
+        return stem.removesuffix(".l2").removesuffix("_fit_results")
 
     def _collect_l2_results(self, ec_l2_dir: Path) -> List[Dict[str, Any]]:
         json_dir = ec_l2_dir / "json"

@@ -21,10 +21,13 @@ from urllib.parse import quote
 from ..common.fit_policy import usable_peak
 from ..common.spectral_models import detector_identity, photopeak_channels, unsupported_spectral_model
 from .acquisition_store import freeze_profile, load_profile, prepare_profile, presets, profile_digest
+from .artifacts import preview as preview_artifact
 from .compute import ComputeAdapter
 from .datasets import DatasetCatalog, validate_payload
 from .dependencies import snapshot, tb_package
 from .ec_interactive import ECInspector
+from .ec_peaks import catalog as source_peak_catalog
+from .ec_peaks import draft_points, normalize_peak_sets
 from .presets import PresetRegistry
 
 LAYERS = ("TB_L0", "TB_L1", "TB_L2", "EC_L0", "EC_L1", "EC_L2", "EC_L3")
@@ -101,9 +104,9 @@ def peak_job_settings(layer, spec):
         result["bin_width"] = float(width)
     if "fit_channels" in spec:
         channels = spec["fit_channels"]
-        if (layer != "TB_L1" or not isinstance(channels, list) or not channels
+        if (layer not in ("TB_L1", "EC_L2") or not isinstance(channels, list) or not channels
                 or any(type(ch) is not int or ch not in range(4) for ch in channels)):
-            raise ValueError("fit_channels 只适用于 TB L1，须为 0–3 的通道列表")
+            raise ValueError("fit_channels 只适用于 TB L1 / EC L2，须为 0–3 的通道列表")
         result["fit_channels"] = sorted(set(channels))
     if "automatic_window" in supplied:
         if not isinstance(spec["automatic_window"], bool):
@@ -154,6 +157,7 @@ class Workbench:
         # Matplotlib and the legacy parser have process-global state.
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="calibration")
         self.inventory_cache = {}
+        self.peak_catalog_cache = {}
         self._recover()
 
     def _recover(self):
@@ -194,6 +198,149 @@ class Workbench:
     def save(self, state):
         with self.lock:
             write(self.root(state["id"]) / "state.json", state)
+
+    def _saved_operation(self, state, label, paths, layer=None):
+        files = [{"name": Path(path).name, "path": str(path).replace("\\", "/"),
+                  "kind": Path(path).suffix.lstrip("."),
+                  "url": f"/api/runs/{state['id']}/files/{quote(str(path).replace(chr(92), '/'))}"}
+                 for path in paths]
+        event = {"id": uuid.uuid4().hex[:12], "kind": "config", "label": label,
+                 "layer": layer, "created_at": now(), "files": files}
+        state.setdefault("operations", []).append(event)
+        return files
+
+    def _source_peaks(self, state, adapter=None):
+        adapter = adapter or self.adapter_for(state)
+        products = self.root(state["id"]) / "products"
+        files = []
+        for layer, folder, pattern in (("EC_L1", "parquet", "*_corr.l1.parquet"),
+                                        ("EC_L2", "json", "*_fit_results.l2.json")):
+            for directory in {layer_dir(products, state["payload"], layer),
+                              adapter.historical_layer(state["payload"], layer)}:
+                for path in (directory / folder).glob(pattern):
+                    stat = path.stat()
+                    files.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+        key = (state["id"], state.get("config_revision"), tuple(sorted(files)))
+        if key not in self.peak_catalog_cache:
+            result = source_peak_catalog(adapter, state["payload"], products,
+                                         profile=adapter.acquisition, config=state["config"])
+            if len(self.peak_catalog_cache) >= 16:
+                self.peak_catalog_cache.pop(next(iter(self.peak_catalog_cache)))
+            self.peak_catalog_cache[key] = result
+        return copy.deepcopy(self.peak_catalog_cache[key])
+
+    def _ec_points(self, state, channel, adapter=None):
+        adapter = adapter or self.adapter_for(state)
+        points = ECInspector(adapter).points(state["payload"], self.root(state["id"]) / "products", channel)
+        return draft_points(self._source_peaks(state, adapter), state["payload"], channel, points)
+
+    def _all_ec_points(self, state, adapter=None):
+        adapter = adapter or self.adapter_for(state)
+        existing = ECInspector(adapter).points(state["payload"], self.root(state["id"]) / "products")
+        sources = self._source_peaks(state, adapter)
+        return [point for ch in range(4) for point in draft_points(sources, state["payload"], ch, existing)]
+
+    def ec_peak_config(self, run_id):
+        state = self.read(run_id)
+        result = self._source_peaks(state)
+        for source in result["spectra"]:
+            for line in source["lines"]:
+                line["point_ids"] = {str(ch): f"{state['payload']}:ec:{source['energy_key']}:{ch}:{line['energy_keV']:g}"
+                                     for ch in range(4)}
+        result.update(revision=state["config_revision"],
+                      files=[file for operation in state.get("operations", [])
+                             if operation.get("label") == "保存源峰配置" for file in operation["files"]][-4:])
+        return clean(result)
+
+    def save_ec_peak_config(self, run_id, body):
+        key = body.get("energy_key")
+        if not isinstance(key, str) or not key.startswith("src_"):
+            raise ValueError("请选择放射源谱")
+        updated = normalize_peak_sets({key: {"source_name": body.get("source_name") or key[4:],
+                                            "lines": body.get("lines", [])}})[key]
+        with self.lock:
+            state = self.read(run_id)
+            if any(job["status"] in ("queued", "running") for job in state["jobs"]):
+                raise ValueError("请等待当前计算完成后再保存能线")
+            source = next((item for item in self._source_peaks(state)["spectra"] if item["energy_key"] == key), None)
+            if source is None:
+                raise ValueError("放射源谱不存在")
+            old_lines = {f"{line['energy_keV']:g}": line for line in source["lines"]}
+            supported = photopeak_channels(_response_payload(state))
+            changed_points, active_points = set(), set()
+            for line in updated["lines"]:
+                energy = f"{line['energy_keV']:g}"
+                previous = old_lines.get(energy)
+                for ch in supported:
+                    identity = f"{state['payload']}:ec:{key}:{ch}:{energy}"
+                    active_points.add(identity)
+                    if previous is None or any(previous.get(field, {}).get(str(ch)) != line.get(field, {}).get(str(ch))
+                                               for field in ("windows", "centers")):
+                        changed_points.add(identity)
+            points = {point["channel"]: point for point in self._all_ec_points(state)
+                      if point["energy_key"] == key}
+            for line in updated["lines"]:
+                for ch, window in line["windows"].items():
+                    width = float(points.get(int(ch), {}).get("bin_width") or 4.)
+                    if window["hi"] - window["lo"] < 8 * width:
+                        raise ValueError(f"CH {ch} 的窗口至少需要 8 个 bin（{8 * width:g} ADC）")
+            state["config"].setdefault("ec_peak_sets", {})[key] = updated
+            prefix = f"{state['payload']}:ec:{key}:"
+            # Table edits replace the corresponding older per-point windows.
+            state["config"]["ec_windows"] = {identity: window for identity, window in
+                                               state["config"].get("ec_windows", {}).items()
+                                               if not identity.startswith(prefix)}
+            for line in updated["lines"]:
+                for ch, window in line["windows"].items():
+                    identity = f"{prefix}{ch}:{line['energy_keV']:g}"
+                    state["config"]["ec_windows"][identity] = window
+            state["pending_ec_windows"] = sorted({identity for identity in state.get("pending_ec_windows", [])
+                                                   if not identity.startswith(prefix) or identity in active_points} | changed_points)
+            state["config_revision"] += 1
+            revision = state["config_revision"]
+            relative = f"peak-config/{revision:04d}_{key}.json"
+            record = {"revision": revision, "saved_at": now(), "energy_key": key, **updated}
+            write(self.root(run_id) / relative, record)
+            state["revisions"].append({"revision": revision, "saved_at": record["saved_at"],
+                                       "reason": "保存源峰配置", "config": copy.deepcopy(state["config"])})
+            files = self._saved_operation(state, "保存源峰配置", [relative], "EC_L2")
+            dirty = set(state["dirty_layers"]) | {"EC_L3"}
+            if changed_points:
+                dirty.add("EC_L2")
+            state["dirty_layers"] = sorted(dirty)
+            state.setdefault("acquisition_products", {}).setdefault("EC_L2", [])
+            retained = (set(state.setdefault("acquisition_ec_l2_points", {}).get(key, [])) & active_points) - changed_points
+            state["acquisition_ec_l2_points"][key] = sorted(retained)
+            if key in state["acquisition_products"]["EC_L2"] and not active_points <= retained:
+                state["acquisition_products"]["EC_L2"].remove(key)
+            state["updated_at"] = now()
+            self.save(state)
+        return {**self.ec_peak_config(run_id), "saved_files": files}
+
+    def artifact_preview(self, run_id, path, *, job_id=None, source=None, layer=None):
+        state = self.read(run_id)
+        root = self.root(run_id)
+        relative = Path(path)
+        if relative.is_absolute():
+            raise ValueError("请使用产物相对路径")
+        if job_id:
+            if not any(job["id"] == job_id for job in state["jobs"]):
+                raise FileNotFoundError("任务不存在")
+            base = root / "jobs" / job_id / "products"
+            url = f"/api/runs/{run_id}/files/jobs/{job_id}/products/{quote(relative.as_posix())}"
+        elif source in ("history", "historical"):
+            if layer not in LAYERS:
+                raise ValueError("请选择产物层级")
+            base = self.adapter_for(state).historical_layer(state["payload"], layer)
+            url = f"/api/runs/{run_id}/history/{layer}/{quote(relative.as_posix())}"
+        else:
+            base = root / "products" if (root / "products" / relative).is_file() else root
+            prefix = "products/" if base == root / "products" else ""
+            url = f"/api/runs/{run_id}/files/{prefix}{quote(relative.as_posix())}"
+        target, boundary = (base / relative).resolve(), base.resolve()
+        if not target.is_relative_to(boundary) or not target.is_file():
+            raise FileNotFoundError("产物不存在")
+        return clean(preview_artifact(target, relative=relative.as_posix(), url=url))
 
     def inventory(self, payload):
         if payload not in ("14B", "15B"):
@@ -297,7 +444,12 @@ class Workbench:
             }
             state["revisions"].append(revision)
             state["updated_at"] = now()
-            write(self.root(run_id) / "revisions" / f"{state['config_revision']:04d}.json", revision)
+            root = self.root(run_id)
+            revision_path = f"revisions/{state['config_revision']:04d}.json"
+            write(root / revision_path, revision)
+            self._saved_operation(state, "保存读取配置", [revision_path,
+                Path(reference["path"]).relative_to(root).as_posix(),
+                *(Path(item["path"]).relative_to(root).as_posix() for item in reference["xml"])])
             self.save(state)
         return self.view(run_id)
 
@@ -313,7 +465,15 @@ class Workbench:
             "config": copy.deepcopy(state["config"]),
         }
         state["revisions"].append(revision)
-        write(self.root(state["id"]) / "revisions" / f"{state['config_revision']:04d}.json", revision)
+        root = self.root(state["id"])
+        revision_path = f"revisions/{state['config_revision']:04d}.json"
+        write(root / revision_path, revision)
+        reference = state.get("acquisition")
+        paths = [revision_path]
+        if reference:
+            paths.extend([Path(reference["path"]).relative_to(root).as_posix(),
+                          *(Path(item["path"]).relative_to(root).as_posix() for item in reference["xml"])])
+        self._saved_operation(state, "切换读取预设", paths)
         self.save(state)
 
     def acquisition_presets(self, payload=None):
@@ -462,6 +622,7 @@ class Workbench:
                 for row in rows
                 if row["kind"] in ("xray", "source")
             }
+            expected = {key for key in expected if state.get("config", {}).get("ec_peak_sets", {}).get(key, {}).get("lines") != []}
         if layer in ("TB_L2", "EC_L3"):
             expected = {"aggregate"}
         completed = set(state.get("acquisition_products", {}).get(layer, [])) & expected
@@ -722,13 +883,7 @@ class Workbench:
             if "name" in patch:
                 state["name"] = str(patch["name"])[:120]
             if "ec_windows" in patch or "ec_excluded" in patch:
-                known = {
-                    point["id"]: point
-                    for channel in range(4)
-                    for point in ECInspector(adapter).overview(
-                        state["payload"], self.root(run_id) / "products", channel
-                    )["points"]
-                }
+                known = {point["id"]: point for point in self._all_ec_points(state, adapter)}
                 windows = patch.get("ec_windows", {})
                 if not isinstance(windows, dict):
                     raise ValueError("ec_windows 必须为对象")
@@ -765,10 +920,15 @@ class Workbench:
             }
             state["revisions"].append(revision)
             write(self.root(run_id) / "revisions" / f"{state['config_revision']:04d}.json", revision)
+            saved_files = self._saved_operation(
+                state, "保存窗口配置" if "windows" in patch or "ec_windows" in patch else "保存修订配置",
+                [f"revisions/{state['config_revision']:04d}.json"],
+                "EC_L2" if "ec_windows" in patch or "ec_excluded" in patch else "TB_L1",
+            )
             state["dirty_layers"] = sorted(set(state["dirty_layers"]) | changed)
             state["updated_at"] = now()
             self.save(state)
-        return self.view(run_id)
+        return {**self.view(run_id, compact=True), "saved_files": saved_files}
 
     def stale(self, state):
         ec = state.get("ec_dependency")
@@ -877,7 +1037,13 @@ class Workbench:
                 "config": state["config"],
             }
             state["revisions"].append(revision)
-            write(self.root(run_id) / "revisions" / f"{state['config_revision']:04d}.json", revision)
+            root = self.root(run_id)
+            revision_path = f"revisions/{state['config_revision']:04d}.json"
+            write(root / revision_path, revision)
+            frozen_path = Path(state["selected_tb"]["path"])
+            self._saved_operation(state, "选择 TB 依赖", [revision_path,
+                frozen_path.relative_to(root).as_posix(),
+                (frozen_path.parent / "_package.json").relative_to(root).as_posix()], "EC_L1")
             state["updated_at"] = now()
             self.save(state)
         return self.view(run_id)
@@ -922,6 +1088,10 @@ class Workbench:
     def _expected_ec_points(state, energy, records):
         """The configured input defines coverage, including points not fitted yet."""
         supported = photopeak_channels(_response_payload(state))
+        peak_set = state.get("config", {}).get("ec_peak_sets", {}).get(energy)
+        if peak_set is not None:
+            return {f"{state['payload']}:ec:{energy}:{ch}:{line['energy_keV']:g}"
+                    for line in peak_set["lines"] for ch in supported}
         rows = (state["inventory"].get("raw", {}).get("reading_preview") or {}).get("rows", [])
         expected = set()
         for row in rows:
@@ -980,7 +1150,7 @@ class Workbench:
                 self.verify_tb(selected)
             if layer in ("EC_L2", "EC_L3") and self.stale(state):
                 raise ValueError("EC 使用的 TB 版本已过期，请重新运行 EC L1")
-            if layer == "EC_L2" and state.get("ec_dependency") is None and not spec.get("point_id"):
+            if layer == "EC_L2" and state.get("ec_dependency") is None and not (spec.get("point_id") or spec.get("energy_key")):
                 raise ValueError("请先运行 EC L1，固定本次 TB 版本")
             if layer == "EC_L3" and "EC_L2" in state["dirty_layers"]:
                 raise ValueError("请先运行 EC L2 更新能峰拟合")
@@ -990,10 +1160,15 @@ class Workbench:
             if (
                 layer == "EC_L2"
                 and not spec.get("point_id")
+                and not spec.get("energy_key")
                 and not config["representative"]
                 and state.get("ec_scope") != "all"
             ):
                 raise ValueError("全量 EC L2 需要先执行全量 EC L1；当前仅有代表样例校正")
+            if spec.get("energy_key"):
+                if layer != "EC_L2" or spec["energy_key"] not in {item["energy_key"] for item in self._source_peaks(state)["spectra"]}:
+                    raise ValueError("放射源谱不存在")
+                config["energy_key"] = spec["energy_key"]
             if spec.get("stem"):
                 adapter = self.adapter_for(state)
                 if layer.startswith("TB_"):
@@ -1043,8 +1218,7 @@ class Workbench:
                     raise ValueError("能峰局部重拟合只支持 EC L2")
                 channel = int(spec.get("channel", 0))
                 self._channel(channel)
-                overview = self.ec_overview(run_id, channel)
-                point = next((point for point in overview["points"] if point["id"] == spec["point_id"]), None)
+                point = next((point for point in self._ec_points(state, channel) if point["id"] == spec["point_id"]), None)
                 if point is None:
                     raise ValueError("EC 能峰不存在")
                 config["ec_point_id"] = spec["point_id"]
@@ -1052,8 +1226,8 @@ class Workbench:
                     config.update(peak_job_settings(layer, {"bin_width": point["bin_width"]}))
             if layer == "EC_L2" and state.get("pending_ec_l0"):
                 pending = state["pending_ec_l0"]
-                if config.get("ec_point_id"):
-                    energy = config["ec_point_id"].split(":")[2]
+                if config.get("ec_point_id") or config.get("energy_key"):
+                    energy = config["ec_point_id"].split(":")[2] if config.get("ec_point_id") else config["energy_key"]
                     affected = [
                         stem
                         for stem in pending
@@ -1084,7 +1258,7 @@ class Workbench:
                 "config_revision": state["config_revision"],
                 "config": config,
                 "scope": "selected"
-                if config.get("only") or config.get("ec_point_id")
+                if config.get("only") or config.get("ec_point_id") or config.get("energy_key")
                 else "representative"
                 if config["representative"]
                 else "all",
@@ -1372,18 +1546,12 @@ class Workbench:
                     if state["pending_windows"] or state.get("tb_l1_failures"):
                         dirty.add("TB_L1")
                 if layer == "EC_L2":
-                    fitted_energies = {
-                        Path(a["path"]).name.removesuffix("_fit_results.l2.json")
-                        for a in job["outputs"]
-                        if a["path"].endswith("_fit_results.l2.json")
-                    }
                     updated_points = {point for item in job.get("result", {}).get("processor", {}).get("outputs", [])
                                       for point in item.get("points_updated", [])}
                     state["pending_ec_windows"] = [
                         point
                         for point in state.get("pending_ec_windows", [])
-                        if point not in updated_points and (job["config"].get("ec_point_id")
-                                                           or point.split(":")[2] not in fitted_energies)
+                        if point not in updated_points
                     ]
                     if state["pending_ec_windows"]:
                         dirty.add("EC_L2")
@@ -1498,7 +1666,25 @@ class Workbench:
             write(job_root / "job.json", job)
             self.save(state)
 
-    def job(self, run_id, job_id):
+    @staticmethod
+    def _compact_job(job):
+        result = job.get("result") or {}
+        processor = result.get("processor") or {}
+        compact = {key: value for key, value in job.items() if key not in ("config", "result", "validation")}
+        compact["config"] = {key: value for key, value in job.get("config", {}).items()
+                             if key in ("only", "fit_channels", "representative", "ec_point_id", "bin_width", "energy_key")}
+        if "result" in job:
+            compact["result"] = {key: result[key] for key in ("success", "partial", "summary", "counts", "warnings", "errors") if key in result}
+            compact["result"]["processor"] = {key: value for key, value in processor.items()
+                                               if key in ("channels_fitted", "channels_accepted", "channels_suspect", "channels_rejected",
+                                                          "channels_failed", "quality_policy", "skipped_channels")}
+        if job.get("validation"):
+            compact["validation"] = {key: value for key, value in job["validation"].items() if key != "files"}
+            compact["validation"]["files"] = [{"file": item["file"], "valid": item["valid"]}
+                                               for item in job["validation"].get("files", [])]
+        return compact
+
+    def job(self, run_id, job_id, *, compact=False):
         state = self.read(run_id)
         job = next((j for j in state["jobs"] if j["id"] == job_id), None)
         if not job:
@@ -1511,7 +1697,7 @@ class Workbench:
                 stream.seek(max(0, log.stat().st_size - 48000))
                 tail = stream.read().decode("utf-8", errors="replace")
                 job["log"] = tail.replace("\r\n", "\n").replace("\r", "\n")[-12000:]
-        return job
+        return self._compact_job(job) if compact else job
 
     def validate(self, layer, paths):
         """Use the workspace's authoritative checkers read-only, separately from computation."""
@@ -1701,13 +1887,14 @@ class Workbench:
                     "ec_dependency": state.get("ec_dependency"),
                 }
             )
-        result = ECInspector(adapter).overview(state["payload"], self.root(run_id) / "products", channel)
+        result = ECInspector(adapter).overview(state["payload"], self.root(run_id) / "products", channel,
+                                               points=self._ec_points(state, channel, adapter))
         for point in result["points"]:
             point["actual_used"] = point.get("used", False)
             point["excluded"] = point["id"] in state["config"].get("ec_excluded", [])
             point["draft_used"] = point.get("quality_pass", False) and not point["excluded"]
             point["used"] = point["actual_used"] and not point["excluded"]
-            point["draft_window"] = state["config"].get("ec_windows", {}).get(point["id"])
+            point["draft_window"] = state["config"].get("ec_windows", {}).get(point["id"]) or point.get("draft_window")
         result["baseline"] = ECInspector(adapter).overview(
             state["payload"], self.root(run_id) / "baseline", channel
         )
@@ -1729,10 +1916,13 @@ class Workbench:
                 preferred_stems=state.get("inventory", {}).get("representative", {}).get("ec_stems", []),
             )
         elif layer in ("EC_L2", "EC_L3") and point_id:
+            point = next((item for item in self._ec_points(state, channel, adapter) if item["id"] == point_id), None)
+            if point is None:
+                raise FileNotFoundError("能线不存在，请刷新源峰配置")
             result = ECInspector(adapter).spectrum(
-                state["payload"], self.root(run_id) / "products", point_id, channel
+                state["payload"], self.root(run_id) / "products", point_id, channel, point=point,
             )
-            result["draft_window"] = state["config"].get("ec_windows", {}).get(point_id)
+            result["draft_window"] = state["config"].get("ec_windows", {}).get(point_id) or point.get("draft_window")
             result["excluded"] = point_id in state["config"].get("ec_excluded", [])
         else:
             raise ValueError("请选择 EC 层及有效能峰")
@@ -1778,9 +1968,9 @@ class Workbench:
                 if files and selected
                 else None,
             }
-        return clean(result)
+        return result
 
-    def view(self, run_id):
+    def view(self, run_id, *, compact=False):
         state = self.read(run_id)
         root = self.root(run_id)
         payload = state["payload"]
@@ -1856,4 +2046,8 @@ class Workbench:
                 "代表样例只重算所示工况/能量；其余点来自明确导入的历史 JSON，EC L3 可能混合历史能峰。",
             ],
         )
+        if compact:
+            state["jobs"] = [self._compact_job(job) for job in state["jobs"]]
+            state["revisions"] = [{key: value for key, value in revision.items() if key != "config"}
+                                  for revision in state.get("revisions", [])]
         return clean(state)

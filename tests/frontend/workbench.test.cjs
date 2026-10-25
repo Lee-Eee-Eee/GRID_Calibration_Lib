@@ -1161,3 +1161,162 @@ test('a single-file pipeline keeps its entry channel when another channel is vie
   assert.equal(ui.run('submitted[1].channel'), 2);
   assert.equal(ui.run('submitted[1].fit_channels.join()'), '2');
 });
+
+test('source energy editing retains other channel windows and independent ADC anchors', () => {
+  const ui = controller();
+  ui.run(`state.channel=1; state.ecPeakDraft={energy_key:'src_Na22',source_name:'Na22',lines:[
+    {energy_keV:511,windows:{'0':{lo:100,hi:180},'1':{lo:110,hi:190}},centers:{'0':140,'1':150}},
+    {energy_keV:1274.5,windows:{'1':{lo:300,hi:390}},centers:{}}
+  ]}; state.ecPeakDraft.lines[0].windows['1'].lo=112;`);
+  const body = JSON.parse(ui.run('JSON.stringify(ecPeakSaveBody())'));
+  assert.deepEqual(body.lines[0].windows['0'], {lo:100,hi:180});
+  assert.deepEqual(body.lines[0].windows['1'], {lo:112,hi:190});
+  assert.deepEqual(body.lines[0].centers, {'0':140,'1':150});
+  assert.equal(body.lines[1].energy_keV,1274.5);
+  ui.run('state.ecPeakDraft.lines[1].energy_keV=511;');
+  assert.throws(()=>ui.run('ecPeakSaveBody()'),/不重复/);
+});
+
+test('a newly added source line is saved before its unfitted spectrum is selected', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.channel=2;state.ecPeakDirty=true;
+    state.ecPeakDraft={energy_key:'src_Test',lines:[{energy_keV:88.25,windows:{},centers:{}}]};
+    state.ecOverview={points:[]};let selectedActions=[];
+    saveEcPeakConfig=async reload=>{selectedActions.push('save:'+reload);state.ecPeakDirty=false;};
+    loadEcAnalysis=async()=>{selectedActions.push('load:'+state.point.id);};`);
+  await ui.run('selectEcPeakLine(0)');
+  assert.equal(ui.run('selectedActions.join()'),'save:false,load:14B:ec:src_Test:2:88.25');
+  assert.equal(ui.run('state.point.center'),undefined);
+});
+
+test('source batch fitting keeps the current observation file, channel and displayed binning', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.channel=1;state.point={stem:'src_Na22',energy_key:'src_Na22',E:511};
+    state.ecPeakConfig={spectra:[{energy_key:'src_Na22',signal_file:'src_Na22_30m_corr.l1.parquet',lines:[]}]};
+    state.spectrum={bin_width:8,point:{signal_file:'src_Na22_10m_corr.l1.parquet'}};let sourceFit;
+    executeJob=async(layer,spec)=>{sourceFit={layer,...spec};};`);
+  await ui.run('fitEcSource()');
+  const spec=JSON.parse(ui.run('JSON.stringify(sourceFit)'));
+  assert.equal(spec.energy_key,'src_Na22'); assert.equal(spec.stem,'src_Na22_10m');
+  assert.deepEqual(spec.fit_channels,[1]); assert.equal(spec.channel,1); assert.equal(spec.bin_width,8);
+  assert.equal(spec.representative,false);
+});
+
+test('saved artifact names are visible in the log while previews fetch only when expanded', async () => {
+  const ui=controller();
+  ui.run(`state.run.jobs=[{id:'job-one',layer:'EC_L2',status:'succeeded',outputs:[{path:'14B/ec/L2/json/source_fit_results.l2.json'}]}];
+    let previewRequests=[];api=async path=>{previewRequests.push(path);return {kind:'json',json:{center:150},truncated:true};};
+    renderJobs(); const files=$('job-list').children[0].children[1]; const previewDetails=files.children[0];`);
+  assert.equal(ui.run('previewDetails.children[0].textContent'),'source_fit_results.l2.json');
+  assert.equal(ui.run('previewRequests.length'),0);
+  await ui.run(`previewDetails.open=true;previewDetails.listeners.toggle[0]()`);
+  assert.match(ui.run('previewRequests[0]'),/artifact-preview\?path=.*job_id=job-one/);
+  assert.equal(ui.run('previewDetails.dataset.loaded'),'true');
+  assert.match(ui.run('previewDetails.children[1].children[0].textContent'),/150/);
+});
+
+test('an unchanged running-job poll does not rebuild records or collapse loaded previews', () => {
+  const ui=controller();
+  ui.run(`state.run.jobs=[{id:'busy',layer:'EC_L2',status:'running',outputs:[]}];renderJobs();
+    const originalRow=$('job-list').children[0];state.run.jobs[0].log='more progress';renderJobs();`);
+  assert.equal(ui.run("$('job-list').children[0]===originalRow"),true);
+});
+
+test('configuration save records show their JSON filenames beside processor runs', () => {
+  const ui=controller();
+  ui.run(`state.run.operations=[{id:'config-2',label:'保存能线与窗口',files:[{name:'0002-ec-peaks.json',path:'revisions/0002-ec-peaks.json',url:'/saved.json'}]}];state.run.jobs=[];renderJobs();`);
+  assert.equal(ui.run("$('job-list').children[0].children[1].children[0].children[0].textContent"),'0002-ec-peaks.json');
+});
+
+test('a source configuration response cannot paint a different run after a delayed load', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';const releaseCatalog=deferred();
+    api=async path=>path.includes('ec-peak-config')?releaseCatalog.promise:{points:[]};
+    const loading=loadEcAnalysis();state.run={...state.run,id:'run-b'};state.ecPeakConfig={spectra:[{energy_key:'new-run'}]};
+    releaseCatalog.resolve({spectra:[{energy_key:'old-run'}]});`);
+  await ui.run('loading');
+  assert.equal(ui.run('state.ecPeakConfig.spectra[0].energy_key'),'new-run');
+});
+
+test('a failed selected spectrum leaves the source catalog available for selecting another spectrum', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';
+    const sourceCatalog={spectra:[{energy_key:'src_Na22',source_name:'Na22',signal_file:'src_Na22_corr.l1.parquet',lines:[{energy_keV:511,windows:{},centers:{}}]}]};
+    api=async path=>{
+      if(path.includes('/ec-peak-config')) return sourceCatalog;
+      if(path.includes('/ec-overview')) return {points:[{id:'tube-40',stem:'40keV',E:40}]};
+      throw new Error('CRC invalid');
+    };
+    renderEcOverview=async()=>{};renderCurrentStatus=()=>{};setBusy=productionSetBusy;`);
+  await assert.rejects(ui.run('loadEcAnalysis()'),/CRC invalid/);
+  assert.equal(ui.element('ec-source-workbench').hidden,false);
+  assert.equal(ui.element('ec-spectrum-select').options[1].value,'src_Na22');
+  assert.equal(!!ui.element('ec-spectrum-select').disabled,false);
+  assert.equal(ui.run('state.selecting'),false);
+  ui.run(`notify('CRC invalid','error');
+    api=async()=>({x:[0,1000],y:[2,3],lo:100,hi:200});
+    renderSpectrum=async()=>{};renderSpectrumProvenance=()=>{};
+    state.ecOverview.points.push({id:'14B:ec:src_Na22:0:511',stem:'src_Na22',E:511});`);
+  await ui.run(`selectEcSource('src_Na22')`);
+  assert.equal(ui.run('state.point.stem'),'src_Na22');
+  assert.equal(ui.element('message').hidden,true);
+});
+
+test('editing the selected source energy keeps the corresponding row selected after save and releases controls', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.channel=1;state.point={id:'14B:ec:src_Test:1:511',stem:'src_Test',E:511};
+    state.ecPeakSelectedIndex=0;state.ecPeakDirty=true;state.ecPeakDraft={energy_key:'src_Test',source_name:'Test',lines:[{energy_keV:512,windows:{},centers:{}}]};
+    state.ecPeakConfig={spectra:[state.ecPeakDraft]};state.ecOverview={points:[]};
+    api=async()=>({spectra:[{energy_key:'src_Test',source_name:'Test',lines:[{energy_keV:512,windows:{},centers:{},point_ids:{'1':'14B:ec:src_Test:1:512'}}]}]});
+    renderEcSourceConfig=()=>{};renderJobs=()=>{};`);
+  await ui.run('saveEcPeakConfig(false)');
+  assert.equal(ui.run('state.point.id'),'14B:ec:src_Test:1:512');
+  assert.equal(ui.run('state.point.fit_status'),'not_fitted');
+  assert.equal(ui.run('state.point.center'),null);
+  assert.equal(ui.element('channel').disabled,false);
+  assert.equal(ui.element('run-select').disabled,false);
+  assert.equal(ui.run('state.ecPeakDirty'),false);
+});
+
+test('source point identities use the backend canonical energy identity when supplied', () => {
+  const ui=controller();
+  ui.run(`state.ecPeakConfig={spectra:[{energy_key:'src_Test',lines:[{energy_keV:1234.56789,point_ids:{'2':'14B:ec:src_Test:2:1234.57'}}]}]};`);
+  assert.equal(ui.run("ecPeakIdentity('src_Test',1234.56789,2)"),'14B:ec:src_Test:2:1234.57');
+});
+
+test('saved source windows remain pending despite an existing fit until that energy is refitted', async () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';
+    const oldFit={id:'14B:ec:src_Na22:0:1274.5',stem:'src_Na22',E:1274.5,center:17000,lo:16600,hi:17800,fit_status:'fitted'};
+    state.point=oldFit;state.run.pending_ec_windows=[oldFit.id];
+    state.run.config.ec_windows={[oldFit.id]:{lo:6500,hi:7900}};
+    state.ecOverview={points:[{id:'14B:ec:src_Na22:0:511',stem:'src_Na22',E:511,center:3000,fit_status:'fitted'},oldFit]};
+    state.ecPeakConfig={spectra:[{energy_key:'src_Na22',lines:[{energy_keV:511,windows:{}},{energy_keV:1274.5,windows:{'0':{lo:6500,hi:7900}}}]}]};
+    renderEcSourceConfig();
+    api=async()=>({x:[0,18000],y:[1,20],lo:16600,hi:17800,fit:oldFit});
+    renderSpectrum=async()=>{};renderSpectrumProvenance=()=>{};renderEcOverview=async()=>{};renderCurrentStatus=()=>{};`);
+  assert.equal(ui.element('ec-peak-rows').children[0].children[4].textContent,'已拟合');
+  assert.equal(ui.element('ec-peak-rows').children[1].children[4].textContent,'待重拟合');
+  await ui.run('selectEcPoint(oldFit)');
+  assert.equal(Number(ui.element('window-lo').value),6500);
+  assert.equal(Number(ui.element('window-hi').value),7900);
+  assert.equal(ui.element('window-status').textContent,'修订已保存 · 待拟合');
+  ui.run('state.run.pending_ec_windows=[];renderEcSourceConfig();');
+  assert.equal(ui.element('ec-peak-rows').children[1].children[4].textContent,'已拟合');
+});
+
+test('full-source view labels only configured ADC windows on the current physical channel', () => {
+  const ui=controller();
+  ui.run(`state.layer='EC_L2';state.channel=1;state.ecFullSource=true;state.point={stem:'src_Na22',E:511};
+    state.ecPeakConfig={spectra:[{energy_key:'src_Na22',lines:[
+      {energy_keV:511,windows:{'0':{lo:10,hi:30},'1':{lo:100,hi:180}}},
+      {energy_keV:1274.5,windows:{'1':{lo:300,hi:420}}},
+      {energy_keV:88,windows:{'0':{lo:50,hi:80}}}
+    ]}]};`);
+  const overlay=JSON.parse(ui.run('JSON.stringify(ecSourceWindowOverlays())'));
+  assert.equal(overlay.annotations.length,2);
+  assert.deepEqual(overlay.annotations.map(item=>item.x),[140,360]);
+  assert.equal(overlay.shapes.length,1);
+  assert.equal(overlay.shapes[0].x0,300);
+  assert.match(overlay.annotations[1].text,/1,?274\.5/);
+});

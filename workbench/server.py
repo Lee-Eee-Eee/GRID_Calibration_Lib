@@ -35,8 +35,8 @@ def make_handler(workbench):
             if origin and origin not in (f"http://{host}",):
                 raise PermissionError("Cross-origin requests are not allowed")
 
-        def _json(self, status, data):
-            body = json.dumps(clean(data), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        def _json(self, status, data, *, normalized=False):
+            body = json.dumps(data if normalized else clean(data), ensure_ascii=False, allow_nan=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -122,7 +122,14 @@ def make_handler(workbench):
                 if len(parts) >= 3 and parts[:2] == ["api", "runs"]:
                     run_id = parts[2]
                     if len(parts) == 3:
-                        return self._json(200, workbench.view(run_id))
+                        return self._json(200, workbench.view(run_id, compact=query.get("compact") == ["1"]))
+                    if len(parts) == 4 and parts[3] == "ec-peak-config":
+                        return self._json(200, workbench.ec_peak_config(run_id))
+                    if len(parts) == 4 and parts[3] == "artifact-preview":
+                        return self._json(200, workbench.artifact_preview(
+                            run_id, query.get("path", [""])[0], job_id=query.get("job_id", [None])[0],
+                            source=query.get("source", [None])[0], layer=query.get("layer", [None])[0],
+                        ))
                     if len(parts) == 4 and parts[3] == "acquisition":
                         return self._json(200, workbench.acquisition(run_id))
                     if len(parts) == 4 and parts[3] == "tb-versions":
@@ -165,6 +172,7 @@ def make_handler(workbench):
                                 stem=query.get("stem", [None])[0],
                                 point_id=query.get("point_id", [None])[0],
                             ),
+                            normalized=True,
                         )
                     if len(parts) == 4 and parts[3] == "ec-overview":
                         return self._json(
@@ -174,7 +182,7 @@ def make_handler(workbench):
                             ),
                         )
                     if len(parts) == 5 and parts[3] == "jobs":
-                        return self._json(200, workbench.job(run_id, parts[4]))
+                        return self._json(200, workbench.job(run_id, parts[4], compact=query.get("compact") == ["1"]))
                     if len(parts) >= 5 and parts[3] == "files":
                         return self._file(workbench.root(run_id), "/".join(parts[4:]))
             if self.command == "POST":
@@ -235,6 +243,11 @@ def make_handler(workbench):
                     )
                 if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "jobs":
                     return self._json(202, workbench.submit(parts[2], body))
+            if (
+                self.command == "PATCH"
+                and len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "ec-peak-config"
+            ):
+                return self._json(200, workbench.save_ec_peak_config(parts[2], self._body()))
             if (
                 self.command == "PATCH"
                 and len(parts) == 4
