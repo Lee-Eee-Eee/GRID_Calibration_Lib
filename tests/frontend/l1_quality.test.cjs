@@ -221,6 +221,55 @@ test('a render finishing after a channel switch cannot install a usable stale cl
   assert.equal(ui.run('selected.length'), 0);
 });
 
+test('quality rendering failures from a previous run, layer, channel or load do not reach the current view', async () => {
+  for (const change of ["state.run={...state.run,id:'other-run'}", "state.layer='EC_L2'", 'state.channel=1', '++state.loadToken']) {
+    const ui = controller();
+    ui.run(`
+      const entered=deferred(), release=deferred();
+      plotly.react=async()=>{entered.resolve();await release.promise;};
+      const pending=renderL1QualityOverview().catch(messageError);
+    `);
+    await ui.run('entered.promise');
+    ui.run(`${change}; release.reject(new Error('obsolete quality plot'));`);
+    await ui.run('pending');
+    assert.equal(ui.run('state.testError'), undefined, change);
+  }
+});
+
+test('a superseded quality render cannot report its failure over the newer render in the same view', async () => {
+  const ui = controller();
+  ui.run(`
+    const entered=deferred(), release=deferred(), originalReact=plotly.react;
+    let renders=0;
+    plotly.react=async(...args)=>{if (++renders===1) {entered.resolve();await release.promise;} return originalReact(...args);};
+    const oldRender=renderL1QualityOverview().catch(messageError);
+  `);
+  await ui.run('entered.promise');
+  ui.run(`const newRender=renderL1QualityOverview().catch(messageError); release.reject(new Error('superseded quality plot'));`);
+  await ui.run('Promise.all([oldRender,newRender])');
+  assert.equal(ui.run('state.testError'), undefined);
+  assert.equal(ui.run('renders'), 2);
+  assert.equal(ui.run('plotCalls.length'), 1);
+  assert.equal(typeof ui.element('l1-quality-chart').plotListeners.plotly_click, 'function');
+});
+
+test('the current quality render reports its error and a subsequent retry can render normally', async () => {
+  const ui = controller();
+  ui.run(`
+    const entered=deferred(), release=deferred(), originalReact=plotly.react;
+    plotly.react=async()=>{entered.resolve();await release.promise;};
+    const pending=renderL1QualityOverview().catch(messageError);
+  `);
+  await ui.run('entered.promise');
+  ui.run(`release.reject(new Error('current quality plot failed'));`);
+  await ui.run('pending');
+  assert.equal(ui.run('state.testError'), 'current quality plot failed');
+  ui.run('plotly.react=originalReact;');
+  await ui.run('renderL1QualityOverview()');
+  assert.equal(ui.run('plotCalls.length'), 1);
+  assert.equal(typeof ui.element('l1-quality-chart').plotListeners.plotly_click, 'function');
+});
+
 test('a new run hides the previous quality map while its overview loads and stays hidden on failure', async () => {
   const ui = controller();
   await ui.run('renderL1QualityOverview()');

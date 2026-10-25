@@ -590,7 +590,9 @@ async function renderL1QualityOverview() {
     chart.removeAllListeners?.("plotly_click");
     chart.on?.("plotly_click", handleError(event => selectL1QualityPoint(event.points?.[0]?.customdata, context)));
   };
-  state.l1QualityRender = (state.l1QualityRender || Promise.resolve()).catch(() => {}).then(render);
+  state.l1QualityRender = (state.l1QualityRender || Promise.resolve()).catch(() => {}).then(render).catch(error => {
+    if (token === state.l1QualityRenderToken && context === l1QualityContext() && state.layer === "TB_L1") throw error;
+  });
   return state.l1QualityRender;
 }
 
