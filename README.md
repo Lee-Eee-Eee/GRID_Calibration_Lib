@@ -1,6 +1,6 @@
 # GRID Calibration Lib
 
-GRID 伽马射线探测器载荷的**地面标定数据处理库**，按层流水线设计：两条管线（TB / EC），七个处理器，每条管线四级标准化产物，统一 CLI 入口。
+GRID 伽马射线探测器载荷的**地面标定数据处理库**，包含 TB L0—L2、EC L0—L3 两条管线和七个处理器，提供统一 CLI 与本地可视化工作台。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Managed by uv](https://img.shields.io/badge/managed%20by-uv-purple.svg)](https://docs.astral.sh/uv/)
@@ -57,6 +57,25 @@ uv sync --extra dev
 
 ## 快速开始
 
+### 从源码包安装
+
+在仓库根目录运行；解压后的目录名可以是 `project`：
+
+```powershell
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install ".[workbench,dev]"
+.venv/Scripts/grid-workbench.exe --workspace ../workspace --port 8765
+```
+
+打开 <http://127.0.0.1:8765>，在“选择数据 / 产品”中指定数据目录。首次启动会创建工作区及 `runs/`；没有实验数据时可查看空工作台，数值处理需要对应的原始包或分层产品。
+
+在仓库根目录检查：
+
+```powershell
+.venv/Scripts/python.exe -m pytest tests -q
+node --test tests/frontend/*.test.cjs
+```
+
 ### 可操作的本地可视化 Demo
 
 在包含 `calibration_lib/`、原始数据和 `products/` 的工作区根目录运行：
@@ -75,7 +94,7 @@ TB L1 使用工况文件列表、主谱与残差、拟合详情三栏布局。�
 
 温度 / 偏压默认使用 **HK 实测值**，文件名中的工况仅作标称参考；显式切换至文件名、映射表或固定工况模式后才采用相应数值。预览校验后可“另存为新预设”或“保存为新版本”，同时关联当前数据与产品目录。选择目录时优先匹配明确关联；载荷唯一预设可作为后备，冲突时需显式选择。每个试算冻结完整 XML / 配置快照，发布新版不改变已有试算；旧产品目录仍引用其生成时的版本。保存新标准后需从对应 L0 重新解析，界面逐层显示更新覆盖率，禁止混用旧标准输入。源谱计数率归一化仍复用现有 UTC 时长算法。
 
-TB L1、EC L2的“自动寻峰并拟合”实际调用原处理器，窗口由共享寻峰器重新推荐。图中保留候选与噪声边界，详情显示峰模型相对背景的统计证据；拒绝点仍可检查，但不参与新的TB L2 / EC L3拟合。手动拖窗继续使用精确边界。多能线源的首条线需要手窗或独立中心 / 能量锚，避免把最强峰误标为最低能线。算法依据与参数见 [docs/peak_finding.md](docs/peak_finding.md)。
+TB L1、EC L2的“自动寻峰并拟合”实际调用原处理器，窗口由共享寻峰器重新推荐。图中保留候选与噪声边界，详情显示峰模型相对背景的统计证据；质量诊断标注疑似问题，可用参数继续进入 TB L2 / EC L3，手动屏蔽、数值失败及模型待定状态分别处理。手动拖窗继续使用精确边界。多能线源的首条线需要手窗或独立中心 / 能量锚，避免把最强峰误标为最低能线。算法依据与参数见 [docs/peak_finding.md](docs/peak_finding.md)。
 
 “参考能谱”支持读取 TKA 计数谱，默认目录为工作区 `data/imported/GRID-11B_HPGe_data/`。点击“分析寻峰候选”后，将来源 SHA-256、设置和候选证据保存到独立 `runs/<id>/analysis.json`。横轴保留 ADC 通道，文件名标称能量不替代能量刻度；CNF 二进制及采集表保留为参考输入。
 
